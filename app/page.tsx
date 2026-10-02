@@ -5,6 +5,7 @@ import LineChart, { type Series } from "@/components/LineChart";
 import MapView from "@/components/MapView";
 import StackedChart from "@/components/StackedChart";
 import NumField from "@/components/NumField";
+import { CAT_LABELS, PRESETS, UNITS, findUnit, type Cat } from "@/lib/units";
 import { parseWellsCsv, toCsv, download, wellsToCsv } from "@/lib/csv";
 import {
   arrivalTime, buildupGrid, consts, hawkinsSkin, interferenceMatrix, limits, skinBuildup, timeGrid, totalBuildup, wellboreBuildup, wellContribution,
@@ -42,7 +43,8 @@ export default function Page() {
   const [horizon, setHorizon] = useState(40);
   const [tEval, setTEval] = useState(25);
   const [threshold, setThreshold] = useState(0.1);
-  const [padKm, setPadKm] = useState(8);
+  const [padM, setPadM] = useState(8000);
+  const [units, setUnits] = useState<Record<Cat, string>>(PRESETS.SI);
   const [view, setView] = useState<View>("map");
   const [mode, setMode] = useState<Mode>("total");
   const [csvError, setCsvError] = useState("");
@@ -58,6 +60,26 @@ export default function Page() {
   const lim = useMemo(() => limits(aq), [aq]);
   const c = useMemo(() => consts(aq), [aq]);
   const tNow = Math.min(tEval, horizon);
+
+  // Display units. Everything above this line works in canonical units; these only convert for display/input.
+  const pU = findUnit("pressure", units.pressure);
+  const dU = findUnit("distance", units.distance);
+  const rU = findUnit("rate", units.rate);
+  const P = (v: number, d = 2) => (v / pU.f).toFixed(Math.max(0, d + (pU.dec ?? 0)));
+  const pDec = Math.max(0, 2 + (pU.dec ?? 0));
+  const D = (v: number) => { const x = v / dU.f; return Math.abs(x) >= 100 ? x.toFixed(0) : x.toFixed(1); };
+  const toP = (a: number[]) => a.map((v) => v / pU.f);
+  const uf = (cat: Cat, o: { label?: string; ariaLabel?: string; value: number; onChange: (v: number) => void; min?: number; step?: number }) => {
+    const un = findUnit(cat, units[cat]);
+    return (
+      <NumField
+        label={o.label} ariaLabel={o.ariaLabel} unit={un.label}
+        value={+(o.value / un.f).toPrecision(6)} onChange={(v) => o.onChange(v * un.f)}
+        min={o.min !== undefined ? o.min / un.f : undefined} step={o.step !== undefined ? o.step / un.f : undefined}
+      />
+    );
+  };
+  const presetName = (["SI", "Field"] as const).find((k) => (Object.keys(PRESETS[k]) as Cat[]).every((c) => PRESETS[k][c] === units[c])) ?? "Custom";
 
   const warnings = useMemo(() => {
     const w: string[] = [];
@@ -170,9 +192,9 @@ export default function Page() {
     const all = [...wells, ...points];
     const xs = all.map((o) => o.x), ys = all.map((o) => o.y);
     const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    const half = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1000) / 2 + padKm * 1000;
+    const half = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1000) / 2 + padM;
     return { x0: cx - half, x1: cx + half, y0: cy - half, y1: cy + half };
-  }, [wells, points, padKm]);
+  }, [wells, points, padM]);
 
   const grid = useMemo(
     () => (view === "map" && wells.length ? buildupGrid(wells, tNow, aq, boundary, extent) : null),
@@ -195,12 +217,12 @@ export default function Page() {
 
   const exportResults = () => {
     const names = wells.map((w) => w.name);
-    const rows: (string | number)[][] = [["# Interference matrix (MPa) at t = " + tNow + " yr; row = source well, column = receiving well"], ["source\\receiver", ...names]];
-    matrix.forEach((r, i) => rows.push([names[i], ...r.map((v) => +v.toFixed(5))]));
-    rows.push([], ["# Time series (MPa buildup, " + mode + ")"], ["time_yr", ...series.map((s) => s.name)]);
-    times.forEach((t, k) => rows.push([+t.toFixed(4), ...series.map((s) => +s.y[k].toFixed(5))]));
-    rows.push([], ["# Peak check"], ["well", "peak_MPa", "time_yr", "self_MPa", "skin_MPa", "interference_MPa", "limit_MPa"]);
-    wells.forEach((w, i) => rows.push([w.name, ...[peaks[i].peak, peaks[i].t, peaks[i].self, peaks[i].skin, peaks[i].interference].map((v) => +v.toFixed(4)), +lim.maxBuildupMPa.toFixed(4)]));
+    const rows: (string | number)[][] = [[`# Interference matrix (${pU.label}) at t = ` + tNow + " yr; row = source well, column = receiving well"], ["source\\receiver", ...names]];
+    matrix.forEach((r, i) => rows.push([names[i], ...r.map((v) => +(v / pU.f).toFixed(5))]));
+    rows.push([], [`# Time series (${pU.label}; mode: ${mode})`], ["time_yr", ...series.map((s) => s.name)]);
+    times.forEach((t, k) => rows.push([+t.toFixed(4), ...series.map((s) => +(s.y[k] / pU.f).toFixed(5))]));
+    rows.push([], ["# Peak check"], ["well", `peak_${pU.label}`, "time_yr", `self_${pU.label}`, `skin_${pU.label}`, `interference_${pU.label}`, `limit_${pU.label}`]);
+    wells.forEach((w, i) => rows.push([w.name, +(peaks[i].peak / pU.f).toFixed(4), +peaks[i].t.toFixed(4), ...[peaks[i].self, peaks[i].skin, peaks[i].interference].map((v) => +(v / pU.f).toFixed(4)), +(lim.maxBuildupMPa / pU.f).toFixed(4)]));
     download("co2-interference-results.csv", toCsv(rows));
   };
 
@@ -220,16 +242,38 @@ export default function Page() {
       <div className="layout">
         <aside className="panel">
           <section>
+            <div className="row-head">
+              <h2>Units</h2>
+              <select className="preset" aria-label="Unit preset" value={presetName}
+                onChange={(e) => { if (e.target.value !== "Custom") setUnits(PRESETS[e.target.value as "SI" | "Field"]); }}>
+                <option value="SI">SI (metric)</option>
+                <option value="Field">Field (US oilfield)</option>
+                {presetName === "Custom" && <option value="Custom">Custom</option>}
+              </select>
+            </div>
+            <div className="grid2">
+              {(Object.keys(UNITS) as Cat[]).map((cat) => (
+                <label className="field" key={cat}><span>{CAT_LABELS[cat]}</span>
+                  <select value={units[cat]} onChange={(e) => setUnits((u) => ({ ...u, [cat]: e.target.value }))}>
+                    {UNITS[cat].map((u) => <option key={u.label} value={u.label}>{u.label}</option>)}
+                  </select>
+                </label>
+              ))}
+            </div>
+            <p className="hint">Values convert automatically when you change a unit. Time is always in years. CSV import/export always uses metres and Mt/yr.</p>
+          </section>
+
+          <section>
             <h2>Aquifer</h2>
             <div className="grid2">
-              <NumField label="Permeability" unit="mD" value={aq.permMd} onChange={setA("permMd")} min={0} />
-              <NumField label="Thickness" unit="m" value={aq.thicknessM} onChange={setA("thicknessM")} min={0} />
+              {uf("perm", { label: "Permeability", value: aq.permMd, onChange: setA("permMd"), min: 0 })}
+              {uf("length", { label: "Thickness", value: aq.thicknessM, onChange: setA("thicknessM"), min: 0 })}
               <NumField label="Porosity" unit="frac" value={aq.porosity} onChange={setA("porosity")} step={0.01} min={0} />
-              <NumField label="Total compress." unit="1/MPa" value={aq.compressibilityPerMPa} onChange={setA("compressibilityPerMPa")} min={0} />
-              <NumField label="Brine viscosity" unit="mPa·s" value={aq.viscosityMPas} onChange={setA("viscosityMPas")} min={0} />
-              <NumField label="CO₂ density" unit="kg/m³" value={aq.co2DensityKgM3} onChange={setA("co2DensityKgM3")} min={1} />
-              <NumField label="Wellbore radius" unit="m" value={aq.wellboreRadiusM} onChange={setA("wellboreRadiusM")} min={0.01} />
-              <NumField label="Depth" unit="m" value={aq.depthM} onChange={setA("depthM")} min={0} />
+              {uf("compress", { label: "Total compress.", value: aq.compressibilityPerMPa, onChange: setA("compressibilityPerMPa"), min: 0 })}
+              {uf("viscosity", { label: "Brine viscosity", value: aq.viscosityMPas, onChange: setA("viscosityMPas"), min: 0 })}
+              {uf("density", { label: "CO₂ density", value: aq.co2DensityKgM3, onChange: setA("co2DensityKgM3"), min: 1 })}
+              {uf("length", { label: "Wellbore radius", value: aq.wellboreRadiusM, onChange: setA("wellboreRadiusM"), min: 0.01 })}
+              {uf("length", { label: "Depth", value: aq.depthM, onChange: setA("depthM"), min: 0 })}
             </div>
             <p className="hint">Diffusivity η = {c.eta.toFixed(2)} m²/s</p>
           </section>
@@ -237,13 +281,13 @@ export default function Page() {
           <section>
             <h2>Pressure limit</h2>
             <div className="grid2">
-              <NumField label="Hydrostatic grad." unit="MPa/m" value={aq.hydroGradientMPaPerM} onChange={setA("hydroGradientMPaPerM")} step={0.0005} />
-              <NumField label="Fracture grad." unit="MPa/m" value={aq.fracGradientMPaPerM} onChange={setA("fracGradientMPaPerM")} step={0.0005} />
+              {uf("gradient", { label: "Hydrostatic grad.", value: aq.hydroGradientMPaPerM, onChange: setA("hydroGradientMPaPerM") })}
+              {uf("gradient", { label: "Fracture grad.", value: aq.fracGradientMPaPerM, onChange: setA("fracGradientMPaPerM") })}
               <NumField label="Safety factor" unit="× Pfrac" value={aq.safetyFactor} onChange={setA("safetyFactor")} step={0.05} />
-              <NumField label="Interference threshold" unit="MPa" value={threshold} onChange={setThreshold} step={0.01} />
+              {uf("pressure", { label: "Interference threshold", value: threshold, onChange: setThreshold })}
             </div>
             <p className="hint">
-              P₀ {lim.initialMPa.toFixed(1)} MPa · P<sub>frac</sub> {lim.fractureMPa.toFixed(1)} MPa · max buildup <b>{lim.maxBuildupMPa.toFixed(2)} MPa</b>
+              P₀ {P(lim.initialMPa, 1)} {pU.label} · P<sub>frac</sub> {P(lim.fractureMPa, 1)} {pU.label} · max buildup <b>{P(lim.maxBuildupMPa)} {pU.label}</b>
             </p>
           </section>
 
@@ -259,8 +303,8 @@ export default function Page() {
               <span />
               {skinMode === "calc" && (
                 <>
-                  <NumField label="Damaged-zone perm. ks" unit="mD" value={dmg.ksMd} onChange={(v) => setDmg((d) => ({ ...d, ksMd: v }))} min={0.001} />
-                  <NumField label="Damaged-zone radius rs" unit="m" value={dmg.rsM} onChange={(v) => setDmg((d) => ({ ...d, rsM: v }))} min={0} />
+                  {uf("perm", { label: "Damaged-zone perm. ks", value: dmg.ksMd, onChange: (v) => setDmg((d) => ({ ...d, ksMd: v })), min: 0.001 })}
+                  {uf("length", { label: "Damaged-zone radius rs", value: dmg.rsM, onChange: (v) => setDmg((d) => ({ ...d, rsM: v })), min: 0 })}
                 </>
               )}
             </div>
@@ -287,7 +331,7 @@ export default function Page() {
                   <option value="y">y = const</option>
                 </select>
               </label>
-              <NumField label="Position" unit="m" value={boundary.positionM} onChange={(v) => setBoundary({ ...boundary, positionM: v })} />
+              {uf("distance", { label: "Position", value: boundary.positionM, onChange: (v) => setBoundary({ ...boundary, positionM: v }) })}
             </div>
             <p className="hint">The Compare boundaries tab runs all three conditions side by side using this line.</p>
           </section>
@@ -304,14 +348,14 @@ export default function Page() {
             {csvError && <p className="err">{csvError}</p>}
             <div className="tablewrap">
               <table className="edit">
-                <thead><tr><th>Name</th><th>x (m)</th><th>y (m)</th><th>Mt/yr</th><th>Start</th><th>End</th><th>Skin</th><th /></tr></thead>
+                <thead><tr><th>Name</th><th>x ({dU.label})</th><th>y ({dU.label})</th><th>{rU.label}</th><th>Start</th><th>End</th><th>Skin</th><th /></tr></thead>
                 <tbody>
                   {wells.map((w) => (
                     <tr key={w.id}>
                       <td><input value={w.name} aria-label="Well name" onChange={(e) => updWell(w.id, { name: e.target.value })} /></td>
-                      <td><NumField ariaLabel={`${w.name} x`} value={w.x} onChange={(v) => updWell(w.id, { x: v })} /></td>
-                      <td><NumField ariaLabel={`${w.name} y`} value={w.y} onChange={(v) => updWell(w.id, { y: v })} /></td>
-                      <td><NumField ariaLabel={`${w.name} rate`} value={w.rateMtpa} onChange={(v) => updWell(w.id, { rateMtpa: v })} min={0} /></td>
+                      <td>{uf("distance", { ariaLabel: `${w.name} x`, value: w.x, onChange: (v) => updWell(w.id, { x: v }) })}</td>
+                      <td>{uf("distance", { ariaLabel: `${w.name} y`, value: w.y, onChange: (v) => updWell(w.id, { y: v }) })}</td>
+                      <td>{uf("rate", { ariaLabel: `${w.name} rate`, value: w.rateMtpa, onChange: (v) => updWell(w.id, { rateMtpa: v }), min: 0 })}</td>
                       <td><NumField ariaLabel={`${w.name} start`} value={w.startYr} onChange={(v) => updWell(w.id, { startYr: v })} min={0} /></td>
                       <td><NumField ariaLabel={`${w.name} end`} value={w.endYr} onChange={(v) => updWell(w.id, { endYr: v })} min={0} /></td>
                       <td>{skinMode === "calc"
@@ -324,20 +368,20 @@ export default function Page() {
               </table>
             </div>
             <button className="ghost" onClick={() => setWells((ws) => [...ws, { id: uid("w"), name: `INJ-${ws.length + 1}`, x: 0, y: 0, rateMtpa: 1, startYr: 0, endYr: 25, skin: 0 }])}>+ Add well</button>
-            <p className="hint">CSV columns: name, x_m, y_m, rate_Mtpa, start_yr, end_yr, skin (optional). Excel: save as CSV.</p>
+            <p className="hint">CSV columns (always metres and Mt/yr): name, x_m, y_m, rate_Mtpa, start_yr, end_yr, skin (optional). Excel: save as CSV.</p>
           </section>
 
           <section>
             <h2>Monitoring points</h2>
             <div className="tablewrap">
               <table className="edit">
-                <thead><tr><th>Name</th><th>x (m)</th><th>y (m)</th><th /></tr></thead>
+                <thead><tr><th>Name</th><th>x ({dU.label})</th><th>y ({dU.label})</th><th /></tr></thead>
                 <tbody>
                   {points.map((p) => (
                     <tr key={p.id}>
                       <td><input value={p.name} aria-label="Point name" onChange={(e) => updPoint(p.id, { name: e.target.value })} /></td>
-                      <td><NumField ariaLabel={`${p.name} x`} value={p.x} onChange={(v) => updPoint(p.id, { x: v })} /></td>
-                      <td><NumField ariaLabel={`${p.name} y`} value={p.y} onChange={(v) => updPoint(p.id, { y: v })} /></td>
+                      <td>{uf("distance", { ariaLabel: `${p.name} x`, value: p.x, onChange: (v) => updPoint(p.id, { x: v }) })}</td>
+                      <td>{uf("distance", { ariaLabel: `${p.name} y`, value: p.y, onChange: (v) => updPoint(p.id, { y: v }) })}</td>
                       <td><button className="x" aria-label={`Remove ${p.name}`} onClick={() => setPoints((ps) => ps.filter((q) => q.id !== p.id))}>×</button></td>
                     </tr>
                   ))}
@@ -356,12 +400,12 @@ export default function Page() {
           <div className="kpis">
             <div className="kpi">
               <span>Peak buildup (worst well)</span>
-              <b>{wells.length ? peaks[worst].peak.toFixed(2) : "–"} MPa</b>
+              <b>{wells.length ? P(peaks[worst].peak) : "–"} {pU.label}</b>
               <small>{wells.length ? `${wells[worst].name} at ${peaks[worst].t.toFixed(1)} yr` : ""}</small>
             </div>
             <div className="kpi">
               <span>Allowable buildup</span>
-              <b>{lim.maxBuildupMPa.toFixed(2)} MPa</b>
+              <b>{P(lim.maxBuildupMPa)} {pU.label}</b>
               <small>{aq.safetyFactor} × Pfrac − P₀</small>
             </div>
             <div className={`kpi ${wells.length && peaks[worst].peak > lim.maxBuildupMPa ? "bad" : "good"}`}>
@@ -382,7 +426,7 @@ export default function Page() {
             <label className="field slider"><span>Evaluation time <em>{tNow.toFixed(1)} yr</em></span>
               <input type="range" min={0.1} max={horizon} step={0.1} value={tNow} onChange={(e) => setTEval(+e.target.value)} />
             </label>
-            {view === "map" && <NumField label="Map padding" unit="km" value={padKm} onChange={(v) => setPadKm(Math.max(0, v))} min={0} />}
+            {view === "map" && uf("distance", { label: "Map padding", value: padM, onChange: (v) => setPadM(Math.max(0, v)), min: 0 })}
             {view === "series" && (
               <label className="field"><span>Show</span>
                 <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
@@ -398,13 +442,14 @@ export default function Page() {
             <>
               <MapView
                 grid={grid} wells={wells} points={points} boundary={boundary}
+                pf={pU.f} pLabel={pU.label} pDec={pDec} df={dU.f} dLabel={dU.label}
                 contourLevels={[
                   { level: threshold, label: "threshold", cls: "iso-thr" },
                   ...(lim.maxBuildupMPa > 0 ? [{ level: lim.maxBuildupMPa, label: "limit", cls: "iso-lim" }] : []),
                 ]}
               />
               <p className="caption">
-                Buildup at {tNow.toFixed(1)} yr. <span className="key thr" /> {threshold} MPa threshold contour · <span className="key lim" /> {lim.maxBuildupMPa.toFixed(2)} MPa allowable-buildup contour (appears only near the wells).
+                Buildup at {tNow.toFixed(1)} yr. <span className="key thr" /> {P(threshold, 3)} {pU.label} threshold contour · <span className="key lim" /> {P(lim.maxBuildupMPa)} {pU.label} allowable-buildup contour (appears only near the wells).
               </p>
             </>
           )}
@@ -412,11 +457,11 @@ export default function Page() {
           {view === "series" && (
             <>
               <LineChart
-                series={series} xLabel="Time (years)"
-                yLabel={mode === "bhp" ? "Bottomhole pressure (MPa)" : `Pressure buildup, ${mode === "total" ? "total" : "interference"} (MPa)`}
-                hline={mode === "bhp" ? { y: lim.initialMPa + lim.maxBuildupMPa, label: `max allowable BHP ${(lim.initialMPa + lim.maxBuildupMPa).toFixed(1)} MPa` }
-                  : mode === "total" && lim.maxBuildupMPa > 0 ? { y: lim.maxBuildupMPa, label: "allowable buildup" } : undefined}
-                yMin={mode === "bhp" ? Math.floor(lim.initialMPa) : 0}
+                series={series.map((s) => ({ ...s, y: toP(s.y) }))} xLabel="Time (years)"
+                yLabel={mode === "bhp" ? `Bottomhole pressure (${pU.label})` : `Pressure buildup, ${mode === "total" ? "total" : "interference"} (${pU.label})`}
+                hline={mode === "bhp" ? { y: (lim.initialMPa + lim.maxBuildupMPa) / pU.f, label: `max allowable BHP ${P(lim.initialMPa + lim.maxBuildupMPa, 1)} ${pU.label}` }
+                  : mode === "total" && lim.maxBuildupMPa > 0 ? { y: lim.maxBuildupMPa / pU.f, label: "allowable buildup" } : undefined}
+                yMin={mode === "bhp" ? Math.floor(lim.initialMPa / pU.f) : 0}
                 markerX={tNow}
               />
               <ul className="swatches">
@@ -426,20 +471,20 @@ export default function Page() {
                 <>
                   <h3>What drives the field maximum</h3>
                   <p className="caption">
-                    At each time the well with the highest pressure is the controlling well. The chart splits its buildup into the share caused by each injector (its own injection is the layer with its own name) plus skin. Add {lim.initialMPa.toFixed(1)} MPa for absolute BHP.
+                    At each time the well with the highest pressure is the controlling well. The chart splits its buildup into the share caused by each injector (its own injection is the layer with its own name) plus skin. Add {P(lim.initialMPa, 1)} {pU.label} for absolute BHP.
                   </p>
-                  <StackedChart layers={fieldDrivers.layers} xLabel="Time (years)" yLabel="Field-maximum buildup by source (MPa)" />
+                  <StackedChart layers={fieldDrivers.layers.map((l) => ({ ...l, y: toP(l.y) }))} xLabel="Time (years)" yLabel={`Field-maximum buildup by source (${pU.label})`} />
                   <ul className="swatches">
                     {fieldDrivers.layers.map((l) => <li key={l.name}><i style={{ background: l.color, height: 10 }} />{l.name}</li>)}
                   </ul>
                   <div className="tablewrap">
                     <table className="matrix">
-                      <thead><tr><th>At field peak: {fieldDrivers.peak.toFixed(2)} MPa ({(lim.initialMPa + fieldDrivers.peak).toFixed(1)} MPa BHP) at {times[fieldDrivers.kPeak].toFixed(1)} yr in {wells[fieldDrivers.controlling[fieldDrivers.kPeak]].name}</th><th>MPa</th><th>Share</th></tr></thead>
+                      <thead><tr><th>At field peak: {P(fieldDrivers.peak)} {pU.label} ({P(lim.initialMPa + fieldDrivers.peak, 1)} {pU.label} BHP) at {times[fieldDrivers.kPeak].toFixed(1)} yr in {wells[fieldDrivers.controlling[fieldDrivers.kPeak]].name}</th><th>{pU.label}</th><th>Share</th></tr></thead>
                       <tbody>
                         {fieldDrivers.layers.map((l) => (
                           <tr key={l.name}>
                             <th>{l.name}{l.name === wells[fieldDrivers.controlling[fieldDrivers.kPeak]].name ? " (own injection)" : ""}</th>
-                            <td>{l.y[fieldDrivers.kPeak].toFixed(3)}</td>
+                            <td>{P(l.y[fieldDrivers.kPeak], 3)}</td>
                             <td>{fieldDrivers.peak > 0 ? Math.round((l.y[fieldDrivers.kPeak] / fieldDrivers.peak) * 100) : 0}%</td>
                           </tr>
                         ))}
@@ -454,7 +499,7 @@ export default function Page() {
 
           {view === "matrix" && (
             <>
-              <h3>Buildup (MPa) at t = {tNow.toFixed(1)} yr</h3>
+              <h3>Buildup ({pU.label}) at t = {tNow.toFixed(1)} yr</h3>
               <p className="caption">Row = injecting well, column = where pressure is felt. Diagonal is the well&apos;s own buildup.</p>
               <div className="tablewrap">
                 <table className="matrix">
@@ -464,21 +509,21 @@ export default function Page() {
                       <tr key={wells[i].id}>
                         <th>{wells[i].name}</th>
                         {row.map((v, j) => (
-                          <td key={j} className={i === j ? "diag" : ""} style={i === j ? undefined : { background: `color-mix(in srgb, var(--accent) ${Math.round((v / maxOff) * 55)}%, transparent)` }}>{v.toFixed(3)}</td>
+                          <td key={j} className={i === j ? "diag" : ""} style={i === j ? undefined : { background: `color-mix(in srgb, var(--accent) ${Math.round((v / maxOff) * 55)}%, transparent)` }}>{P(v, 3)}</td>
                         ))}
-                        <td>{row.reduce((s, v, j) => (j === i ? s : s + v), 0).toFixed(3)}</td>
+                        <td>{P(row.reduce((s, v, j) => (j === i ? s : s + v), 0), 3)}</td>
                       </tr>
                     ))}
                     <tr className="total">
                       <th>Total at receiver</th>
-                      {wells.map((_, j) => <td key={j}>{matrix.reduce((s, r) => s + r[j], 0).toFixed(3)}</td>)}
+                      {wells.map((_, j) => <td key={j}>{P(matrix.reduce((s, r) => s + r[j], 0), 3)}</td>)}
                       <td />
                     </tr>
                   </tbody>
                 </table>
               </div>
 
-              <h3>Arrival time of ≥ {threshold} MPa (years)</h3>
+              <h3>Arrival time of ≥ {P(threshold, 3)} {pU.label} (years)</h3>
               <p className="caption">First time a source well alone raises pressure at the target by the threshold. “–” means it does not within the injection period/horizon.</p>
               <div className="tablewrap">
                 <table className="matrix">
@@ -500,17 +545,17 @@ export default function Page() {
             <>
               <div className="tablewrap">
                 <table className="matrix">
-                  <thead><tr><th>Well</th><th>Peak buildup (MPa)</th><th>at (yr)</th><th>of which self</th><th>of which skin</th><th>of which interference</th><th>Bottomhole P (MPa)</th><th>Margin (MPa)</th><th>Status</th></tr></thead>
+                  <thead><tr><th>Well</th><th>Peak buildup ({pU.label})</th><th>at (yr)</th><th>of which self</th><th>of which skin</th><th>of which interference</th><th>Bottomhole P ({pU.label})</th><th>Margin ({pU.label})</th><th>Status</th></tr></thead>
                   <tbody>
                     {wells.map((w, i) => {
                       const p = peaks[i], margin = lim.maxBuildupMPa - p.peak;
                       return (
                         <tr key={w.id}>
                           <th>{w.name}</th>
-                          <td>{p.peak.toFixed(2)}</td><td>{p.t.toFixed(1)}</td>
-                          <td>{p.self.toFixed(2)}</td><td>{p.skin.toFixed(2)}</td><td>{p.interference.toFixed(2)}</td>
-                          <td>{(lim.initialMPa + p.peak).toFixed(2)}</td>
-                          <td>{margin.toFixed(2)}</td>
+                          <td>{P(p.peak)}</td><td>{p.t.toFixed(1)}</td>
+                          <td>{P(p.self)}</td><td>{P(p.skin)}</td><td>{P(p.interference)}</td>
+                          <td>{P(lim.initialMPa + p.peak)}</td>
+                          <td>{P(margin)}</td>
                           <td className={margin < 0 ? "bad-cell" : "good-cell"}>{margin < 0 ? "Exceeds" : "OK"}</td>
                         </tr>
                       );
@@ -537,14 +582,14 @@ export default function Page() {
               {wells.length > 0 && (
                 <>
                   <LineChart
-                    series={cases.map((k) => ({ name: k.label, color: k.color, dash: k.dash, x: times, y: k.perWell[cmpIdx].ys }))}
-                    xLabel="Time (years)" yLabel={`${wells[cmpIdx].name} wellbore buildup incl. skin (MPa)`}
-                    hline={lim.maxBuildupMPa > 0 ? { y: lim.maxBuildupMPa, label: "allowable buildup" } : undefined}
+                    series={cases.map((k) => ({ name: k.label, color: k.color, dash: k.dash, x: times, y: toP(k.perWell[cmpIdx].ys) }))}
+                    xLabel="Time (years)" yLabel={`${wells[cmpIdx].name} wellbore buildup incl. skin (${pU.label})`}
+                    hline={lim.maxBuildupMPa > 0 ? { y: lim.maxBuildupMPa / pU.f, label: "allowable buildup" } : undefined}
                   />
                   <ul className="swatches">{cases.map((k) => <li key={k.key}><i style={{ background: k.color }} />{k.label}</li>)}</ul>
                 </>
               )}
-              <h3>Peak wellbore buildup (MPa), skin included</h3>
+              <h3>Peak wellbore buildup ({pU.label}), skin included</h3>
               <div className="tablewrap">
                 <table className="matrix">
                   <thead><tr><th>Well</th>{cases.map((k) => <th key={k.key}>{k.label}</th>)}</tr></thead>
@@ -554,19 +599,19 @@ export default function Page() {
                         <th>{w.name}</th>
                         {cases.map((k) => {
                           const v = k.perWell[i].peak;
-                          return <td key={k.key} className={v > lim.maxBuildupMPa ? "bad-cell" : ""}>{v.toFixed(2)}</td>;
+                          return <td key={k.key} className={v > lim.maxBuildupMPa ? "bad-cell" : ""}>{P(v)}</td>;
                         })}
                       </tr>
                     ))}
                     <tr className="total">
                       <th>Allowed</th>
-                      {cases.map((k) => <td key={k.key}>{lim.maxBuildupMPa.toFixed(2)}</td>)}
+                      {cases.map((k) => <td key={k.key}>{P(lim.maxBuildupMPa)}</td>)}
                     </tr>
                   </tbody>
                 </table>
               </div>
               <p className="caption">
-                Boundary line: {boundary.axis} = {boundary.positionM} m. Red cells exceed the allowable buildup. A no-flow boundary is the most conservative case (the image well adds pressure); a constant-pressure boundary the least (the image well relieves pressure).
+                Boundary line: {boundary.axis} = {D(boundary.positionM)} {dU.label}. Red cells exceed the allowable buildup. A no-flow boundary is the most conservative case (the image well adds pressure); a constant-pressure boundary the least (the image well relieves pressure).
               </p>
             </>
           )}

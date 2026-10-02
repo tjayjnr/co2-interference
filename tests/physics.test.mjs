@@ -96,3 +96,16 @@ test("Hawkins skin", () => {
   assert.ok(hawkinsSkin(100, 400, 5, 0.1) < 0);
   assert.equal(hawkinsSkin(100, 50, 0.05, 0.1), 0); // zone smaller than wellbore: ignored
 });
+
+import { UNITS, PRESETS, findUnit } from "../lib/units.ts";
+
+test("unit conversions", () => {
+  close(1 / findUnit("length", "ft").f, 3.280840, 1e-6);          // 1 m in ft
+  close(1 / findUnit("pressure", "psi").f, 145.0377, 1e-5);      // 1 MPa in psi
+  close(1 / findUnit("gradient", "psi/ft").f, 44.2065, 1e-4);    // 1 MPa/m in psi/ft
+  close(0.0105 / findUnit("gradient", "psi/ft").f, 0.4643, 1e-3);// 0.0105 MPa/m ~ 0.464 psi/ft
+  close(1 / findUnit("rate", "t/day").f, 2737.85, 1e-5);         // 1 Mt/yr in t/day
+  close(4.5e-4 / findUnit("compress", "1/psi").f, 3.1026e-6, 1e-3);
+  for (const k of Object.keys(PRESETS.Field)) assert.ok(UNITS[k].some((u) => u.label === PRESETS.Field[k]), k);
+  for (const k of Object.keys(PRESETS.SI)) assert.equal(findUnit(k, PRESETS.SI[k]).f, 1);
+});

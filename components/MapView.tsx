@@ -10,11 +10,18 @@ interface Props {
   points: Point[];
   boundary: Boundary;
   contourLevels: { level: number; label: string; cls: string }[];
+  pf: number; // display pressure unit factor (canonical MPa = displayed * pf)
+  pLabel: string;
+  pDec: number;
+  df: number; // display distance unit factor (canonical m = displayed * df)
+  dLabel: string;
 }
 
 const STOPS: [number, number, number][] = [
   [255, 247, 220], [253, 200, 110], [240, 120, 60], [190, 50, 70], [90, 20, 100], [30, 10, 60],
 ];
+
+const fmtD = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
 
 function ramp(t: number): [number, number, number] {
   const p = Math.min(Math.max(t, 0), 1) * (STOPS.length - 1);
@@ -23,7 +30,7 @@ function ramp(t: number): [number, number, number] {
   return [0, 1, 2].map((k) => STOPS[i][k] + f * (STOPS[i + 1][k] - STOPS[i][k])) as [number, number, number];
 }
 
-export default function MapView({ grid, wells, points, boundary, contourLevels }: Props) {
+export default function MapView({ grid, wells, points, boundary, contourLevels, pf, pLabel, pDec, df, dLabel }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
   const { nx, ny, x0, x1, y0, y1, values, max } = grid;
   const S = 600; // svg units; plot is square
@@ -89,17 +96,17 @@ export default function MapView({ grid, wells, points, boundary, contourLevels }
           ))}
           {kmTicks.map((t) => (
             <g key={t.f}>
-              <text x={t.f * S} y={S + 16} textAnchor="middle" className="tick">{(t.x / 1000).toFixed(1)}</text>
-              <text x={-6} y={S - t.f * S + 4} textAnchor="end" className="tick">{(t.y / 1000).toFixed(1)}</text>
+              <text x={t.f * S} y={S + 16} textAnchor="middle" className="tick">{fmtD(t.x / df)}</text>
+              <text x={-6} y={S - t.f * S + 4} textAnchor="end" className="tick">{fmtD(t.y / df)}</text>
             </g>
           ))}
-          <text x={S / 2} y={S + 32} textAnchor="middle" className="axis">x (km)</text>
+          <text x={S / 2} y={S + 32} textAnchor="middle" className="axis">x, y ({dLabel})</text>
         </svg>
       </div>
       <div className="legend">
         <div className="colorbar" style={{ background: `linear-gradient(to top, ${STOPS.map((s) => `rgb(${s})`).join(",")})` }} />
         <div className="legend-scale">
-          <span>{max.toFixed(2)} MPa</span>
+          <span>{(max / pf).toFixed(pDec)} {pLabel}</span>
           <span>0</span>
         </div>
       </div>

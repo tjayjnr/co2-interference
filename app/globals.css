@@ -81,3 +81,5 @@ table.matrix tr.total th, table.matrix tr.total td { font-weight: 600; }
 .assump { margin-top: 18px; color: var(--muted); font-size: 13px; } .assump summary { cursor: pointer; color: var(--text); }
 
 .calc { display: block; padding: 3px 4px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+select.preset { width: auto; }
