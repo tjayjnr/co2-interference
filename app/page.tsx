@@ -606,13 +606,13 @@ export default function Page() {
           {!applied && (
             <div className="empty">
               <p><b>No results yet.</b></p>
-              <p>Check the inputs on the left, then press <b>▶ RUN analysis</b>.</p>
+              <p>Check the inputs on the left, then press <button type="button" className="linkbtn" onClick={() => setApplied(inputsL)}>▶ RUN analysis</button>.</p>
             </div>
           )}
 
           {applied && (
             <>
-              {stale && <div className="stale">The inputs have changed since the last run. The results below still show the previous run — press <b>▶ RUN analysis</b> to update them.</div>}
+              {stale && <div className="stale">The inputs have changed since the last run. The results below still show the previous run — press <b>▶ RUN analysis</b> to update them. <button type="button" className="linkbtn" onClick={() => setApplied(inputsL)}>▶ RUN analysis</button></div>}
               {warnings.length > 0 && (
                 <ul className="warn">{warnings.map((w) => <li key={w}>{w}</li>)}</ul>
               )}
