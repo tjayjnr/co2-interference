@@ -149,3 +149,9 @@ table.edit { min-width: 450px; }
 
 .tabs { flex-wrap: nowrap; overflow-x: auto; }
 .tabs button { flex: 0 0 auto; white-space: nowrap; padding: 7px 10px; font-size: 14px; }
+
+/* footer: full-width band flush with the bottom edge of the page */
+body { min-height: 100vh; display: flex; flex-direction: column; }
+.app, .doc { width: 100%; flex: 1 0 auto; }
+.sitefoot { max-width: none; width: 100%; margin: 24px 0 0; padding: 0; flex-shrink: 0; }
+.logos { border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 18px 24px; }
