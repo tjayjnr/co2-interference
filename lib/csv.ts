@@ -1,9 +1,23 @@
-import type { Well } from "./physics";
+import type { Point, Well } from "./physics";
 
-const HEADER = "name,x_m,y_m,rate_Mtpa,start_yr,end_yr,skin";
+/** Editable well: coordinates may be local x/y (m) or lon/lat (deg); skin is typed text ("" = calculate). */
+export interface WellIn extends Well {
+  skinText: string;
+  lon?: number;
+  lat?: number;
+}
 
-export function wellsToCsv(wells: Well[]): string {
-  return [HEADER, ...wells.map((w) => [w.name, w.x, w.y, w.rateMtpa, w.startYr, w.endYr, w.skin].join(","))].join("\n");
+export interface PointIn extends Point {
+  lon?: number;
+  lat?: number;
+}
+
+const HEADER_LOCAL = "name,x_m,y_m,rate_Mtpa,start_yr,end_yr,skin";
+const HEADER_GEO = "name,lon_deg,lat_deg,rate_Mtpa,start_yr,end_yr,skin";
+
+export function wellsToCsv(wells: WellIn[], geo: boolean): string {
+  const rows = wells.map((w) => [w.name, geo ? w.lon ?? 0 : w.x, geo ? w.lat ?? 0 : w.y, w.rateMtpa, w.startYr, w.endYr, w.skinText].join(","));
+  return [geo ? HEADER_GEO : HEADER_LOCAL, ...rows].join("\n");
 }
 
 export function toCsv(rows: (string | number)[][]): string {
@@ -19,28 +33,43 @@ export function toCsv(rows: (string | number)[][]): string {
     .join("\n");
 }
 
-/** Parse a wells CSV: name,x_m,y_m,rate_Mtpa,start_yr,end_yr[,skin] (header optional; , ; or tab delimited). */
-export function parseWellsCsv(text: string): Well[] {
+/**
+ * Parse a wells CSV. Local: name,x_m,y_m,rate_Mtpa,start_yr,end_yr[,skin].
+ * Geographic (detected from a header containing "lon"): name,lon_deg,lat_deg,rate_Mtpa,start_yr,end_yr[,skin].
+ * A blank skin means "calculate it". Header optional; , ; or tab delimited.
+ */
+export function parseWellsCsv(text: string): { wells: WellIn[]; geo: boolean } {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (!lines.length) throw new Error("File is empty");
   const delim = [",", ";", "\t"].sort((a, b) => lines[0].split(b).length - lines[0].split(a).length)[0];
   const rows = lines.map((l) => l.split(delim).map((c) => c.trim().replace(/^"|"$/g, "")));
-  if (Number.isNaN(Number(rows[0][1]))) rows.shift(); // header row
-  return rows.map((r, i) => {
-    if (r.length < 6) throw new Error(`Row ${i + 1}: expected at least 6 columns (${HEADER})`);
-    const nums = r.slice(1, 7).map((v) => (v === "" ? 0 : Number(v)));
+  let geo = false;
+  if (Number.isNaN(Number(rows[0][1]))) {
+    geo = /lon/i.test(rows[0][1] ?? "");
+    rows.shift(); // header row
+  }
+  const wells = rows.map((r, i): WellIn => {
+    if (r.length < 6) throw new Error(`Row ${i + 1}: expected at least 6 columns (${geo ? HEADER_GEO : HEADER_LOCAL})`);
+    const nums = r.slice(1, 6).map(Number);
     if (nums.some(Number.isNaN)) throw new Error(`Row ${i + 1}: non-numeric value`);
+    const skinText = (r[6] ?? "").trim();
+    if (skinText !== "" && Number.isNaN(Number(skinText))) throw new Error(`Row ${i + 1}: skin must be a number or blank`);
+    if (geo && (Math.abs(nums[1]) > 90 || Math.abs(nums[0]) > 180)) throw new Error(`Row ${i + 1}: longitude/latitude out of range`);
     return {
       id: `w${Date.now().toString(36)}${i}`,
       name: r[0] || `Well ${i + 1}`,
-      x: nums[0],
-      y: nums[1],
+      x: geo ? 0 : nums[0],
+      y: geo ? 0 : nums[1],
+      lon: geo ? nums[0] : undefined,
+      lat: geo ? nums[1] : undefined,
       rateMtpa: nums[2],
       startYr: nums[3],
       endYr: nums[4],
-      skin: r.length > 6 ? nums[5] : 0,
+      skin: 0,
+      skinText,
     };
   });
+  return { wells, geo };
 }
 
 export function download(filename: string, text: string) {

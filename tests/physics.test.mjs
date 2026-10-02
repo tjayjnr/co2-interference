@@ -109,3 +109,34 @@ test("unit conversions", () => {
   for (const k of Object.keys(PRESETS.Field)) assert.ok(UNITS[k].some((u) => u.label === PRESETS.Field[k]), k);
   for (const k of Object.keys(PRESETS.SI)) assert.equal(findUnit(k, PRESETS.SI[k]).f, 1);
 });
+
+import { project, unproject, centroid } from "../lib/geo.ts";
+import { parseWellsCsv, wellsToCsv } from "../lib/csv.ts";
+
+test("geographic projection: distances and round trip", () => {
+  const o = { lat: 58.0, lon: 2.0 };
+  const north = project(59, 2, o.lat, o.lon);
+  close(north.y, 111195, 1e-3); close(north.x, 0, 1e-6);
+  const east = project(58, 3, o.lat, o.lon);
+  close(east.x, 111195 * Math.cos(58 * Math.PI / 180), 2e-3);
+  for (const [lat, lon] of [[58.3, 2.4], [57.7, 1.5], [58.05, 2.02]]) {
+    const xy = project(lat, lon, o.lat, o.lon);
+    const back = unproject(xy.x, xy.y, o.lat, o.lon);
+    close(back.lat, lat, 1e-9); close(back.lon, lon, 1e-9);
+  }
+  // distance between two nearby points agrees with the haversine distance to well under 0.5 %
+  const a = project(58.1, 2.1, o.lat, o.lon), b = project(58.3, 2.4, o.lat, o.lon);
+  const R = 6371008.8, r = Math.PI / 180;
+  const h = 2 * R * Math.asin(Math.sqrt(Math.sin((0.2 * r) / 2) ** 2 + Math.cos(58.1 * r) * Math.cos(58.3 * r) * Math.sin((0.3 * r) / 2) ** 2));
+  assert.ok(Math.abs(Math.hypot(a.x - b.x, a.y - b.y) / h - 1) < 0.005);
+  assert.deepEqual(centroid([{ lat: 10, lon: 20 }, { lat: 12, lon: 24 }]), { lat: 11, lon: 22 });
+});
+
+test("wells CSV: local, geographic and blank skin", () => {
+  const local = parseWellsCsv("name,x_m,y_m,rate_Mtpa,start_yr,end_yr,skin\nA,0,0,1,0,25,\nB,3000,0,1,0,25,4.5");
+  assert.equal(local.geo, false); assert.equal(local.wells[0].skinText, ""); assert.equal(local.wells[1].skinText, "4.5");
+  const geo = parseWellsCsv("name,lon_deg,lat_deg,rate_Mtpa,start_yr,end_yr\nA,2.1,58.2,1,0,25");
+  assert.equal(geo.geo, true); assert.equal(geo.wells[0].lon, 2.1); assert.equal(geo.wells[0].lat, 58.2); assert.equal(geo.wells[0].skinText, "");
+  assert.throws(() => parseWellsCsv("name,lon_deg,lat_deg,rate_Mtpa,start_yr,end_yr\nA,2.1,98.2,1,0,25"));
+  assert.ok(wellsToCsv(geo.wells, true).startsWith("name,lon_deg,lat_deg"));
+});

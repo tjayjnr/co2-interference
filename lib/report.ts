@@ -33,6 +33,7 @@ export interface ReportData {
   pointHead: string[];
   pointRows: string[][];
   boundaryDesc: string;
+  coordDesc: string;
   skinDesc: string;
   limits: { p0: string; pfrac: string; safety: string; maxBuildup: string; maxBhp: string };
   kpi: { worst: string; peak: string; at: string; allowable: string; exceeded: boolean; scale: string; interferenceShare: number };
@@ -99,7 +100,7 @@ export function buildBlocks(d: ReportData): Block[] {
   b.push(E("Δp_max = f · G_f · D − G_h · D"));
 
   b.push({ t: "h1", text: "3. Input Data" });
-  b.push({ t: "p", text: `Aquifer, fluid and pressure-limit parameters are listed in Table ${tab + 1}, and the well and monitoring-point data in Tables ${tab + 2} and ${tab + 3}. ${d.boundaryDesc}` });
+  b.push({ t: "p", text: `Aquifer, fluid and pressure-limit parameters are listed in Table ${tab + 1}, and the well and monitoring-point data in Tables ${tab + 2} and ${tab + 3}. ${d.coordDesc} ${d.boundaryDesc}` });
   b.push(T("Aquifer, fluid and pressure-limit input parameters.", d.paramHead, d.paramRows));
   b.push(T("Injection well data (coordinates, CO₂ injection rate, injection period and skin factor).", d.wellHead, d.wellRows));
   if (d.pointRows.length) b.push(T("Monitoring points.", d.pointHead, d.pointRows));

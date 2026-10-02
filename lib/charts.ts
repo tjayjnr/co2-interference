@@ -2,6 +2,7 @@
 // drawing can be shown on screen (theme "css") and exported as SVG/PNG/report figures (theme "light").
 
 import { isoSegments } from "./contour";
+import { unproject } from "./geo";
 import type { Boundary, GridResult, Point, Well } from "./physics";
 
 export type Theme = "css" | "light";
@@ -43,6 +44,7 @@ export interface MapOpts {
   pDec: number;
   df: number;
   dLabel: string;
+  geo?: { lat0: number; lon0: number }; // when set, axes are labelled with longitude / latitude
 }
 
 export type ChartSpec =
@@ -274,11 +276,14 @@ export function mapChart(o: MapOpts, t: Theme, title?: string): Rendered {
     s += `<circle cx="${f1(px(w.x))}" cy="${f1(py(w.y))}" r="6" style="fill:#fff;stroke:#111;stroke-width:2"/>${label(px(w.x), py(w.y), w.name)}`;
   }
   for (const f of [0, 0.25, 0.5, 0.75, 1]) {
-    s += `<text x="${f1(L + f * S)}" y="${T + S + 16}" text-anchor="middle" style="${FONT};font-size:11px;fill:${p.muted}">${fmtD((g.x0 + f * (g.x1 - g.x0)) / o.df)}</text>`;
-    s += `<text x="${L - 6}" y="${f1(T + S - f * S + 4)}" text-anchor="end" style="${FONT};font-size:11px;fill:${p.muted}">${fmtD((g.y0 + f * (g.y1 - g.y0)) / o.df)}</text>`;
+    const xv = g.x0 + f * (g.x1 - g.x0), yv = g.y0 + f * (g.y1 - g.y0);
+    const xl = o.geo ? unproject(xv, (g.y0 + g.y1) / 2, o.geo.lat0, o.geo.lon0).lon.toFixed(3) : fmtD(xv / o.df);
+    const yl = o.geo ? unproject((g.x0 + g.x1) / 2, yv, o.geo.lat0, o.geo.lon0).lat.toFixed(3) : fmtD(yv / o.df);
+    s += `<text x="${f1(L + f * S)}" y="${T + S + 16}" text-anchor="middle" style="${FONT};font-size:11px;fill:${p.muted}">${xl}</text>`;
+    s += `<text x="${L - 6}" y="${f1(T + S - f * S + 4)}" text-anchor="end" style="${FONT};font-size:11px;fill:${p.muted}">${yl}</text>`;
   }
-  s += `<text x="${L + S / 2}" y="${T + S + 36}" text-anchor="middle" style="${FONT};font-size:12px;fill:${p.muted}">x (${esc(o.dLabel)})</text>`;
-  s += `<text transform="translate(14 ${T + S / 2}) rotate(-90)" text-anchor="middle" style="${FONT};font-size:12px;fill:${p.muted}">y (${esc(o.dLabel)})</text>`;
+  s += `<text x="${L + S / 2}" y="${T + S + 36}" text-anchor="middle" style="${FONT};font-size:12px;fill:${p.muted}">${o.geo ? "Longitude (°)" : `x (${esc(o.dLabel)})`}</text>`;
+  s += `<text transform="translate(14 ${T + S / 2}) rotate(-90)" text-anchor="middle" style="${FONT};font-size:12px;fill:${p.muted}">${o.geo ? "Latitude (°)" : `y (${esc(o.dLabel)})`}</text>`;
 
   // legend panel
   const lx = L + S + 28;

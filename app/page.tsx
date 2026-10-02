@@ -4,7 +4,8 @@ import { useMemo, useRef, useState } from "react";
 import ChartView from "@/components/ChartView";
 import NumField from "@/components/NumField";
 import { render, type ChartSpec, type Series } from "@/lib/charts";
-import { parseWellsCsv, toCsv, download, wellsToCsv } from "@/lib/csv";
+import { parseWellsCsv, toCsv, download, wellsToCsv, type PointIn, type WellIn } from "@/lib/csv";
+import { centroid, project as projectXY, unproject, validLatLon } from "@/lib/geo";
 import { downloadBlob, svgToPngDataUrl } from "@/lib/exportImage";
 import {
   arrivalTime, buildupGrid, consts, hawkinsSkin, interferenceMatrix, limits, skinBuildup, timeGrid, totalBuildup, wellboreBuildup, wellContribution,
@@ -21,13 +22,13 @@ const DEFAULT_AQUIFER: Aquifer = {
   fracGradientMPaPerM: 0.0165, safetyFactor: 0.9,
 };
 
-const DEFAULT_WELLS: Well[] = [
-  { id: "w1", name: "INJ-1", x: 0, y: 0, rateMtpa: 1.0, startYr: 0, endYr: 25, skin: 2 },
-  { id: "w2", name: "INJ-2", x: 4000, y: 1000, rateMtpa: 1.0, startYr: 2, endYr: 25, skin: 5 },
-  { id: "w3", name: "INJ-3", x: 1500, y: 5000, rateMtpa: 0.8, startYr: 5, endYr: 25, skin: 0 },
-  { id: "w4", name: "INJ-4", x: -3500, y: 3000, rateMtpa: 0.5, startYr: 8, endYr: 20, skin: 3 },
+const DEFAULT_WELLS: WellIn[] = [
+  { id: "w1", name: "INJ-1", x: 0, y: 0, rateMtpa: 1.0, startYr: 0, endYr: 25, skin: 0, skinText: "" },
+  { id: "w2", name: "INJ-2", x: 4000, y: 1000, rateMtpa: 1.0, startYr: 2, endYr: 25, skin: 0, skinText: "" },
+  { id: "w3", name: "INJ-3", x: 1500, y: 5000, rateMtpa: 0.8, startYr: 5, endYr: 25, skin: 0, skinText: "" },
+  { id: "w4", name: "INJ-4", x: -3500, y: 3000, rateMtpa: 0.5, startYr: 8, endYr: 20, skin: 0, skinText: "" },
 ];
-const DEFAULT_POINTS: Point[] = [{ id: "p1", name: "Legacy well", x: 8000, y: -3000 }];
+const DEFAULT_POINTS: PointIn[] = [{ id: "p1", name: "Legacy well", x: 8000, y: -3000 }];
 
 type View = "map" | "series" | "matrix" | "limits" | "compare";
 type Mode = "total" | "interference" | "bhp";
@@ -36,11 +37,12 @@ type Mode = "total" | "interference" | "bhp";
 interface Inputs {
   aq: Aquifer;
   boundary: Boundary;
-  wells: Well[];
-  points: Point[];
+  wells: (Well & { lon?: number; lat?: number; skinSrc: "input" | "calc" })[];
+  points: (Point & { lon?: number; lat?: number })[];
   horizon: number;
   threshold: number;
-  skin: { mode: "manual" | "calc"; ksMd: number; rsM: number; s: number };
+  skin: { ksMd: number; rsM: number; s: number };
+  geo: { on: boolean; lat0: number; lon0: number };
   project: string;
   author: string;
 }
@@ -48,6 +50,7 @@ interface Inputs {
 let seq = 100;
 const uid = (p: string) => `${p}${seq++}`;
 const num = (v: number) => String(+v.toPrecision(5));
+const roundLL = (g: { lat: number; lon: number }) => ({ lat: +g.lat.toFixed(5), lon: +g.lon.toFixed(5) });
 
 async function fontBase64(url: string): Promise<string> {
   const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
@@ -61,7 +64,9 @@ export default function Page() {
   const [aqL, setAq] = useState(DEFAULT_AQUIFER);
   const [boundaryL, setBoundary] = useState<Boundary>({ type: "none", axis: "x", positionM: 10000 });
   const [rawWells, setWells] = useState(DEFAULT_WELLS);
-  const [skinMode, setSkinMode] = useState<"manual" | "calc">("calc");
+  const [coordMode, setCoordMode] = useState<"local" | "geo">("local");
+  const [geoRef] = useState({ lat: 29.7604, lon: -95.3698 }); // example location, used when first switching to lon/lat
+  const [boundaryDeg, setBoundaryDeg] = useState(-95.3);
   const [dmg, setDmg] = useState({ ksMd: 50, rsM: 1.5 });
   const [pointsL, setPoints] = useState(DEFAULT_POINTS);
   const [horizonL, setHorizon] = useState(40);
@@ -81,22 +86,40 @@ export default function Page() {
 
   const setA = (k: keyof Aquifer) => (v: number) => setAq((a) => ({ ...a, [k]: v }));
   const calcSkin = useMemo(() => hawkinsSkin(aqL.permMd, dmg.ksMd, dmg.rsM, aqL.wellboreRadiusM), [aqL.permMd, aqL.wellboreRadiusM, dmg]);
-  const wellsL = useMemo(
-    () => (skinMode === "calc" ? rawWells.map((w) => ({ ...w, skin: calcSkin })) : rawWells),
-    [rawWells, skinMode, calcSkin],
+  const isGeo = coordMode === "geo";
+  // Projection origin for lon/lat input: the centroid of all entered locations.
+  const origin = useMemo(
+    () => (isGeo ? centroid([...rawWells, ...pointsL].filter((o) => o.lon !== undefined && o.lat !== undefined).map((o) => ({ lat: o.lat as number, lon: o.lon as number }))) : null),
+    [isGeo, rawWells, pointsL],
   );
+  const toXY = (o: { x: number; y: number; lon?: number; lat?: number }) =>
+    isGeo && origin && o.lon !== undefined && o.lat !== undefined ? projectXY(o.lat, o.lon, origin.lat, origin.lon) : { x: o.x, y: o.y };
+  /* eslint-disable react-hooks/exhaustive-deps */
+  const wellsL = useMemo(() => rawWells.map((w) => {
+    const t = w.skinText.trim();
+    const entered = t !== "" && Number.isFinite(Number(t));
+    return { ...w, ...toXY(w), skin: entered ? Number(t) : calcSkin, skinSrc: (entered ? "input" : "calc") as "input" | "calc" };
+  }), [rawWells, calcSkin, isGeo, origin]);
+  const pointsP = useMemo(() => pointsL.map((p) => ({ ...p, ...toXY(p) })), [pointsL, isGeo, origin]);
+  /* eslint-enable react-hooks/exhaustive-deps */
+  const boundaryEff: Boundary = useMemo(() => {
+    if (!isGeo || !origin) return boundaryL;
+    const m = boundaryL.axis === "x" ? projectXY(origin.lat, boundaryDeg, origin.lat, origin.lon).x : projectXY(boundaryDeg, origin.lon, origin.lat, origin.lon).y;
+    return { ...boundaryL, positionM: m };
+  }, [isGeo, origin, boundaryL, boundaryDeg]);
   const limL = useMemo(() => limits(aqL), [aqL]);
+  const geoBad = isGeo && [...rawWells, ...pointsL].some((o) => !validLatLon(o.lat ?? 0, o.lon ?? 0));
 
   const inputsL: Inputs = useMemo(() => ({
-    aq: aqL, boundary: boundaryL, wells: wellsL, points: pointsL, horizon: horizonL, threshold: thresholdL,
-    skin: { mode: skinMode, ksMd: dmg.ksMd, rsM: dmg.rsM, s: calcSkin }, project, author,
-  }), [aqL, boundaryL, wellsL, pointsL, horizonL, thresholdL, skinMode, dmg, calcSkin, project, author]);
+    aq: aqL, boundary: boundaryEff, wells: wellsL, points: pointsP, horizon: horizonL, threshold: thresholdL,
+    skin: { ksMd: dmg.ksMd, rsM: dmg.rsM, s: calcSkin }, geo: { on: isGeo, lat0: origin?.lat ?? 0, lon0: origin?.lon ?? 0 }, project, author,
+  }), [aqL, boundaryEff, wellsL, pointsP, horizonL, thresholdL, dmg, calcSkin, isGeo, origin, project, author]);
 
   // ---- RUN ----
   const [applied, setApplied] = useState<Inputs | null>(null);
   const stale = useMemo(() => applied !== null && JSON.stringify(applied) !== JSON.stringify(inputsL), [applied, inputsL]);
   const cur = applied ?? inputsL; // before the first RUN nothing is displayed; this only keeps the hooks well-defined
-  const { aq, boundary, wells, points, horizon, threshold } = cur;
+  const { aq, boundary, wells, points, horizon, threshold, geo } = cur;
   const lim = useMemo(() => limits(aq), [aq]);
   const c = useMemo(() => consts(aq), [aq]);
   const tNow = Math.min(tEval, horizon);
@@ -241,6 +264,7 @@ export default function Page() {
     kind: "map",
     opts: {
       grid: g, wells, points, boundary, pf: pU.f, pLabel: pU.label, pDec, df: dU.f, dLabel: dU.label,
+      geo: geo.on ? { lat0: geo.lat0, lon0: geo.lon0 } : undefined,
       contourLevels: [
         { level: threshold, label: `${P(threshold, 3)} ${pU.label} interference threshold`, cls: "thr" },
         ...(lim.maxBuildupMPa > 0 ? [{ level: lim.maxBuildupMPa, label: `${P(lim.maxBuildupMPa)} ${pU.label} allowable buildup`, cls: "lim" as const }] : []),
@@ -277,13 +301,46 @@ export default function Page() {
   const specCompare = useMemo(() => (wells.length ? compareSpec(cmpIdx) : null), [cases, cmpIdx, lim, pU, times]);
   /* eslint-enable react-hooks/exhaustive-deps */
 
-  const updWell = (id: string, patch: Partial<Well>) => setWells((ws) => ws.map((w) => (w.id === id ? { ...w, ...patch } : w)));
-  const updPoint = (id: string, patch: Partial<Point>) => setPoints((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  const updWell = (id: string, patch: Partial<WellIn>) => setWells((ws) => ws.map((w) => (w.id === id ? { ...w, ...patch } : w)));
+  const updPoint = (id: string, patch: Partial<PointIn>) => setPoints((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+
+  const switchCoord = (next: "local" | "geo") => {
+    if (next === coordMode) return;
+    if (next === "geo") {
+      const fill = <T extends { x: number; y: number; lon?: number; lat?: number }>(o: T): T =>
+        o.lon !== undefined && o.lat !== undefined ? o : { ...o, ...roundLL(unproject(o.x, o.y, geoRef.lat, geoRef.lon)) };
+      setWells((ws) => ws.map(fill));
+      setPoints((ps) => ps.map(fill));
+      const g = boundaryL.axis === "x" ? unproject(boundaryL.positionM, 0, geoRef.lat, geoRef.lon).lon : unproject(0, boundaryL.positionM, geoRef.lat, geoRef.lon).lat;
+      setBoundaryDeg(+g.toFixed(5));
+    } else {
+      setWells((ws) => ws.map((w) => ({ ...w, ...toXY(w) })));
+      setPoints((ps) => ps.map((p) => ({ ...p, ...toXY(p) })));
+      setBoundary((b) => ({ ...b, positionM: boundaryEff.positionM }));
+    }
+    setCoordMode(next);
+  };
 
   const onImport = async (file: File | undefined) => {
     if (!file) return;
     try {
-      setWells(parseWellsCsv(await file.text()));
+      const r = parseWellsCsv(await file.text());
+      if (r.geo) {
+        // keep the monitoring points at the same offsets from the imported wells' centroid
+        const c0 = centroid(r.wells.map((w) => ({ lat: w.lat as number, lon: w.lon as number }))) ?? geoRef;
+        if (!isGeo) {
+          setPoints((ps) => ps.map((p) => ({ ...p, ...roundLL(unproject(p.x, p.y, c0.lat, c0.lon)) })));
+          setBoundaryDeg(+(boundaryL.axis === "x" ? unproject(boundaryL.positionM, 0, c0.lat, c0.lon).lon : unproject(0, boundaryL.positionM, c0.lat, c0.lon).lat).toFixed(5));
+        }
+        setCoordMode("geo");
+      } else {
+        if (isGeo) {
+          setPoints((ps) => ps.map((p) => ({ ...p, ...toXY(p) })));
+          setBoundary((b) => ({ ...b, positionM: boundaryEff.positionM }));
+        }
+        setCoordMode("local");
+      }
+      setWells(r.wells);
       setCsvError("");
     } catch (e) {
       setCsvError(e instanceof Error ? e.message : String(e));
@@ -349,17 +406,34 @@ export default function Page() {
           ["Interference threshold", P(threshold, 3), pU.label],
           ["Hydraulic diffusivity, η", num(c.eta), "m²/s"],
           ["Analysis horizon", String(horizon), "yr"],
+          ...(wells.some((w) => w.skinSrc === "calc")
+            ? [["Damaged-zone permeability, k_s", uv("perm", applied.skin.ksMd), un("perm")], ["Damaged-zone radius, r_s", uv("length", applied.skin.rsM), un("length")]]
+            : []),
         ],
-        wellHead: ["Well", `x (${dU.label})`, `y (${dU.label})`, `Rate (${rU.label})`, "Start (yr)", "End (yr)", "Skin"],
-        wellRows: wells.map((w) => [w.name, D(w.x), D(w.y), num(w.rateMtpa / rU.f), num(w.startYr), num(w.endYr), w.skin.toFixed(2)]),
-        pointHead: ["Point", `x (${dU.label})`, `y (${dU.label})`],
-        pointRows: points.map((p) => [p.name, D(p.x), D(p.y)]),
+        wellHead: geo.on
+          ? ["Well", "Lon (°)", "Lat (°)", `x (${dU.label})`, `y (${dU.label})`, `Rate (${rU.label})`, "Start (yr)", "End (yr)", "Skin"]
+          : ["Well", `x (${dU.label})`, `y (${dU.label})`, `Rate (${rU.label})`, "Start (yr)", "End (yr)", "Skin"],
+        wellRows: wells.map((w) => {
+          const skinCell = `${w.skin.toFixed(2)} (${w.skinSrc === "input" ? "input" : "calc."})`;
+          const tail = [num(w.rateMtpa / rU.f), num(w.startYr), num(w.endYr), skinCell];
+          return geo.on ? [w.name, (w.lon ?? 0).toFixed(5), (w.lat ?? 0).toFixed(5), D(w.x), D(w.y), ...tail] : [w.name, D(w.x), D(w.y), ...tail];
+        }),
+        pointHead: geo.on ? ["Point", "Lon (°)", "Lat (°)", `x (${dU.label})`, `y (${dU.label})`] : ["Point", `x (${dU.label})`, `y (${dU.label})`],
+        pointRows: points.map((p) => (geo.on ? [p.name, (p.lon ?? 0).toFixed(5), (p.lat ?? 0).toFixed(5), D(p.x), D(p.y)] : [p.name, D(p.x), D(p.y)])),
         boundaryDesc: boundary.type === "none"
           ? "The base case treats the aquifer as infinite-acting; the constant-pressure and no-flow cases are evaluated for comparison."
           : `The base case uses a ${boundary.type === "noflow" ? "no-flow (sealing)" : "constant-pressure"} boundary along ${bLine}; the other two conditions are evaluated for comparison.`,
-        skinDesc: applied.skin.mode === "calc"
-          ? `The skin factor was calculated for all wells from a damaged zone of radius ${uv("length", applied.skin.rsM)} ${un("length")} and permeability ${uv("perm", applied.skin.ksMd)} ${un("perm")}, giving s = ${applied.skin.s.toFixed(2)}.`
-          : "Skin factors were specified individually for each well.",
+        coordDesc: geo.on
+          ? `Well and monitoring-point locations were entered as geographic coordinates (longitude and latitude, WGS84) and converted to local Cartesian coordinates (x east, y north) with an azimuthal equidistant projection centred on the centroid of the locations (latitude ${geo.lat0.toFixed(5)}°, longitude ${geo.lon0.toFixed(5)}°).`
+          : "Locations are given as local Cartesian coordinates (x east, y north).",
+        skinDesc: (() => {
+          const inN = wells.filter((w) => w.skinSrc === "input").map((w) => w.name);
+          const clN = wells.filter((w) => w.skinSrc === "calc").map((w) => w.name);
+          const calcTxt = `calculated from a damaged zone of radius ${uv("length", applied.skin.rsM)} ${un("length")} and permeability ${uv("perm", applied.skin.ksMd)} ${un("perm")}, giving s = ${applied.skin.s.toFixed(2)}`;
+          if (!inN.length) return `The skin factor of every well was ${calcTxt}.`;
+          if (!clN.length) return "Skin factors were specified for every well.";
+          return `Skin factors were specified for ${inN.join(", ")}; for ${clN.join(", ")} the skin factor was ${calcTxt}.`;
+        })(),
         limits: {
           p0: `${P(lim.initialMPa, 1)} ${pU.label}`, pfrac: `${P(lim.fractureMPa, 1)} ${pU.label}`, safety: String(aq.safetyFactor),
           maxBuildup: `${P(lim.maxBuildupMPa)} ${pU.label}`, maxBhp: `${P(lim.initialMPa + lim.maxBuildupMPa, 1)} ${pU.label}`,
@@ -494,25 +568,15 @@ export default function Page() {
 
           <section>
             <h2>Well skin</h2>
+            <p className="hint" style={{ marginTop: 0 }}>
+              Skin is set per well in the table below. If you have a measured skin, type it in that well&apos;s Skin cell. If you leave the cell blank, the app calculates it from the damaged zone described here.
+            </p>
             <div className="grid2">
-              <label className="field"><span>Skin source</span>
-                <select value={skinMode} onChange={(e) => setSkinMode(e.target.value as "manual" | "calc")}>
-                  <option value="calc">Calculate (Hawkins damaged zone)</option>
-                  <option value="manual">Enter per well</option>
-                </select>
-              </label>
-              <span />
-              {skinMode === "calc" && (
-                <>
-                  {uf("perm", { label: "Damaged-zone perm. ks", value: dmg.ksMd, onChange: (v) => setDmg((d) => ({ ...d, ksMd: v })), min: 0.001 })}
-                  {uf("length", { label: "Damaged-zone radius rs", value: dmg.rsM, onChange: (v) => setDmg((d) => ({ ...d, rsM: v })), min: 0 })}
-                </>
-              )}
+              {uf("perm", { label: "Damaged-zone perm. ks", value: dmg.ksMd, onChange: (v) => setDmg((d) => ({ ...d, ksMd: v })), min: 0.001 })}
+              {uf("length", { label: "Damaged-zone radius rs", value: dmg.rsM, onChange: (v) => setDmg((d) => ({ ...d, rsM: v })), min: 0 })}
             </div>
             <p className="hint">
-              {skinMode === "calc"
-                ? <>s = (k/ks − 1)·ln(rs/rw) = <b>{calcSkin.toFixed(2)}</b> for all wells (ks &lt; k is damage, ks &gt; k is stimulation).</>
-                : "Type a skin value for each well in the table below."}
+              Calculated skin: s = (k/ks − 1)·ln(rs/rw) = <b>{calcSkin.toFixed(2)}</b> (ks &lt; k is damage, ks &gt; k is stimulation).
             </p>
           </section>
 
@@ -528,11 +592,13 @@ export default function Page() {
               </label>
               <label className="field"><span>Line</span>
                 <select value={boundaryL.axis} disabled={boundaryL.type === "none"} onChange={(e) => setBoundary({ ...boundaryL, axis: e.target.value as "x" | "y" })}>
-                  <option value="x">x = const</option>
-                  <option value="y">y = const</option>
+                  <option value="x">{isGeo ? "longitude = const (N–S line)" : "x = const"}</option>
+                  <option value="y">{isGeo ? "latitude = const (E–W line)" : "y = const"}</option>
                 </select>
               </label>
-              {uf("distance", { label: "Position", value: boundaryL.positionM, onChange: (v) => setBoundary({ ...boundaryL, positionM: v }) })}
+              {isGeo
+                ? <NumField label={boundaryL.axis === "x" ? "Longitude" : "Latitude"} unit="°" value={boundaryDeg} onChange={setBoundaryDeg} />
+                : uf("distance", { label: "Position", value: boundaryL.positionM, onChange: (v) => setBoundary({ ...boundaryL, positionM: v }) })}
             </div>
             <p className="hint">The Compare boundaries tab runs all three conditions side by side using this line.</p>
           </section>
@@ -542,54 +608,84 @@ export default function Page() {
               <h2>Injection wells</h2>
               <div className="btns">
                 <button className="ghost" onClick={() => fileRef.current?.click()}>Import CSV</button>
-                <button className="ghost" onClick={() => download("wells.csv", wellsToCsv(wellsL))}>Export</button>
+                <button className="ghost" onClick={() => download("wells.csv", wellsToCsv(rawWells, isGeo))}>Export</button>
               </div>
             </div>
+            <label className="field coordsel"><span>Location input</span>
+              <select value={coordMode} onChange={(e) => switchCoord(e.target.value as "local" | "geo")}>
+                <option value="local">Local x, y</option>
+                <option value="geo">Longitude / latitude (real-world)</option>
+              </select>
+            </label>
+            {isGeo && (
+              <p className="hint">
+                Enter WGS84 decimal degrees (east and north positive). Calculations use a local projection centred on the centroid of your locations
+                {origin ? ` (${origin.lat.toFixed(4)}°, ${origin.lon.toFixed(4)}°)` : ""}, and the pressure map is labelled in longitude and latitude.
+                The coordinates shown are an example — replace them with your own.
+              </p>
+            )}
             <input ref={fileRef} type="file" accept=".csv,.txt,.tsv" hidden onChange={(e) => onImport(e.target.files?.[0])} />
             {csvError && <p className="err">{csvError}</p>}
+            {geoBad && <p className="err">Latitude must be within ±90° and longitude within ±180°.</p>}
             <div className="tablewrap">
               <table className="edit">
-                <thead><tr><th>Name</th><th>x ({dU.label})</th><th>y ({dU.label})</th><th>{rU.label}</th><th>Start</th><th>End</th><th>Skin</th><th /></tr></thead>
+                <thead><tr><th>Name</th>{isGeo ? <><th>Lon (°)</th><th>Lat (°)</th></> : <><th>x ({dU.label})</th><th>y ({dU.label})</th></>}<th>{rU.label}</th><th>Start</th><th>End</th><th>Skin</th><th /></tr></thead>
                 <tbody>
-                  {wellsL.map((w) => (
+                  {rawWells.map((w) => (
                     <tr key={w.id}>
                       <td><input value={w.name} aria-label="Well name" onChange={(e) => updWell(w.id, { name: e.target.value })} /></td>
-                      <td>{uf("distance", { ariaLabel: `${w.name} x`, value: w.x, onChange: (v) => updWell(w.id, { x: v }) })}</td>
-                      <td>{uf("distance", { ariaLabel: `${w.name} y`, value: w.y, onChange: (v) => updWell(w.id, { y: v }) })}</td>
+                      {isGeo ? (
+                        <>
+                          <td><NumField className="geoin" ariaLabel={`${w.name} longitude`} value={w.lon ?? 0} onChange={(v) => updWell(w.id, { lon: v })} /></td>
+                          <td><NumField className="geoin" ariaLabel={`${w.name} latitude`} value={w.lat ?? 0} onChange={(v) => updWell(w.id, { lat: v })} /></td>
+                        </>
+                      ) : (
+                        <>
+                          <td>{uf("distance", { ariaLabel: `${w.name} x`, value: w.x, onChange: (v) => updWell(w.id, { x: v }) })}</td>
+                          <td>{uf("distance", { ariaLabel: `${w.name} y`, value: w.y, onChange: (v) => updWell(w.id, { y: v }) })}</td>
+                        </>
+                      )}
                       <td>{uf("rate", { ariaLabel: `${w.name} rate`, value: w.rateMtpa, onChange: (v) => updWell(w.id, { rateMtpa: v }), min: 0 })}</td>
                       <td><NumField ariaLabel={`${w.name} start`} value={w.startYr} onChange={(v) => updWell(w.id, { startYr: v })} min={0} /></td>
                       <td><NumField ariaLabel={`${w.name} end`} value={w.endYr} onChange={(v) => updWell(w.id, { endYr: v })} min={0} /></td>
-                      <td>{skinMode === "calc"
-                        ? <span className="calc" title="Calculated from the damaged-zone inputs">{w.skin.toFixed(2)}</span>
-                        : <NumField ariaLabel={`${w.name} skin`} value={w.skin} onChange={(v) => updWell(w.id, { skin: v })} />}</td>
+                      <td><input type="number" step="any" className="skininput" aria-label={`${w.name} skin`} value={w.skinText} placeholder={`${calcSkin.toFixed(2)} calc.`} title="Type a skin value, or leave blank to calculate it" onChange={(e) => updWell(w.id, { skinText: e.target.value })} /></td>
                       <td><button className="x" aria-label={`Remove ${w.name}`} onClick={() => setWells((ws) => ws.filter((q) => q.id !== w.id))}>×</button></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <button className="ghost" onClick={() => setWells((ws) => [...ws, { id: uid("w"), name: `INJ-${ws.length + 1}`, x: 0, y: 0, rateMtpa: 1, startYr: 0, endYr: 25, skin: 0 }])}>+ Add well</button>
-            <p className="hint">CSV columns (always metres and Mt/yr): name, x_m, y_m, rate_Mtpa, start_yr, end_yr, skin (optional). Excel: save as CSV.</p>
+            <button className="ghost" onClick={() => setWells((ws) => [...ws, { id: uid("w"), name: `INJ-${ws.length + 1}`, x: 0, y: 0, lon: origin?.lon ?? geoRef.lon, lat: origin?.lat ?? geoRef.lat, rateMtpa: 1, startYr: 0, endYr: 25, skin: 0, skinText: "" }])}>+ Add well</button>
+            <p className="hint">Skin: type a value if you have it; leave it blank and the app calculates it (grey number = calculated value). CSV columns (metres or degrees, Mt/yr): name, x_m, y_m <i>or</i> lon_deg, lat_deg, rate_Mtpa, start_yr, end_yr, skin (optional). Excel: save as CSV.</p>
           </section>
 
           <section>
             <h2>Monitoring points</h2>
             <div className="tablewrap">
               <table className="edit">
-                <thead><tr><th>Name</th><th>x ({dU.label})</th><th>y ({dU.label})</th><th /></tr></thead>
+                <thead><tr><th>Name</th>{isGeo ? <><th>Lon (°)</th><th>Lat (°)</th></> : <><th>x ({dU.label})</th><th>y ({dU.label})</th></>}<th /></tr></thead>
                 <tbody>
                   {pointsL.map((p) => (
                     <tr key={p.id}>
                       <td><input value={p.name} aria-label="Point name" onChange={(e) => updPoint(p.id, { name: e.target.value })} /></td>
-                      <td>{uf("distance", { ariaLabel: `${p.name} x`, value: p.x, onChange: (v) => updPoint(p.id, { x: v }) })}</td>
-                      <td>{uf("distance", { ariaLabel: `${p.name} y`, value: p.y, onChange: (v) => updPoint(p.id, { y: v }) })}</td>
+                      {isGeo ? (
+                        <>
+                          <td><NumField className="geoin" ariaLabel={`${p.name} longitude`} value={p.lon ?? 0} onChange={(v) => updPoint(p.id, { lon: v })} /></td>
+                          <td><NumField className="geoin" ariaLabel={`${p.name} latitude`} value={p.lat ?? 0} onChange={(v) => updPoint(p.id, { lat: v })} /></td>
+                        </>
+                      ) : (
+                        <>
+                          <td>{uf("distance", { ariaLabel: `${p.name} x`, value: p.x, onChange: (v) => updPoint(p.id, { x: v }) })}</td>
+                          <td>{uf("distance", { ariaLabel: `${p.name} y`, value: p.y, onChange: (v) => updPoint(p.id, { y: v }) })}</td>
+                        </>
+                      )}
                       <td><button className="x" aria-label={`Remove ${p.name}`} onClick={() => setPoints((ps) => ps.filter((q) => q.id !== p.id))}>×</button></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <button className="ghost" onClick={() => setPoints((ps) => [...ps, { id: uid("p"), name: `Point ${ps.length + 1}`, x: 0, y: 0 }])}>+ Add point</button>
+            <button className="ghost" onClick={() => setPoints((ps) => [...ps, { id: uid("p"), name: `Point ${ps.length + 1}`, x: 0, y: 0, lon: origin?.lon ?? geoRef.lon, lat: origin?.lat ?? geoRef.lat }])}>+ Add point</button>
           </section>
 
           <section>

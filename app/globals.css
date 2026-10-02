@@ -98,3 +98,9 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 
 .linkbtn { background: none; border: 0; padding: 0; margin: 0; color: var(--accent); font: inherit; font-weight: 700; text-decoration: underline; cursor: pointer; }
 .linkbtn:hover { text-decoration-thickness: 2px; }
+
+.coordsel { margin: 4px 0 8px; }
+.skininput { width: 100%; }
+.skininput::placeholder { color: var(--muted); opacity: .8; }
+
+.geoin { min-width: 92px; }
