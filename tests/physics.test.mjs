@@ -87,3 +87,12 @@ test("boundary ordering at the wellbore: no-flow > infinite > constant", () => {
   const f = (type) => wellboreBuildup([A], A, 15, aq, { type, axis: "x", positionM: 1500 }, c);
   assert.ok(f("noflow") > f("none") && f("none") > f("constant"));
 });
+
+import { hawkinsSkin } from "../lib/physics.ts";
+
+test("Hawkins skin", () => {
+  close(hawkinsSkin(150, 50, 1.5, 0.1), 2 * Math.log(15));
+  assert.equal(hawkinsSkin(100, 100, 5, 0.1), 0);
+  assert.ok(hawkinsSkin(100, 400, 5, 0.1) < 0);
+  assert.equal(hawkinsSkin(100, 50, 0.05, 0.1), 0); // zone smaller than wellbore: ignored
+});

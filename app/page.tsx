@@ -6,7 +6,7 @@ import MapView from "@/components/MapView";
 import NumField from "@/components/NumField";
 import { parseWellsCsv, toCsv, download, wellsToCsv } from "@/lib/csv";
 import {
-  arrivalTime, buildupGrid, consts, interferenceMatrix, limits, skinBuildup, timeGrid, totalBuildup, wellboreBuildup,
+  arrivalTime, buildupGrid, consts, hawkinsSkin, interferenceMatrix, limits, skinBuildup, timeGrid, totalBuildup, wellboreBuildup,
   type Aquifer, type Boundary, type Point, type Well,
 } from "@/lib/physics";
 
@@ -34,7 +34,9 @@ const uid = (p: string) => `${p}${seq++}`;
 export default function Page() {
   const [aq, setAq] = useState(DEFAULT_AQUIFER);
   const [boundary, setBoundary] = useState<Boundary>({ type: "none", axis: "x", positionM: 10000 });
-  const [wells, setWells] = useState(DEFAULT_WELLS);
+  const [rawWells, setWells] = useState(DEFAULT_WELLS);
+  const [skinMode, setSkinMode] = useState<"manual" | "calc">("calc");
+  const [dmg, setDmg] = useState({ ksMd: 50, rsM: 1.5 });
   const [points, setPoints] = useState(DEFAULT_POINTS);
   const [horizon, setHorizon] = useState(40);
   const [tEval, setTEval] = useState(25);
@@ -46,6 +48,12 @@ export default function Page() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const setA = (k: keyof Aquifer) => (v: number) => setAq((a) => ({ ...a, [k]: v }));
+  const calcSkin = useMemo(() => hawkinsSkin(aq.permMd, dmg.ksMd, dmg.rsM, aq.wellboreRadiusM), [aq.permMd, aq.wellboreRadiusM, dmg]);
+  // Wells actually used in every calculation: skin is either typed per well or computed (Hawkins).
+  const wells = useMemo(
+    () => (skinMode === "calc" ? rawWells.map((w) => ({ ...w, skin: calcSkin })) : rawWells),
+    [rawWells, skinMode, calcSkin],
+  );
   const lim = useMemo(() => limits(aq), [aq]);
   const c = useMemo(() => consts(aq), [aq]);
   const tNow = Math.min(tEval, horizon);
@@ -209,6 +217,30 @@ export default function Page() {
           </section>
 
           <section>
+            <h2>Well skin</h2>
+            <div className="grid2">
+              <label className="field"><span>Skin source</span>
+                <select value={skinMode} onChange={(e) => setSkinMode(e.target.value as "manual" | "calc")}>
+                  <option value="calc">Calculate (Hawkins damaged zone)</option>
+                  <option value="manual">Enter per well</option>
+                </select>
+              </label>
+              <span />
+              {skinMode === "calc" && (
+                <>
+                  <NumField label="Damaged-zone perm. ks" unit="mD" value={dmg.ksMd} onChange={(v) => setDmg((d) => ({ ...d, ksMd: v }))} min={0.001} />
+                  <NumField label="Damaged-zone radius rs" unit="m" value={dmg.rsM} onChange={(v) => setDmg((d) => ({ ...d, rsM: v }))} min={0} />
+                </>
+              )}
+            </div>
+            <p className="hint">
+              {skinMode === "calc"
+                ? <>s = (k/ks − 1)·ln(rs/rw) = <b>{calcSkin.toFixed(2)}</b> for all wells (ks &lt; k is damage, ks &gt; k is stimulation).</>
+                : "Type a skin value for each well in the table below."}
+            </p>
+          </section>
+
+          <section>
             <h2>Boundary condition</h2>
             <div className="grid2">
               <label className="field"><span>Type</span>
@@ -251,7 +283,9 @@ export default function Page() {
                       <td><NumField ariaLabel={`${w.name} rate`} value={w.rateMtpa} onChange={(v) => updWell(w.id, { rateMtpa: v })} min={0} /></td>
                       <td><NumField ariaLabel={`${w.name} start`} value={w.startYr} onChange={(v) => updWell(w.id, { startYr: v })} min={0} /></td>
                       <td><NumField ariaLabel={`${w.name} end`} value={w.endYr} onChange={(v) => updWell(w.id, { endYr: v })} min={0} /></td>
-                      <td><NumField ariaLabel={`${w.name} skin`} value={w.skin} onChange={(v) => updWell(w.id, { skin: v })} /></td>
+                      <td>{skinMode === "calc"
+                        ? <span className="calc" title="Calculated from the damaged-zone inputs">{w.skin.toFixed(2)}</span>
+                        : <NumField ariaLabel={`${w.name} skin`} value={w.skin} onChange={(v) => updWell(w.id, { skin: v })} />}</td>
                       <td><button className="x" aria-label={`Remove ${w.name}`} onClick={() => setWells((ws) => ws.filter((q) => q.id !== w.id))}>×</button></td>
                     </tr>
                   ))}

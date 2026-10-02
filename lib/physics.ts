@@ -149,6 +149,15 @@ export function wellContribution(
 }
 
 /**
+ * Hawkins skin from a damaged (or stimulated) zone of radius rs and permeability ks:
+ * s = (k/ks - 1) ln(rs/rw). Positive = damage (ks < k), negative = stimulation (ks > k).
+ */
+export function hawkinsSkin(permMd: number, ksMd: number, rsM: number, rwM: number): number {
+  if (!(ksMd > 0) || !(rsM > rwM) || !(rwM > 0)) return 0;
+  return (permMd / ksMd - 1) * Math.log(rsM / rwM);
+}
+
+/**
  * Extra buildup (MPa) across the skin zone of a well: dp_skin = q mu s / (2 pi k h).
  * Acts only at the injector itself and only while it is injecting (steady, proportional to rate).
  */
