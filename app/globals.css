@@ -10,7 +10,7 @@
   }
 }
 * { box-sizing: border-box; }
-body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 Georgia, "Times New Roman", serif; font-variant-numeric: lining-nums; }
 .app { max-width: 1500px; margin: 0 auto; padding: 16px; }
 .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
 h1 { font-size: 20px; margin: 0; }
@@ -104,3 +104,9 @@ button:disabled { opacity: .45; cursor: not-allowed; }
 .skininput::placeholder { color: var(--muted); opacity: .8; }
 
 .geoin { min-width: 92px; }
+
+.chartsvg { cursor: crosshair; user-select: none; -webkit-user-select: none; }
+.chartbar { flex-wrap: wrap; align-items: center; }
+.zoomhint { margin-right: auto; font-size: 11px; color: var(--muted); }
+.zoombox { position: absolute; border: 1.5px dashed var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); pointer-events: none; }
+table, input, select { font-variant-numeric: lining-nums tabular-nums; }

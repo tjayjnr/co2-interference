@@ -117,6 +117,8 @@ export default function Page() {
 
   // ---- RUN ----
   const [applied, setApplied] = useState<Inputs | null>(null);
+  const [runId, setRunId] = useState(0);
+  const runNow = () => { setApplied(inputsL); setRunId((n) => n + 1); };
   const stale = useMemo(() => applied !== null && JSON.stringify(applied) !== JSON.stringify(inputsL), [applied, inputsL]);
   const cur = applied ?? inputsL; // before the first RUN nothing is displayed; this only keeps the hooks well-defined
   const { aq, boundary, wells, points, horizon, threshold, geo } = cur;
@@ -224,6 +226,14 @@ export default function Page() {
     return { peak: ys[iMax], t: times[iMax], self: ys[iMax] - interference - skinAtPeak, skin: skinAtPeak, interference };
   }), [wells, times, aq, boundary, c]);
 
+  // Monitoring points are checked against the interference threshold (detection level), not the pressure limit.
+  const pointChecks = useMemo(() => points.map((pt) => {
+    const ys = times.map((t) => totalBuildup(wells, pt.x, pt.y, t, aq, boundary, c));
+    const iMax = ys.reduce((m, v, i) => (v > ys[m] ? i : m), 0);
+    const iFirst = ys.findIndex((v) => v >= threshold);
+    return { name: pt.name, peak: ys[iMax], tPeak: times[iMax], first: iFirst >= 0 ? times[iFirst] : null };
+  }), [points, wells, times, aq, boundary, c, threshold]);
+
   const worst = peaks.reduce((m, p, i) => (p.peak > peaks[m].peak ? i : m), 0);
   const scaleToLimit = peaks.length && peaks[worst].peak > 0 ? lim.maxBuildupMPa / peaks[worst].peak : Infinity;
 
@@ -266,8 +276,8 @@ export default function Page() {
       grid: g, wells, points, boundary, pf: pU.f, pLabel: pU.label, pDec, df: dU.f, dLabel: dU.label,
       geo: geo.on ? { lat0: geo.lat0, lon0: geo.lon0 } : undefined,
       contourLevels: [
-        { level: threshold, label: `${P(threshold, 3)} ${pU.label} interference threshold`, cls: "thr" },
-        ...(lim.maxBuildupMPa > 0 ? [{ level: lim.maxBuildupMPa, label: `${P(lim.maxBuildupMPa)} ${pU.label} allowable buildup`, cls: "lim" as const }] : []),
+        { level: threshold, label: `Interference threshold\n${P(threshold, 3)} ${pU.label} (detection only)`, cls: "thr" },
+        ...(lim.maxBuildupMPa > 0 ? [{ level: lim.maxBuildupMPa, label: `Max allowable buildup\n${P(lim.maxBuildupMPa)} ${pU.label} (pass/fail limit)`, cls: "lim" as const }] : []),
       ],
     },
   });
@@ -458,6 +468,8 @@ export default function Page() {
         arrivalThreshold: `${P(threshold, 3)} ${pU.label}`,
         arrivalHead: ["Source \\ Target", ...allTargets.map((t) => t.name)],
         arrivalRows: arrivals.map((row, i) => [names[i], ...row.map((v) => (v === null ? "–" : v.toFixed(2)))]),
+        pointCheckHead: ["Point", `Peak buildup (${pU.label})`, "Time (yr)", "Threshold reached?", "First reached (yr)"],
+        pointCheckRows: pointChecks.map((pc) => [pc.name, P(pc.peak, 3), pc.tPeak.toFixed(1), pc.first !== null ? "Yes" : "No", pc.first !== null ? pc.first.toFixed(2) : "–"]),
         compareHead: ["Well", ...cases.map((k) => k.label)],
         compareRows: [
           ...wells.map((w, i) => [w.name, ...cases.map((k) => P(k.perWell[i].peak))]),
@@ -511,7 +523,7 @@ export default function Page() {
       <div className="layout">
         <aside className="panel">
           <div className="runbar">
-            <button className="run" onClick={() => setApplied(inputsL)}>▶ RUN analysis</button>
+            <button className="run" onClick={() => runNow()}>▶ RUN analysis</button>
             <span className="hint"> {applied ? (stale ? "Inputs changed — press RUN to update." : "Results are up to date.") : "Set your inputs, then press RUN."}</span>
           </div>
 
@@ -702,13 +714,13 @@ export default function Page() {
           {!applied && (
             <div className="empty">
               <p><b>No results yet.</b></p>
-              <p>Check the inputs on the left, then press <button type="button" className="linkbtn" onClick={() => setApplied(inputsL)}>▶ RUN analysis</button>.</p>
+              <p>Check the inputs on the left, then press <button type="button" className="linkbtn" onClick={() => runNow()}>▶ RUN analysis</button>.</p>
             </div>
           )}
 
           {applied && (
             <>
-              {stale && <div className="stale">The inputs have changed since the last run. The results below still show the previous run — press <b>▶ RUN analysis</b> to update them. <button type="button" className="linkbtn" onClick={() => setApplied(inputsL)}>▶ RUN analysis</button></div>}
+              {stale && <div className="stale">The inputs have changed since the last run. The results below still show the previous run — press <b>▶ RUN analysis</b> to update them. <button type="button" className="linkbtn" onClick={() => runNow()}>▶ RUN analysis</button></div>}
               {warnings.length > 0 && (
                 <ul className="warn">{warnings.map((w) => <li key={w}>{w}</li>)}</ul>
               )}
@@ -725,9 +737,10 @@ export default function Page() {
                   <small>{aq.safetyFactor} × Pfrac − P₀</small>
                 </div>
                 <div className={`kpi ${wells.length && peaks[worst].peak > lim.maxBuildupMPa ? "bad" : "good"}`}>
-                  <span>Status</span>
+                  <span>Status vs max allowable buildup</span>
                   <b>{wells.length && peaks[worst].peak > lim.maxBuildupMPa ? "Limit exceeded" : "Within limit"}</b>
-                  <small>{Number.isFinite(scaleToLimit) ? `rates can scale ×${scaleToLimit.toFixed(2)} to reach limit` : ""}</small>
+                  <small>Pass/fail uses the max allowable buildup, not the interference threshold.</small>
+                  <small>{Number.isFinite(scaleToLimit) ? `Rates can scale ×${scaleToLimit.toFixed(2)} to reach the limit.` : ""}</small>
                 </div>
               </div>
 
@@ -755,21 +768,24 @@ export default function Page() {
 
               {view === "map" && specMap && (
                 <>
-                  <ChartView spec={specMap} title={`Pressure buildup at t = ${tNow.toFixed(1)} yr`} filename="pressure-map" />
-                  <p className="caption">Buildup at {tNow.toFixed(1)} yr. The allowable-buildup contour appears only near the wells.</p>
+                  <ChartView key={`map-${runId}`} spec={specMap} title={`Pressure buildup map at t = ${tNow.toFixed(1)} yr`} filename="pressure-map" />
+                  <p className="caption">
+                    Buildup at {tNow.toFixed(1)} yr. <b>Pass/fail</b> is judged against the <b>max allowable buildup</b> ({P(lim.maxBuildupMPa)} {pU.label} = {aq.safetyFactor} × fracture pressure − initial pressure), shown as the solid white/black contour, which only appears near the wells if the limit is approached.
+                    The dashed teal contour is the <b>interference threshold</b> ({P(threshold, 3)} {pU.label}); it only shows how far a pressure effect can be detected and is not a pass/fail limit.
+                  </p>
                 </>
               )}
 
               {view === "series" && (
                 <>
-                  <ChartView spec={specSeries} title={mode === "bhp" ? "Bottomhole pressure vs time" : mode === "total" ? "Pressure buildup vs time" : "Interference pressure vs time"} filename={`time-series-${mode}`} />
+                  <ChartView key={`series-${runId}-${mode}`} spec={specSeries} title={mode === "bhp" ? "Bottomhole pressure of each well vs time" : mode === "total" ? "Wellbore pressure buildup vs time" : "Interference pressure at each well vs time"} filename={`time-series-${mode}`} />
                   {wells.length > 0 && (
                     <>
                       <h3>What drives the field maximum</h3>
                       <p className="caption">
                         At each time the well with the highest pressure is the controlling well. The chart splits its buildup into the share caused by each injector (its own injection is the layer with its own name) plus skin. Add {P(lim.initialMPa, 1)} {pU.label} for absolute BHP.
                       </p>
-                      <ChartView spec={specStack} title="Field-maximum buildup by source" filename="field-maximum-drivers" />
+                      <ChartView key={`stack-${runId}`} spec={specStack} title="Field-maximum buildup split by source well" filename="field-maximum-drivers" />
                       <div className="tablewrap">
                         <table className="matrix">
                           <thead><tr><th>At field peak: {P(fieldDrivers.peak)} {pU.label} ({P(lim.initialMPa + fieldDrivers.peak, 1)} {pU.label} BHP) at {times[fieldDrivers.kPeak].toFixed(1)} yr in {wells[fieldDrivers.controlling[fieldDrivers.kPeak]].name}</th><th>{pU.label}</th><th>Share</th></tr></thead>
@@ -836,6 +852,9 @@ export default function Page() {
 
               {view === "limits" && (
                 <>
+                  <p className="caption" style={{ marginTop: 0 }}>
+                    <b>Injection wells</b> are judged against the <b>max allowable buildup</b> of {P(lim.maxBuildupMPa)} {pU.label} ({aq.safetyFactor} × fracture pressure − initial pressure). The <b>interference threshold</b> ({P(threshold, 3)} {pU.label}) is not a pass/fail limit; it is only used for the map contour, the arrival times and the monitoring-point table below.
+                  </p>
                   <div className="tablewrap">
                     <table className="matrix">
                       <thead><tr><th>Well</th><th>Peak buildup ({pU.label})</th><th>at (yr)</th><th>of which self</th><th>of which skin</th><th>of which interference</th><th>Bottomhole P ({pU.label})</th><th>Margin ({pU.label})</th><th>Status</th></tr></thead>
@@ -860,6 +879,26 @@ export default function Page() {
                     Interference share at the worst well: {wells.length && peaks[worst].peak > 0 ? Math.round((peaks[worst].interference / peaks[worst].peak) * 100) : 0}% of its peak buildup.
                     Because the model is linear in rate, scaling every rate by ×{Number.isFinite(scaleToLimit) ? scaleToLimit.toFixed(2) : "–"} brings the worst well exactly to the limit.
                   </p>
+                  {points.length > 0 && (
+                    <>
+                      <h3>Monitoring points vs the interference threshold ({P(threshold, 3)} {pU.label})</h3>
+                      <div className="tablewrap">
+                        <table className="matrix">
+                          <thead><tr><th>Point</th><th>Peak buildup ({pU.label})</th><th>at (yr)</th><th>Threshold reached?</th><th>First reached (yr)</th></tr></thead>
+                          <tbody>
+                            {pointChecks.map((pc) => (
+                              <tr key={pc.name}>
+                                <th>{pc.name}</th>
+                                <td>{P(pc.peak, 3)}</td><td>{pc.tPeak.toFixed(1)}</td>
+                                <td className={pc.first !== null ? "bad-cell" : "good-cell"}>{pc.first !== null ? "Yes" : "No"}</td>
+                                <td>{pc.first !== null ? pc.first.toFixed(2) : "–"}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
 
@@ -872,7 +911,7 @@ export default function Page() {
                       </select>
                     </label>
                   </div>
-                  {specCompare && <ChartView spec={specCompare} title={`Boundary-condition comparison, ${wells[cmpIdx].name}`} filename="boundary-comparison" />}
+                  {specCompare && <ChartView key={`cmp-${runId}-${cmpIdx}`} spec={specCompare} title={`Boundary-condition comparison for ${wells[cmpIdx].name}`} filename="boundary-comparison" />}
                   <h3>Peak wellbore buildup ({pU.label}), skin included</h3>
                   <div className="tablewrap">
                     <table className="matrix">

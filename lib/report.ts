@@ -45,6 +45,8 @@ export interface ReportData {
   arrivalThreshold: string;
   arrivalHead: string[];
   arrivalRows: string[][];
+  pointCheckHead: string[];
+  pointCheckRows: string[][];
   compareHead: string[];
   compareRows: string[][];
   compareSentence: string;
@@ -107,13 +109,17 @@ export function buildBlocks(d: ReportData): Block[] {
 
   b.push({ t: "h1", text: "4. Results" });
   b.push({ t: "h2", text: "4.1 Pressure buildup and limit check" });
-  b.push({ t: "p", text: `The pressure limits at the injection depth are an initial pressure of ${d.limits.p0}, a fracture pressure of ${d.limits.pfrac} and, with a safety factor of ${d.limits.safety}, an allowable buildup of ${d.limits.maxBuildup} (maximum allowable bottomhole pressure ${d.limits.maxBhp}). Table ${tab + 1} gives the peak wellbore buildup of each well, split into the well's own response, skin and interference from the other wells.` });
+  b.push({ t: "p", text: `The pressure limits at the injection depth are an initial pressure of ${d.limits.p0}, a fracture pressure of ${d.limits.pfrac} and, with a safety factor of ${d.limits.safety}, an allowable buildup of ${d.limits.maxBuildup} (maximum allowable bottomhole pressure ${d.limits.maxBhp}). Table ${tab + 1} gives the peak wellbore buildup of each well, split into the well's own response, skin and interference from the other wells. Pass/fail is judged against the allowable buildup only; the interference threshold of ${d.arrivalThreshold} is not a pass/fail limit and is used solely to define the detection contour, the arrival times and the monitoring-point check.` });
   b.push(T(`Peak wellbore pressure buildup per well (${d.pLabel}) and comparison with the allowable buildup.`, d.peakHead, d.peakRows));
   b.push(...F(d.figures.bhp, `Bottomhole pressure of each well and monitoring point, with the field-maximum and field-average curves and the maximum allowable bottomhole pressure.`));
   b.push({ t: "h2", text: "4.2 Well-to-well interference" });
   b.push({ t: "p", text: `Table ${tab + 1} gives the pressure that each injector (row) contributes at every well (column) at t = ${d.matrixTime}; the diagonal is each well's own buildup including skin. Table ${tab + 2} gives the time at which a single source well raises the pressure at each target by ${d.arrivalThreshold}.` });
   b.push(T(`Interference matrix at t = ${d.matrixTime} (${d.pLabel}).`, d.matrixHead, d.matrixRows));
   b.push(T(`Arrival time (years) of a pressure rise of ${d.arrivalThreshold} from each source well at each target.`, d.arrivalHead, d.arrivalRows, "A dash indicates the threshold is not reached within the injection period and analysis horizon."));
+  if (d.pointCheckRows.length) {
+    b.push({ t: "p", text: `Monitoring points are compared with the interference threshold of ${d.arrivalThreshold} (Table ${tab + 1}); this is a detection level, not a pressure limit.` });
+    b.push(T(`Monitoring points compared with the interference threshold of ${d.arrivalThreshold}.`, d.pointCheckHead, d.pointCheckRows));
+  }
   b.push(...F(d.figures.map, `Pressure buildup map at t = ${d.matrixTime}, with the interference-threshold and allowable-buildup contours.`));
   b.push({ t: "h2", text: "4.3 Sensitivity to the boundary condition" });
   b.push({ t: "p", text: d.compareSentence });
@@ -323,7 +329,7 @@ export async function renderDocx(blocks: Block[], runningTitle: string): Promise
   const {
     AlignmentType, BorderStyle, Document, Footer, HeadingLevel, ImageRun, Packer, PageNumber, Paragraph, Table, TableCell, TableRow, TabStopType, TextRun, WidthType,
   } = await import("docx");
-  const FONT = "Times New Roman";
+  const FONT = "Georgia";
   const none = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
   const run = (text: string, o: { bold?: boolean; italics?: boolean; size?: number } = {}) => new TextRun({ text, font: FONT, bold: o.bold, italics: o.italics, size: o.size ?? 22 });
   const children: (InstanceType<typeof Paragraph> | InstanceType<typeof Table>)[] = [];
