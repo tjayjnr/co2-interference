@@ -230,7 +230,12 @@ export function stackedChart(o: StackOpts, t: Theme, title?: string, view?: View
 
 type Stops = [number, number, number][];
 const STOPS_HEAT: Stops = [[255, 247, 220], [253, 200, 110], [240, 120, 60], [190, 50, 70], [90, 20, 100], [30, 10, 60]];
-const STOPS_SAT: Stops = [[255, 255, 255], [198, 219, 239], [107, 174, 214], [33, 113, 181], [8, 69, 148], [8, 29, 88]];
+// MATLAB-style "jet" scale for CO2 saturation: dark blue (0) - blue - cyan - green - yellow - red - dark red (max)
+const STOPS_SAT: Stops = Array.from({ length: 41 }, (_, i) => {
+  const v = i / 40;
+  const c = (x: number) => Math.round(255 * Math.min(1, Math.max(0, x)));
+  return [c(1.5 - Math.abs(4 * v - 3)), c(1.5 - Math.abs(4 * v - 2)), c(1.5 - Math.abs(4 * v - 1))] as [number, number, number];
+});
 
 function ramp(v: number, stops: Stops): [number, number, number] {
   const p = Math.min(Math.max(v, 0), 1) * (stops.length - 1);
@@ -292,7 +297,11 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   for (const c of o.contourLevels) {
     const segs = isoSegments(g.values, g.nx, g.ny, c.level);
     const lines = segs.map((q) => `<line x1="${f1(gx(q[0]))}" y1="${f1(gy(q[1]))}" x2="${f1(gx(q[2]))}" y2="${f1(gy(q[3]))}"/>`).join("");
-    if (c.cls === "thr") s += `<g style="stroke:#0b7285;stroke-width:2" stroke-dasharray="5 3">${lines}</g>`;
+    if (c.cls === "thr") {
+      s += o.palette === "sat"
+        ? `<g style="stroke:#000;stroke-width:4.5">${lines}</g><g style="stroke:#fff;stroke-width:2" stroke-dasharray="5 3">${lines}</g>`
+        : `<g style="stroke:#0b7285;stroke-width:2" stroke-dasharray="5 3">${lines}</g>`;
+    }
     else s += `<g style="stroke:#000;stroke-width:4.5">${lines}</g><g style="stroke:#fff;stroke-width:2">${lines}</g>`;
   }
   const b = o.boundary;
@@ -329,7 +338,7 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   s += `<defs><linearGradient id="cb${id}" x1="0" y1="1" x2="0" y2="0">${stops.map((c, i) => `<stop offset="${(i / (stops.length - 1)) * 100}%" stop-color="rgb(${c.map(Math.round).join(",")})"/>`).join("")}</linearGradient></defs>`;
   s += `<text x="${lx}" y="${ly + 10}" style="${FONT};font-size:12px;font-weight:700;fill:${p.text}">${esc(o.legendTitle ?? "Pressure buildup")}${o.pLabel ? ` (${esc(o.pLabel)})` : ""}</text>`;
   ly += 18;
-  const cbH = 240;
+  const cbH = 300;
   const top = g.max / o.pf;
   s += `<rect x="${lx}" y="${ly}" width="16" height="${cbH}" fill="url(#cb${id})" style="stroke:${p.frame}"/>`;
   const cbTicks = ticks(0, top, 10).filter((v) => v <= top * 1.0001);
@@ -338,7 +347,7 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   for (const v of cbTicks) {
     const yy = ly + cbH * (1 - v / top);
     s += `<line x1="${lx + 16}" x2="${lx + 21}" y1="${f1(yy)}" y2="${f1(yy)}" style="stroke:${p.frame}"/>`;
-    s += `<text x="${lx + 25}" y="${f1(yy + 4)}" style="${FONT};font-size:11px;fill:${p.text}">${v.toFixed(tickDec)}</text>`;
+    s += `<text x="${lx + 25}" y="${f1(yy + 4)}" style="${FONT};font-size:13px;fill:${p.text}">${v.toFixed(tickDec)}</text>`;
   }
   const lastY = ly + cbH * (1 - cbTicks[cbTicks.length - 1] / top);
   if (lastY - ly > 14) s += `<text x="${lx + 25}" y="${ly + 4}" style="${FONT};font-size:11px;font-weight:700;fill:${p.text}">max ${top.toFixed(Math.max(tickDec, 2))}</text>`;
@@ -354,7 +363,9 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   for (const c of o.contourLevels) {
     s += row(
       c.cls === "thr"
-        ? `<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#0b7285;stroke-width:2" stroke-dasharray="5 3"/>`
+        ? (o.palette === "sat"
+            ? `<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#000;stroke-width:4.5"/><line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#fff;stroke-width:2" stroke-dasharray="5 3"/>`
+            : `<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#0b7285;stroke-width:2" stroke-dasharray="5 3"/>`)
         : `<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#000;stroke-width:4.5"/><line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#fff;stroke-width:2"/>`,
       c.label,
     );

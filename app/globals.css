@@ -146,3 +146,6 @@ table.edit { min-width: 450px; }
 .doc-eq { text-align: center !important; } .doc-eq span { float: right; }
 .doc td.left { text-align: left; white-space: normal; }
 .doc-refs li { margin-bottom: 4px; }
+
+.tabs { flex-wrap: nowrap; overflow-x: auto; }
+.tabs button { flex: 0 0 auto; white-space: nowrap; padding: 7px 10px; font-size: 14px; }
