@@ -318,7 +318,10 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
     s += `<rect x="${f1(px(q.x) - 5)}" y="${f1(py(q.y) - 5)}" width="10" height="10" style="fill:#1c7ed6;stroke:#fff;stroke-width:1.5"/>${label(px(q.x), py(q.y), q.name)}`;
   }
   for (const w of o.wells) {
-    s += `<circle cx="${f1(px(w.x))}" cy="${f1(py(w.y))}" r="6" style="fill:#fff;stroke:#111;stroke-width:2"/>${label(px(w.x), py(w.y), w.name)}`;
+    // On the saturation map wells are identified by their name only (no marker on top of the plume)
+    s += o.palette === "sat"
+      ? `<text x="${f1(px(w.x))}" y="${f1(py(w.y) + 4)}" text-anchor="middle" style="${FONT};font-size:12px;font-weight:700;fill:#111;stroke:#fff;stroke-width:3;paint-order:stroke">${esc(w.name)}</text>`
+      : `<circle cx="${f1(px(w.x))}" cy="${f1(py(w.y))}" r="6" style="fill:#fff;stroke:#111;stroke-width:2"/>${label(px(w.x), py(w.y), w.name)}`;
   }
   s += "</g>";
   s += `<rect x="${L}" y="${T}" width="${S}" height="${S}" fill="none" style="stroke:${p.frame}"/>`;
@@ -358,7 +361,7 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
     ly += 12 + lines.length * 12;
     return out;
   };
-  s += row(`<circle cx="${lx + 9}" cy="${ly}" r="6" style="fill:#fff;stroke:#111;stroke-width:2"/>`, "Injection well");
+  if (o.palette !== "sat") s += row(`<circle cx="${lx + 9}" cy="${ly}" r="6" style="fill:#fff;stroke:#111;stroke-width:2"/>`, "Injection well");
   if (o.points.length) s += row(`<rect x="${lx + 4}" y="${ly - 5}" width="10" height="10" style="fill:#1c7ed6;stroke:#888;stroke-width:1"/>`, "Monitoring point");
   for (const c of o.contourLevels) {
     s += row(
