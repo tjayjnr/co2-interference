@@ -75,6 +75,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["CO₂ density", "Density of CO₂ at reservoir pressure and temperature; converts injected mass into reservoir volume.", "400 to 800 kg/m³"],
     ["Wellbore radius", "Radius at which each well's own pressure is evaluated.", "0.07 to 0.15 m"],
     ["Depth", "Mid-depth of the injection interval; sets the initial and fracture pressures.", "800 to 4000 m"],
+    ["Hydraulic diffusivity (calculated)", "Shown read-only under the inputs and calculated as k / (φ μ ct); it updates as soon as you change permeability, porosity, viscosity or compressibility. Only its display unit can be chosen.", "0.1 to 10 m²/s"],
     ["Analysis horizon", "Length of the time series, in years. The evaluation-time slider runs from 0 to this value.", "20 to 100 yr"],
   ]);
 

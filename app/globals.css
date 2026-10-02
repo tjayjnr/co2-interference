@@ -155,3 +155,6 @@ body { min-height: 100vh; display: flex; flex-direction: column; }
 .app, .doc { width: 100%; flex: 1 0 auto; }
 .sitefoot { max-width: none; width: 100%; margin: 24px 0 0; padding: 0; flex-shrink: 0; }
 .logos { border: 0; border-top: 1px solid var(--line); border-radius: 0; padding: 18px 24px; }
+
+.calcfield { margin-top: 8px; }
+.calcval { flex: 1 1 auto; min-width: 0; padding: 5px 8px; border: 1px dashed var(--muted); border-radius: 6px; background: transparent; font-weight: 600; font-variant-numeric: lining-nums tabular-nums; }

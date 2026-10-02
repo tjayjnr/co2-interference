@@ -2,7 +2,7 @@
 // For every unit: canonical = displayed * f, displayed = canonical / f.
 
 export type Cat =
-  | "length" | "distance" | "perm" | "pressure" | "viscosity" | "compress" | "density" | "gradient" | "rate";
+  | "length" | "distance" | "perm" | "pressure" | "viscosity" | "compress" | "density" | "gradient" | "rate" | "diffusivity";
 
 export interface Unit {
   label: string;
@@ -39,6 +39,13 @@ export const UNITS: Record<Cat, Unit[]> = {
     { label: "kPa/m", f: 0.001 },
   ],
   rate: [{ label: "Mt/yr", f: 1 }, { label: "kt/yr", f: 0.001 }, { label: "t/day", f: 365.25e-6 }],
+  diffusivity: [
+    { label: "m²/s", f: 1 },
+    { label: "cm²/s", f: 1e-4 },
+    { label: "m²/day", f: 1 / 86400 },
+    { label: "ft²/s", f: FT * FT },
+    { label: "ft²/day", f: (FT * FT) / 86400 },
+  ],
 };
 
 export const CAT_LABELS: Record<Cat, string> = {
@@ -51,11 +58,12 @@ export const CAT_LABELS: Record<Cat, string> = {
   density: "Density",
   gradient: "Pressure gradient",
   rate: "Injection rate",
+  diffusivity: "Hydraulic diffusivity",
 };
 
 export const PRESETS: Record<"SI" | "Field", Record<Cat, string>> = {
-  SI: { length: "m", distance: "m", perm: "mD", pressure: "MPa", viscosity: "mPa·s", compress: "1/MPa", density: "kg/m³", gradient: "MPa/m", rate: "Mt/yr" },
-  Field: { length: "ft", distance: "ft", perm: "mD", pressure: "psi", viscosity: "mPa·s", compress: "1/psi", density: "lb/ft³", gradient: "psi/ft", rate: "Mt/yr" },
+  SI: { length: "m", distance: "m", perm: "mD", pressure: "MPa", viscosity: "mPa·s", compress: "1/MPa", density: "kg/m³", gradient: "MPa/m", rate: "Mt/yr", diffusivity: "m²/s" },
+  Field: { length: "ft", distance: "ft", perm: "mD", pressure: "psi", viscosity: "mPa·s", compress: "1/psi", density: "lb/ft³", gradient: "psi/ft", rate: "Mt/yr", diffusivity: "ft²/day" },
 };
 
 export function findUnit(cat: Cat, label: string): Unit {

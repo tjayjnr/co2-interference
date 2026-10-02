@@ -447,7 +447,7 @@ export default function Page() {
           ["Fracture gradient, G_f", uv("gradient", aq.fracGradientMPaPerM), un("gradient")],
           ["Safety factor, f", num(aq.safetyFactor), "× P_frac"],
           ["Interference threshold", P(threshold, 3), pU.label],
-          ["Hydraulic diffusivity, η", num(c.eta), "m²/s"],
+          ["Hydraulic diffusivity, η (calculated)", uv("diffusivity", c.eta), un("diffusivity")],
           ["Analysis horizon", String(horizon), "yr"],
           ["Irreducible brine saturation, S_wr", num(sat.swr), "–"],
           ["Maximum CO₂ relative permeability, k_rg,max", num(sat.krgMax), "–"],
@@ -594,7 +594,15 @@ export default function Page() {
               {uf("length", { label: "Depth", value: aqL.depthM, onChange: setA("depthM"), min: 0 })}
               <NumField label="Analysis horizon" unit="yr" value={horizonL} onChange={(v) => setHorizon(Math.max(1, v))} min={1} />
             </div>
-            <p className="hint">Diffusivity η = {consts(aqL).eta.toFixed(2)} m²/s</p>
+            <div className="field calcfield">
+              <span>Hydraulic diffusivity η <em>calculated = k / (φ·μ·c<sub>t</sub>), updates with the inputs above</em></span>
+              <span className="unitrow">
+                <output className="calcval" aria-label="Calculated hydraulic diffusivity">{num(consts(aqL).eta / findUnit("diffusivity", units.diffusivity).f)}</output>
+                <select className="unitsel" aria-label="Diffusivity unit" value={units.diffusivity} onChange={(e) => setUnit("diffusivity")(e.target.value)}>
+                  {UNITS.diffusivity.map((u) => <option key={u.label} value={u.label}>{u.label}</option>)}
+                </select>
+              </span>
+            </div>
           </section>
 
           <section>
