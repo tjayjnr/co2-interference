@@ -83,3 +83,15 @@ table.matrix tr.total th, table.matrix tr.total td { font-weight: 600; }
 .calc { display: block; padding: 3px 4px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 select.preset { width: auto; }
+
+.chartview { position: relative; }
+.chartbar { display: flex; gap: 6px; justify-content: flex-end; }
+.chartbar button { margin-top: 0; padding: 3px 9px; font-size: 12px; }
+.chartsvg svg { width: 100%; height: auto; max-width: 860px; display: block; }
+.run { font-size: 15px; font-weight: 600; padding: 10px 18px; }
+.runbar { position: sticky; top: 0; z-index: 5; background: var(--panel); padding: 8px 0 12px; margin-bottom: 8px; border-bottom: 1px solid var(--line); }
+.stale { background: var(--warn-bg); border: 1px solid #e8b04a; border-radius: 8px; padding: 8px 12px; margin-bottom: 12px; font-size: 13px; }
+.empty { padding: 60px 16px; text-align: center; color: var(--muted); }
+.empty b { color: var(--text); }
+.hdrbtns { display: flex; gap: 8px; flex-wrap: wrap; }
+button:disabled { opacity: .45; cursor: not-allowed; }
