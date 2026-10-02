@@ -8,7 +8,7 @@ export type Block =
   | { t: "p"; text: string }
   | { t: "bullets"; items: string[] }
   | { t: "eq"; text: string; n: number }
-  | { t: "table"; caption: string; head: string[]; rows: string[][]; note?: string }
+  | { t: "table"; caption: string; head: string[]; rows: string[][]; note?: string; textual?: boolean }
   | { t: "fig"; caption: string; png: string; w: number; h: number }
   | { t: "refs"; items: string[] };
 
@@ -236,7 +236,15 @@ export async function renderPdf(rawBlocks: Block[], fonts: FontData, runningTitl
     y += o.gap ?? 2.2;
   };
 
-  for (const blk of blocks) {
+  // Space a heading needs so it never ends up alone at the bottom of a page: room for what follows it.
+  const needAfter = (next: Block | undefined) => {
+    if (next?.t === "fig") return Math.min((CW * next.h) / next.w, 105) + 20;
+    if (next?.t === "table") return 45;
+    return 30;
+  };
+  for (let bi = 0; bi < blocks.length; bi++) {
+    const blk = blocks[bi];
+    const next = blocks[bi + 1];
     switch (blk.t) {
       case "title": {
         para(blk.title, { size: 17, style: "bold", align: "center", gap: 2 });
@@ -251,8 +259,8 @@ export async function renderPdf(rawBlocks: Block[], fonts: FontData, runningTitl
         para(`Keywords: ${blk.keywords}`, { size: 9.5, indent: 6, gap: 4 });
         break;
       }
-      case "h1": ensure(14); y += 3; para(blk.text, { size: 13, style: "bold", gap: 1.5 }); break;
-      case "h2": ensure(11); y += 1; para(blk.text, { size: 11, style: "bold", gap: 1 }); break;
+      case "h1": ensure(Math.max(14, needAfter(next))); y += 3; para(blk.text, { size: 13, style: "bold", gap: 1.5 }); break;
+      case "h2": ensure(Math.max(11, needAfter(next))); y += 1; para(blk.text, { size: 11, style: "bold", gap: 1 }); break;
       case "p": para(blk.text, { align: "justify" }); break;
       case "bullets": blk.items.forEach((it) => para(`•  ${it}`, { align: "left", indent: 4, gap: 1 })); y += 2; break;
       case "eq": {
@@ -282,9 +290,9 @@ export async function renderPdf(rawBlocks: Block[], fonts: FontData, runningTitl
           margin: { left: ML, right: MR, top: MT, bottom: MB },
           styles: { font: "STIX", fontSize: small ? 7.5 : 9, cellPadding: { top: 1.1, bottom: 1.1, left: 1.4, right: 1.4 }, textColor: 20, overflow: "linebreak" },
           headStyles: { font: "STIX", fontStyle: "bold", fillColor: false as unknown as undefined, lineColor: 20, lineWidth: { top: 0.35, bottom: 0.18, left: 0, right: 0 } },
-          columnStyles: Object.fromEntries(blk.head.map((_, i) => [i, { halign: i === 0 ? "left" : "right" }])) as never,
+          columnStyles: Object.fromEntries(blk.head.map((_, i) => [i, { halign: i === 0 || blk.textual ? "left" : "right" }])) as never,
           didParseCell: (h) => {
-            h.cell.styles.halign = h.column.index === 0 ? "left" : "right";
+            h.cell.styles.halign = h.column.index === 0 || blk.textual ? "left" : "right";
             if (h.section === "body" && h.row.index === last) {
               h.cell.styles.lineColor = 20;
               h.cell.styles.lineWidth = { top: 0, bottom: 0.35, left: 0, right: 0 };
@@ -343,7 +351,7 @@ export async function renderDocx(blocks: Block[], runningTitle: string): Promise
   const {
     AlignmentType, BorderStyle, Document, Footer, HeadingLevel, ImageRun, Packer, PageNumber, Paragraph, Table, TableCell, TableRow, TabStopType, TextRun, WidthType,
   } = await import("docx");
-  const FONT = "Georgia";
+  const FONT = "Times New Roman";
   const none = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
   const run = (text: string, o: { bold?: boolean; italics?: boolean; size?: number } = {}) => new TextRun({ text, font: FONT, bold: o.bold, italics: o.italics, size: o.size ?? 22 });
   const children: (InstanceType<typeof Paragraph> | InstanceType<typeof Table>)[] = [];
@@ -393,7 +401,7 @@ export async function renderDocx(blocks: Block[], runningTitle: string): Promise
               bottom: kind === "head" ? { style: BorderStyle.SINGLE, size: 4, color: "111111" } : kind === "last" ? { style: BorderStyle.SINGLE, size: 8, color: "111111" } : none,
               left: none, right: none,
             },
-            children: [new Paragraph({ alignment: i === 0 ? AlignmentType.LEFT : AlignmentType.RIGHT, children: [run(text, { bold: kind === "head", size: blk.head.length > 7 ? 15 : 18 })] })],
+            children: [new Paragraph({ alignment: i === 0 || blk.textual ? AlignmentType.LEFT : AlignmentType.RIGHT, children: [run(text, { bold: kind === "head", size: blk.head.length > 7 ? 15 : 18 })] })],
           });
         const last = blk.rows.length - 1;
         children.push(new Table({

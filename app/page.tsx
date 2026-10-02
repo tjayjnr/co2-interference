@@ -558,6 +558,7 @@ export default function Page() {
           <p className="sub">Multi-well Theis superposition for a confined saline aquifer · screening-level, brine-equivalent</p>
         </div>
         <div className="hdrbtns">
+          <a className="toplink" href="/manual" target="_blank" rel="noopener noreferrer">User manual</a>
           <button className="ghost" onClick={exportResults} disabled={!applied}>Export results CSV</button>
           <button onClick={() => exportReport("pdf")} disabled={!applied || !!busy}>Report (PDF)</button>
           <button onClick={() => exportReport("docx")} disabled={!applied || !!busy}>Report (Word)</button>
@@ -703,7 +704,7 @@ export default function Page() {
                       <td>{uf("rate", { ariaLabel: `${w.name} rate`, value: w.rateMtpa, onChange: (v) => updWell(w.id, { rateMtpa: v }), min: 0 })}</td>
                       <td><NumField ariaLabel={`${w.name} start`} value={w.startYr} onChange={(v) => updWell(w.id, { startYr: v })} min={0} /></td>
                       <td><NumField ariaLabel={`${w.name} end`} value={w.endYr} onChange={(v) => updWell(w.id, { endYr: v })} min={0} /></td>
-                      <td><input type="number" step="any" className="skininput" aria-label={`${w.name} skin`} value={w.skinText} placeholder={`${calcSkin.toFixed(2)} calc.`} title="Type a skin value, or leave blank to calculate it" onChange={(e) => updWell(w.id, { skinText: e.target.value })} /></td>
+                      <td><input type="number" step="any" className="skininput" aria-label={`${w.name} skin`} value={w.skinText} placeholder={calcSkin.toFixed(2)} title={`Type a skin value, or leave blank to use the calculated value (${calcSkin.toFixed(2)})`} onChange={(e) => updWell(w.id, { skinText: e.target.value })} /></td>
                       <td><button className="x" aria-label={`Remove ${w.name}`} onClick={() => setWells((ws) => ws.filter((q) => q.id !== w.id))}>×</button></td>
                     </tr>
                   ))}

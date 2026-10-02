@@ -72,7 +72,7 @@ export interface Rendered {
   view: View; // domain actually drawn
 }
 
-const FONT = "font-family:Georgia,'Times New Roman',serif";
+const FONT = "font-family:'Times New Roman',Times,serif";
 let uid = 0;
 
 function palette(t: Theme) {
