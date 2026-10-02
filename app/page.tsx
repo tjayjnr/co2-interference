@@ -27,7 +27,7 @@ const DEFAULT_WELLS: Well[] = [
 const DEFAULT_POINTS: Point[] = [{ id: "p1", name: "Legacy well", x: 8000, y: -3000 }];
 
 type View = "map" | "series" | "matrix" | "limits" | "compare";
-type Mode = "total" | "interference";
+type Mode = "total" | "interference" | "bhp";
 let seq = 100;
 const uid = (p: string) => `${p}${seq++}`;
 
@@ -79,20 +79,27 @@ export default function Page() {
   // Time series at each well (wellbore) and monitoring point.
   const series = useMemo(() => {
     const out: Series[] = [];
+    const base = mode === "bhp" ? lim.initialMPa : 0; // absolute BHP = initial pressure + buildup
     wells.forEach((w, i) => {
       out.push({
         name: w.name, color: COLORS[i % COLORS.length], x: times,
-        y: times.map((t) => mode === "interference" ? totalBuildup(wells, w.x, w.y, t, aq, boundary, c, w.id) : wellboreBuildup(wells, w, t, aq, boundary, c)),
+        y: times.map((t) => base + (mode === "interference" ? totalBuildup(wells, w.x, w.y, t, aq, boundary, c, w.id) : wellboreBuildup(wells, w, t, aq, boundary, c))),
       });
     });
     points.forEach((p, i) => {
       out.push({
         name: p.name, color: "#495057", dash: i % 2 ? "2 4" : "6 4", x: times,
-        y: times.map((t) => totalBuildup(wells, p.x, p.y, t, aq, boundary, c)),
+        y: times.map((t) => base + totalBuildup(wells, p.x, p.y, t, aq, boundary, c)),
       });
     });
+    if (mode === "bhp" && wells.length > 1) {
+      // Field-wide view: all wells together as one pressure envelope and average.
+      const wellSeries = out.slice(0, wells.length);
+      out.push({ name: "Field maximum BHP", color: "#111111", x: times, y: times.map((_, k) => Math.max(...wellSeries.map((s) => s.y[k]))) });
+      out.push({ name: "Field average BHP", color: "#868e96", dash: "8 3 2 3", x: times, y: times.map((_, k) => wellSeries.reduce((a, s) => a + s.y[k], 0) / wellSeries.length) });
+    }
     return out;
-  }, [wells, points, times, aq, boundary, c, mode]);
+  }, [wells, points, times, aq, boundary, c, mode, lim.initialMPa]);
 
   const matrix = useMemo(() => interferenceMatrix(wells, tNow, aq, boundary), [wells, tNow, aq, boundary]);
 
@@ -355,7 +362,8 @@ export default function Page() {
             {view === "series" && (
               <label className="field"><span>Show</span>
                 <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
-                  <option value="total">Total buildup</option>
+                  <option value="total">Total buildup (ΔP)</option>
+                  <option value="bhp">Bottomhole pressure (absolute)</option>
                   <option value="interference">Interference only (excl. self)</option>
                 </select>
               </label>
@@ -380,14 +388,17 @@ export default function Page() {
           {view === "series" && (
             <>
               <LineChart
-                series={series} xLabel="Time (years)" yLabel={`Pressure buildup, ${mode === "total" ? "total" : "interference"} (MPa)`}
-                hline={mode === "total" && lim.maxBuildupMPa > 0 ? { y: lim.maxBuildupMPa, label: "allowable buildup" } : undefined}
+                series={series} xLabel="Time (years)"
+                yLabel={mode === "bhp" ? "Bottomhole pressure (MPa)" : `Pressure buildup, ${mode === "total" ? "total" : "interference"} (MPa)`}
+                hline={mode === "bhp" ? { y: lim.initialMPa + lim.maxBuildupMPa, label: `max allowable BHP ${(lim.initialMPa + lim.maxBuildupMPa).toFixed(1)} MPa` }
+                  : mode === "total" && lim.maxBuildupMPa > 0 ? { y: lim.maxBuildupMPa, label: "allowable buildup" } : undefined}
+                yMin={mode === "bhp" ? Math.floor(lim.initialMPa) : 0}
                 markerX={tNow}
               />
               <ul className="swatches">
                 {series.map((s) => <li key={s.name}><i style={{ background: s.color }} />{s.name}</li>)}
               </ul>
-              <p className="caption">Wells are evaluated at the wellbore radius; dashed lines are monitoring points. Interference-only removes each well&apos;s own contribution at its own location.</p>
+              <p className="caption">Wells are evaluated at the wellbore radius; dashed lines are monitoring points. Bottomhole pressure = initial pressure + own buildup + skin + interference from every other well; the field lines show the highest and the average BHP across all wells at each time. Interference-only removes each well&apos;s own contribution at its own location.</p>
             </>
           )}
 

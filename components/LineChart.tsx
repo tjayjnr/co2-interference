@@ -15,6 +15,7 @@ interface Props {
   hline?: { y: number; label: string };
   markerX?: number;
   height?: number;
+  yMin?: number;
 }
 
 const W = 760;
@@ -30,16 +31,16 @@ function ticks(lo: number, hi: number, n = 6) {
   return out;
 }
 
-export default function LineChart({ series, xLabel, yLabel, hline, markerX, height = 340 }: Props) {
+export default function LineChart({ series, xLabel, yLabel, hline, markerX, height = 340, yMin = 0 }: Props) {
   const xs = series.flatMap((s) => s.x);
   const ys = series.flatMap((s) => s.y).concat(hline ? [hline.y] : []);
   const x1 = Math.max(...xs, 1e-9);
-  const y1 = Math.max(...ys, 1e-9) * 1.06;
+  const y1 = yMin + (Math.max(...ys, yMin + 1e-9) - yMin) * 1.06;
   const sx = (v: number) => M.l + (v / x1) * (W - M.l - M.r);
-  const sy = (v: number) => height - M.b - (v / y1) * (height - M.t - M.b);
+  const sy = (v: number) => height - M.b - ((v - yMin) / (y1 - yMin)) * (height - M.t - M.b);
   return (
     <svg viewBox={`0 0 ${W} ${height}`} className="chart" role="img" aria-label={`${yLabel} versus ${xLabel}`}>
-      {ticks(0, y1).map((t) => (
+      {ticks(yMin, y1).map((t) => (
         <g key={`y${t}`}>
           <line x1={M.l} x2={W - M.r} y1={sy(t)} y2={sy(t)} className="grid" />
           <text x={M.l - 8} y={sy(t) + 4} textAnchor="end" className="tick">{t}</text>
