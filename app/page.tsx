@@ -309,7 +309,8 @@ export default function Page() {
       grid: g, wells, points, boundary: { ...boundary, type: "none" }, pf: 1, pLabel: "", pDec: 1, df: dU.f, dLabel: dU.label,
       geo: geo.on ? { lat0: geo.lat0, lon0: geo.lon0 } : undefined,
       legendTitle: "CO₂ saturation Sg", palette: "sat", tickDec: 1,
-      contourLevels: [{ level: 0.05, label: "Plume edge\n(Sg = 0.05)", cls: "thr" }],
+      wellRadii: wells.map((w) => plumeRadius(w, tNow, aq, satModel)),
+      contourLevels: [],
     },
   });
   const lineSpec = (m: Mode, ser: Series[], withMarker: boolean): ChartSpec => ({
@@ -336,7 +337,7 @@ export default function Page() {
     },
   });
   /* eslint-disable react-hooks/exhaustive-deps */
-  const specSat = useMemo(() => (gridSat ? satSpec(gridSat) : null), [gridSat, wells, points, geo, dU]);
+  const specSat = useMemo(() => (gridSat ? satSpec(gridSat) : null), [gridSat, wells, points, geo, dU, tNow, aq, satModel]);
   const specMap = useMemo(() => (grid ? mapSpec(grid) : null), [grid, wells, points, boundary, threshold, lim, pU, dU]);
   const specSeries = useMemo(() => lineSpec(mode, seriesNow, true), [seriesNow, mode, lim, pU, tNow]);
   const specStack = useMemo(stackSpec, [fieldDrivers, pU]);
@@ -827,7 +828,7 @@ export default function Page() {
                 <>
                   <ChartView key={`sat-${runId}`} spec={specSat} title={`CO₂ saturation map at t = ${tNow.toFixed(1)} yr`} filename="co2-saturation-map" />
                   <p className="caption">
-                    Saturation of the injected CO₂ (Sg) at {tNow.toFixed(1)} yr from a radial Buckley–Leverett front around each injector; overlapping plumes are added and capped at {satModel.smax.toFixed(2)}. Brine fills the rest of the pore space. The dashed contour marks the plume edge (Sg = 0.05). Gravity override, dissolution and residual trapping are not modelled. Drag the evaluation-time slider to watch the plumes grow; they stop growing at each well&apos;s shut-in.
+                    Saturation of the injected CO₂ (Sg) at {tNow.toFixed(1)} yr from a radial Buckley–Leverett front around each injector; overlapping plumes are added and capped at {satModel.smax.toFixed(2)}. Brine fills the rest of the pore space. Each well is a black dot with its name beside the plume. Gravity override, dissolution and residual trapping are not modelled. Drag the evaluation-time slider to watch the plumes grow; they stop growing at each well&apos;s shut-in.
                   </p>
                   <h3>CO₂ plume of each well at t = {tNow.toFixed(1)} yr</h3>
                   <div className="tablewrap">

@@ -49,6 +49,7 @@ export interface MapOpts {
   legendTitle?: string; // default "Pressure buildup"
   palette?: "heat" | "sat"; // colour scale
   tickDec?: number; // minimum decimals on the colour-bar labels
+  wellRadii?: number[]; // saturation map: plume radius (m) of each well, used to place the name outside the plume
 }
 
 export type ChartSpec =
@@ -317,11 +318,38 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   for (const q of o.points) {
     s += `<rect x="${f1(px(q.x) - 5)}" y="${f1(py(q.y) - 5)}" width="10" height="10" style="fill:#1c7ed6;stroke:#fff;stroke-width:1.5"/>${label(px(q.x), py(q.y), q.name)}`;
   }
-  for (const w of o.wells) {
-    // On the saturation map wells are identified by their name only (no marker on top of the plume)
-    s += o.palette === "sat"
-      ? `<text x="${f1(px(w.x))}" y="${f1(py(w.y) + 4)}" text-anchor="middle" style="${FONT};font-size:12px;font-weight:700;fill:#111;stroke:#fff;stroke-width:3;paint-order:stroke">${esc(w.name)}</text>`
-      : `<circle cx="${f1(px(w.x))}" cy="${f1(py(w.y))}" r="6" style="fill:#fff;stroke:#111;stroke-width:2"/>${label(px(w.x), py(w.y), w.name)}`;
+  if (o.palette === "sat") {
+    // Saturation map: a small black dot marks each well and its name is placed beside (outside) the plume so it stays readable.
+    const k = S / (d.x1 - d.x0);
+    const circles = o.wells.map((w, i) => ({ cx: px(w.x), cy: py(w.y), r: (o.wellRadii?.[i] ?? 0) * k }));
+    const placed: number[][] = [];
+    const hitsCircle = (box: number[], c: { cx: number; cy: number; r: number }) => {
+      const nx = Math.min(Math.max(c.cx, box[0]), box[2]), ny = Math.min(Math.max(c.cy, box[1]), box[3]);
+      return Math.hypot(nx - c.cx, ny - c.cy) < c.r + 2;
+    };
+    o.wells.forEach((w, i) => {
+      const c = circles[i];
+      const tw = w.name.length * 7.4 + 6, th = 15, gap = 7;
+      const cands = [
+        { x: c.cx + c.r + gap, y: c.cy + 4, a: "start", box: [c.cx + c.r + gap, c.cy - th / 2, c.cx + c.r + gap + tw, c.cy + th / 2] },
+        { x: c.cx - c.r - gap, y: c.cy + 4, a: "end", box: [c.cx - c.r - gap - tw, c.cy - th / 2, c.cx - c.r - gap, c.cy + th / 2] },
+        { x: c.cx, y: c.cy - c.r - gap, a: "middle", box: [c.cx - tw / 2, c.cy - c.r - gap - th, c.cx + tw / 2, c.cy - c.r - gap] },
+        { x: c.cx, y: c.cy + c.r + gap + 11, a: "middle", box: [c.cx - tw / 2, c.cy + c.r + gap, c.cx + tw / 2, c.cy + c.r + gap + th] },
+      ];
+      const free = (cd: (typeof cands)[number]) =>
+        cd.box[0] >= L && cd.box[2] <= L + S && cd.box[1] >= T && cd.box[3] <= T + S &&
+        circles.every((cc, j) => hitsCircle(cd.box, cc) === false || j === i && true) === true &&
+        placed.every((pb) => cd.box[2] < pb[0] || cd.box[0] > pb[2] || cd.box[3] < pb[1] || cd.box[1] > pb[3]);
+      const free2 = (cd: (typeof cands)[number]) => free(cd) && circles.every((cc, j) => j === i || !hitsCircle(cd.box, cc));
+      const pick = cands.find(free2) ?? cands[0];
+      placed.push(pick.box);
+      s += `<text x="${f1(pick.x)}" y="${f1(pick.y)}" text-anchor="${pick.a}" style="${FONT};font-size:12px;font-weight:700;fill:#fff;stroke:#000;stroke-width:3;paint-order:stroke">${esc(w.name)}</text>`;
+    });
+    for (const c of circles) s += `<circle cx="${f1(c.cx)}" cy="${f1(c.cy)}" r="4" style="fill:#000;stroke:#fff;stroke-width:0.75"/>`;
+  } else {
+    for (const w of o.wells) {
+      s += `<circle cx="${f1(px(w.x))}" cy="${f1(py(w.y))}" r="6" style="fill:#fff;stroke:#111;stroke-width:2"/>${label(px(w.x), py(w.y), w.name)}`;
+    }
   }
   s += "</g>";
   s += `<rect x="${L}" y="${T}" width="${S}" height="${S}" fill="none" style="stroke:${p.frame}"/>`;
