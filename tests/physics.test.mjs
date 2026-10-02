@@ -140,3 +140,32 @@ test("wells CSV: local, geographic and blank skin", () => {
   assert.throws(() => parseWellsCsv("name,lon_deg,lat_deg,rate_Mtpa,start_yr,end_yr\nA,2.1,98.2,1,0,25"));
   assert.ok(wellsToCsv(geo.wells, true).startsWith("name,lon_deg,lat_deg"));
 });
+
+import { makeSatModel, satProfile, plumeRadius, totalSaturation } from "../lib/saturation.ts";
+
+test("CO2 saturation: Buckley-Leverett profile conserves injected volume", () => {
+  const m = makeSatModel({ swr: 0.2, krgMax: 0.4, nw: 4, ng: 2, muCo2MPas: 0.06 }, 0.5);
+  assert.ok(m.sf > 0 && m.sf < m.smax && m.xiFront > 0);
+  assert.equal(satProfile(m, m.xiFront * 1.0001), 0);
+  close(satProfile(m, 1e-12), m.smax, 1e-9);
+  // integral of Sg over dimensionless area xi equals 1 (all injected volume sits in the plume)
+  let integral = 0; const n = 200000, dx = m.xiFront / n;
+  for (let i = 0; i < n; i++) integral += satProfile(m, (i + 0.5) * dx) * dx;
+  assert.ok(Math.abs(integral - 1) < 0.01, `integral ${integral}`);
+  // monotone: saturation decreases with distance
+  let prev = Infinity;
+  for (let i = 1; i <= 200; i++) { const s = satProfile(m, (i / 200) * m.xiFront); assert.ok(s <= prev + 1e-12); prev = s; }
+});
+
+test("CO2 plume radius grows with sqrt(time), stops at shut-in, and overlap is capped", () => {
+  const m = makeSatModel({ swr: 0.2, krgMax: 0.4, nw: 4, ng: 2, muCo2MPas: 0.06 }, 0.5);
+  const A = { ...W("a", 0, 0, 1, 0, 10), skin: 0 };
+  const r5 = plumeRadius(A, 5, aq, m), r10 = plumeRadius(A, 10, aq, m);
+  close(r10 / r5, Math.SQRT2, 1e-9);
+  assert.equal(plumeRadius(A, 40, aq, m), r10);
+  // volume balance: radius from a uniform-saturation plume would be sqrt(Q t / (pi phi h Sg)) -- front must lie beyond it
+  const q = 1e9 / 700 / (365.25 * 86400), uniform = Math.sqrt((q * 5 * 365.25 * 86400) / (Math.PI * 0.2 * 50 * m.smax));
+  assert.ok(r5 > uniform * 0.99 && r5 < uniform * 3);
+  const B = { ...W("b", 0, 0, 1, 0, 10), skin: 0 };
+  assert.ok(totalSaturation([A, B], 0, 0, 5, aq, m) <= m.smax + 1e-12);
+});

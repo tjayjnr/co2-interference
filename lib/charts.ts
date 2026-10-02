@@ -46,6 +46,9 @@ export interface MapOpts {
   df: number;
   dLabel: string;
   geo?: { lat0: number; lon0: number }; // when set, axes are labelled with longitude / latitude
+  legendTitle?: string; // default "Pressure buildup"
+  palette?: "heat" | "sat"; // colour scale
+  tickDec?: number; // minimum decimals on the colour-bar labels
 }
 
 export type ChartSpec =
@@ -225,21 +228,22 @@ export function stackedChart(o: StackOpts, t: Theme, title?: string, view?: View
 
 // ---- map -----------------------------------------------------------------
 
-const STOPS: [number, number, number][] = [
-  [255, 247, 220], [253, 200, 110], [240, 120, 60], [190, 50, 70], [90, 20, 100], [30, 10, 60],
-];
+type Stops = [number, number, number][];
+const STOPS_HEAT: Stops = [[255, 247, 220], [253, 200, 110], [240, 120, 60], [190, 50, 70], [90, 20, 100], [30, 10, 60]];
+const STOPS_SAT: Stops = [[255, 255, 255], [198, 219, 239], [107, 174, 214], [33, 113, 181], [8, 69, 148], [8, 29, 88]];
 
-function ramp(v: number): [number, number, number] {
-  const p = Math.min(Math.max(v, 0), 1) * (STOPS.length - 1);
-  const i = Math.min(Math.floor(p), STOPS.length - 2);
+function ramp(v: number, stops: Stops): [number, number, number] {
+  const p = Math.min(Math.max(v, 0), 1) * (stops.length - 1);
+  const i = Math.min(Math.floor(p), stops.length - 2);
   const f = p - i;
-  return [0, 1, 2].map((k) => STOPS[i][k] + f * (STOPS[i + 1][k] - STOPS[i][k])) as [number, number, number];
+  return [0, 1, 2].map((k) => stops[i][k] + f * (stops[i + 1][k] - stops[i][k])) as [number, number, number];
 }
 
 const heatCache = new WeakMap<GridResult, string>();
+const satCache = new WeakMap<GridResult, string>();
 
-function heatmapDataUrl(g: GridResult): string {
-  const hit = heatCache.get(g);
+function heatmapDataUrl(g: GridResult, stops: Stops, cache: WeakMap<GridResult, string>): string {
+  const hit = cache.get(g);
   if (hit) return hit;
   const cv = document.createElement("canvas");
   cv.width = g.nx;
@@ -251,13 +255,13 @@ function heatmapDataUrl(g: GridResult): string {
       const v = g.values[j * g.nx + i];
       const o = ((g.ny - 1 - j) * g.nx + i) * 4;
       if (Number.isNaN(v)) { img.data.set([200, 200, 200, 90], o); continue; }
-      const [r, gg, b] = ramp(g.max > 0 ? v / g.max : 0);
+      const [r, gg, b] = ramp(g.max > 0 ? v / g.max : 0, stops);
       img.data.set([r, gg, b, 255], o);
     }
   }
   ctx.putImageData(img, 0, 0);
   const url = cv.toDataURL("image/png");
-  heatCache.set(g, url);
+  cache.set(g, url);
   return url;
 }
 
@@ -279,10 +283,12 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   const gy = (j: number) => py(g.y0 + ((j + 0.5) / g.ny) * (g.y1 - g.y0));
   const fmtD = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
   const plot = { l: L, t: T, w: S, h: S };
+  const stops = o.palette === "sat" ? STOPS_SAT : STOPS_HEAT;
+  const png = heatmapDataUrl(g, stops, o.palette === "sat" ? satCache : heatCache);
   const id = `clip${++uid}`;
   let s = tb.svg + clipDef(id, plot) + `<g clip-path="url(#${id})">`;
   const ix = px(g.x0), iy = py(g.y1);
-  s += `<image x="${f1(ix)}" y="${f1(iy)}" width="${f1(px(g.x1) - ix)}" height="${f1(py(g.y0) - iy)}" preserveAspectRatio="none" href="${heatmapDataUrl(g)}" xlink:href="${heatmapDataUrl(g)}"/>`;
+  s += `<image x="${f1(ix)}" y="${f1(iy)}" width="${f1(px(g.x1) - ix)}" height="${f1(py(g.y0) - iy)}" preserveAspectRatio="none" href="${png}" xlink:href="${png}"/>`;
   for (const c of o.contourLevels) {
     const segs = isoSegments(g.values, g.nx, g.ny, c.level);
     const lines = segs.map((q) => `<line x1="${f1(gx(q[0]))}" y1="${f1(gy(q[1]))}" x2="${f1(gx(q[2]))}" y2="${f1(gy(q[3]))}"/>`).join("");
@@ -320,14 +326,22 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   // legend panel
   const lx = L + S + 28;
   let ly = T + 4;
-  s += `<defs><linearGradient id="cb${id}" x1="0" y1="1" x2="0" y2="0">${STOPS.map((c, i) => `<stop offset="${(i / (STOPS.length - 1)) * 100}%" stop-color="rgb(${c.map(Math.round).join(",")})"/>`).join("")}</linearGradient></defs>`;
-  s += `<text x="${lx}" y="${ly + 10}" style="${FONT};font-size:12px;font-weight:700;fill:${p.text}">Pressure buildup</text>`;
+  s += `<defs><linearGradient id="cb${id}" x1="0" y1="1" x2="0" y2="0">${stops.map((c, i) => `<stop offset="${(i / (stops.length - 1)) * 100}%" stop-color="rgb(${c.map(Math.round).join(",")})"/>`).join("")}</linearGradient></defs>`;
+  s += `<text x="${lx}" y="${ly + 10}" style="${FONT};font-size:12px;font-weight:700;fill:${p.text}">${esc(o.legendTitle ?? "Pressure buildup")}${o.pLabel ? ` (${esc(o.pLabel)})` : ""}</text>`;
   ly += 18;
-  const cbH = 150;
+  const cbH = 240;
+  const top = g.max / o.pf;
   s += `<rect x="${lx}" y="${ly}" width="16" height="${cbH}" fill="url(#cb${id})" style="stroke:${p.frame}"/>`;
-  s += `<text x="${lx + 24}" y="${ly + 10}" style="${FONT};font-size:11px;fill:${p.text}">${(g.max / o.pf).toFixed(o.pDec)} ${esc(o.pLabel)}</text>`;
-  s += `<text x="${lx + 24}" y="${ly + cbH / 2 + 4}" style="${FONT};font-size:11px;fill:${p.muted}">${(g.max / o.pf / 2).toFixed(o.pDec)}</text>`;
-  s += `<text x="${lx + 24}" y="${ly + cbH}" style="${FONT};font-size:11px;fill:${p.text}">0</text>`;
+  const cbTicks = ticks(0, top, 10).filter((v) => v <= top * 1.0001);
+  const stepV = cbTicks.length > 1 ? cbTicks[1] - cbTicks[0] : 1;
+  const tickDec = Math.max(o.tickDec ?? o.pDec, Math.ceil(-Math.log10(stepV) - 1e-9), 0);
+  for (const v of cbTicks) {
+    const yy = ly + cbH * (1 - v / top);
+    s += `<line x1="${lx + 16}" x2="${lx + 21}" y1="${f1(yy)}" y2="${f1(yy)}" style="stroke:${p.frame}"/>`;
+    s += `<text x="${lx + 25}" y="${f1(yy + 4)}" style="${FONT};font-size:11px;fill:${p.text}">${v.toFixed(tickDec)}</text>`;
+  }
+  const lastY = ly + cbH * (1 - cbTicks[cbTicks.length - 1] / top);
+  if (lastY - ly > 14) s += `<text x="${lx + 25}" y="${ly + 4}" style="${FONT};font-size:11px;font-weight:700;fill:${p.text}">max ${top.toFixed(Math.max(tickDec, 2))}</text>`;
   ly += cbH + 28;
   const row = (icon: string, text: string) => {
     const lines = text.split("\n");

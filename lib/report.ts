@@ -53,7 +53,10 @@ export interface ReportData {
   driverHead: string[];
   driverRows: string[][];
   driverSentence: string;
-  figures: { map?: FigureData; bhp?: FigureData; drivers?: FigureData; compare?: FigureData };
+  satHead: string[];
+  satRows: string[][];
+  satSentence: string;
+  figures: { sat?: FigureData; map?: FigureData; bhp?: FigureData; drivers?: FigureData; compare?: FigureData };
   warnings: string[];
 }
 
@@ -101,6 +104,13 @@ export function buildBlocks(d: ReportData): Block[] {
   b.push({ t: "p", text: "The allowable buildup is the safety-factored fracture pressure less the initial pressure, using hydrostatic and fracture gradients applied at the injection depth D:" });
   b.push(E("Δp_max = f · G_f · D − G_h · D"));
 
+  b.push({ t: "h2", text: "2.6 CO₂ saturation" });
+  b.push({ t: "p", text: "The CO₂ plume around each injector is described by the radial Buckley–Leverett (Welge) solution for CO₂ displacing brine at the volumetric injection rate q. A given saturation S_g sits at radius r at time t according to" });
+  b.push(E("r²(S_g, t) = q t / (π φ h) · df_g/dS_g"));
+  b.push({ t: "p", text: "where the fractional flow of CO₂ follows from Corey relative permeabilities:" });
+  b.push(E("f_g = 1 / (1 + k_rw μ_g / (k_rg μ_w)),   k_rw = (1 − S*)^n_w,   k_rg = k_rg,max · S*^n_g,   S* = S_g / (1 − S_wr)"));
+  b.push({ t: "p", text: "The saturation jumps at the plume front to the Welge tangent value, where df_g/dS_g equals f_g/S_g. Overlapping plumes of neighbouring wells are added and capped at 1 − S_wr, and each plume stops growing at the end of injection of its well. Gravity override, dissolution, capillary effects and residual trapping are not included." });
+
   b.push({ t: "h1", text: "3. Input Data" });
   b.push({ t: "p", text: `Aquifer, fluid and pressure-limit parameters are listed in Table ${tab + 1}, and the well and monitoring-point data in Tables ${tab + 2} and ${tab + 3}. ${d.coordDesc} ${d.boundaryDesc}` });
   b.push(T("Aquifer, fluid and pressure-limit input parameters.", d.paramHead, d.paramRows));
@@ -108,11 +118,15 @@ export function buildBlocks(d: ReportData): Block[] {
   if (d.pointRows.length) b.push(T("Monitoring points.", d.pointHead, d.pointRows));
 
   b.push({ t: "h1", text: "4. Results" });
-  b.push({ t: "h2", text: "4.1 Pressure buildup and limit check" });
+  b.push({ t: "h2", text: "4.1 CO₂ saturation and plume extent" });
+  b.push({ t: "p", text: d.satSentence });
+  b.push(T(`CO₂ plume of each well at t = ${d.matrixTime}.`, d.satHead, d.satRows));
+  b.push(...F(d.figures.sat, `CO₂ saturation map at t = ${d.matrixTime}, showing the plume of each injector.`));
+  b.push({ t: "h2", text: "4.2 Pressure buildup and limit check" });
   b.push({ t: "p", text: `The pressure limits at the injection depth are an initial pressure of ${d.limits.p0}, a fracture pressure of ${d.limits.pfrac} and, with a safety factor of ${d.limits.safety}, an allowable buildup of ${d.limits.maxBuildup} (maximum allowable bottomhole pressure ${d.limits.maxBhp}). Table ${tab + 1} gives the peak wellbore buildup of each well, split into the well's own response, skin and interference from the other wells. Pass/fail is judged against the allowable buildup only; the interference threshold of ${d.arrivalThreshold} is not a pass/fail limit and is used solely to define the detection contour, the arrival times and the monitoring-point check.` });
   b.push(T(`Peak wellbore pressure buildup per well (${d.pLabel}) and comparison with the allowable buildup.`, d.peakHead, d.peakRows));
   b.push(...F(d.figures.bhp, `Bottomhole pressure of each well and monitoring point, with the field-maximum and field-average curves and the maximum allowable bottomhole pressure.`));
-  b.push({ t: "h2", text: "4.2 Well-to-well interference" });
+  b.push({ t: "h2", text: "4.3 Well-to-well interference" });
   b.push({ t: "p", text: `Table ${tab + 1} gives the pressure that each injector (row) contributes at every well (column) at t = ${d.matrixTime}; the diagonal is each well's own buildup including skin. Table ${tab + 2} gives the time at which a single source well raises the pressure at each target by ${d.arrivalThreshold}.` });
   b.push(T(`Interference matrix at t = ${d.matrixTime} (${d.pLabel}).`, d.matrixHead, d.matrixRows));
   b.push(T(`Arrival time (years) of a pressure rise of ${d.arrivalThreshold} from each source well at each target.`, d.arrivalHead, d.arrivalRows, "A dash indicates the threshold is not reached within the injection period and analysis horizon."));
@@ -121,11 +135,11 @@ export function buildBlocks(d: ReportData): Block[] {
     b.push(T(`Monitoring points compared with the interference threshold of ${d.arrivalThreshold}.`, d.pointCheckHead, d.pointCheckRows));
   }
   b.push(...F(d.figures.map, `Pressure buildup map at t = ${d.matrixTime}, with the interference-threshold and allowable-buildup contours.`));
-  b.push({ t: "h2", text: "4.3 Sensitivity to the boundary condition" });
+  b.push({ t: "h2", text: "4.4 Sensitivity to the boundary condition" });
   b.push({ t: "p", text: d.compareSentence });
   b.push(T(`Peak wellbore buildup (${d.pLabel}), skin included, for the three boundary conditions.`, d.compareHead, d.compareRows));
   b.push(...F(d.figures.compare, "Wellbore buildup of the controlling well for the three boundary conditions."));
-  b.push({ t: "h2", text: "4.4 Drivers of the field-maximum pressure" });
+  b.push({ t: "h2", text: "4.5 Drivers of the field-maximum pressure" });
   b.push({ t: "p", text: d.driverSentence });
   b.push(T(`Contributions to the field-maximum buildup (${d.pLabel}) at the time of the peak.`, d.driverHead, d.driverRows));
   b.push(...F(d.figures.drivers, "Field-maximum buildup split by source well and skin over time."));

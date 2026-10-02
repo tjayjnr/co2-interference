@@ -12,6 +12,7 @@ import {
   type Aquifer, type Boundary, type Point, type Well,
 } from "@/lib/physics";
 import { buildBlocks, renderDocx, renderPdf, type FigureData, type ReportData } from "@/lib/report";
+import { effTime, makeSatModel, plumeRadius, satGrid, type SatParams } from "@/lib/saturation";
 import { CAT_LABELS, PRESETS, UNITS, findUnit, type Cat } from "@/lib/units";
 
 const COLORS = ["#2a6fdb", "#d9480f", "#2f9e44", "#9c36b5", "#c2255c", "#1098ad", "#e8890c", "#5c677d"];
@@ -30,7 +31,7 @@ const DEFAULT_WELLS: WellIn[] = [
 ];
 const DEFAULT_POINTS: PointIn[] = [{ id: "p1", name: "Legacy well", x: 8000, y: -3000 }];
 
-type View = "map" | "series" | "matrix" | "limits" | "compare";
+type View = "sat" | "map" | "series" | "matrix" | "limits" | "compare";
 type Mode = "total" | "interference" | "bhp";
 
 /** Everything the analysis depends on. Results are computed from the snapshot taken when RUN is pressed. */
@@ -41,6 +42,7 @@ interface Inputs {
   points: (Point & { lon?: number; lat?: number })[];
   horizon: number;
   threshold: number;
+  sat: SatParams;
   skin: { ksMd: number; rsM: number; s: number };
   geo: { on: boolean; lat0: number; lon0: number };
   project: string;
@@ -70,6 +72,7 @@ export default function Page() {
   const [dmg, setDmg] = useState({ ksMd: 50, rsM: 1.5 });
   const [pointsL, setPoints] = useState(DEFAULT_POINTS);
   const [horizonL, setHorizon] = useState(40);
+  const [satIn, setSatIn] = useState<SatParams>({ swr: 0.2, krgMax: 0.4, nw: 4, ng: 2, muCo2MPas: 0.06 });
   const [thresholdL, setThreshold] = useState(0.1);
   const [project, setProject] = useState("");
   const [author, setAuthor] = useState("");
@@ -77,7 +80,7 @@ export default function Page() {
   // ---- display-only state (acts on results that were already computed) ----
   const [tEval, setTEval] = useState(25);
   const [padM, setPadM] = useState(8000);
-  const [view, setView] = useState<View>("map");
+  const [view, setView] = useState<View>("sat");
   const [mode, setMode] = useState<Mode>("total");
   const [cmpWell, setCmpWell] = useState(0);
   const [csvError, setCsvError] = useState("");
@@ -111,9 +114,9 @@ export default function Page() {
   const geoBad = isGeo && [...rawWells, ...pointsL].some((o) => !validLatLon(o.lat ?? 0, o.lon ?? 0));
 
   const inputsL: Inputs = useMemo(() => ({
-    aq: aqL, boundary: boundaryEff, wells: wellsL, points: pointsP, horizon: horizonL, threshold: thresholdL,
+    aq: aqL, boundary: boundaryEff, wells: wellsL, points: pointsP, horizon: horizonL, threshold: thresholdL, sat: satIn,
     skin: { ksMd: dmg.ksMd, rsM: dmg.rsM, s: calcSkin }, geo: { on: isGeo, lat0: origin?.lat ?? 0, lon0: origin?.lon ?? 0 }, project, author,
-  }), [aqL, boundaryEff, wellsL, pointsP, horizonL, thresholdL, dmg, calcSkin, isGeo, origin, project, author]);
+  }), [aqL, boundaryEff, wellsL, pointsP, horizonL, thresholdL, satIn, dmg, calcSkin, isGeo, origin, project, author]);
 
   // ---- RUN ----
   const [applied, setApplied] = useState<Inputs | null>(null);
@@ -121,7 +124,7 @@ export default function Page() {
   const runNow = () => { setApplied(inputsL); setRunId((n) => n + 1); };
   const stale = useMemo(() => applied !== null && JSON.stringify(applied) !== JSON.stringify(inputsL), [applied, inputsL]);
   const cur = applied ?? inputsL; // before the first RUN nothing is displayed; this only keeps the hooks well-defined
-  const { aq, boundary, wells, points, horizon, threshold, geo } = cur;
+  const { aq, boundary, wells, points, horizon, threshold, geo, sat } = cur;
   const lim = useMemo(() => limits(aq), [aq]);
   const c = useMemo(() => consts(aq), [aq]);
   const tNow = Math.min(tEval, horizon);
@@ -134,16 +137,23 @@ export default function Page() {
   const pDec = Math.max(0, 2 + (pU.dec ?? 0));
   const D = (v: number) => { const x = v / dU.f; return Math.abs(x) >= 100 ? x.toFixed(0) : x.toFixed(1); };
   const toP = (a: number[]) => a.map((v) => v / pU.f);
+  const setUnit = (cat: Cat) => (v: string) => setUnits((u) => ({ ...u, [cat]: v }));
   const uf = (cat: Cat, o: { label?: string; ariaLabel?: string; value: number; onChange: (v: number) => void; min?: number; step?: number }) => {
     const un = findUnit(cat, units[cat]);
     return (
       <NumField
-        label={o.label} ariaLabel={o.ariaLabel} unit={un.label}
+        label={o.label} ariaLabel={o.ariaLabel}
+        unitSelect={o.label ? { value: units[cat], options: UNITS[cat].map((u) => u.label), onChange: setUnit(cat) } : undefined}
         value={+(o.value / un.f).toPrecision(6)} onChange={(v) => o.onChange(v * un.f)}
         min={o.min !== undefined ? o.min / un.f : undefined} step={o.step !== undefined ? o.step / un.f : undefined}
       />
     );
   };
+  const unitHead = (cat: Cat) => (
+    <select className="unitsel mini" aria-label={`${CAT_LABELS[cat]} unit`} value={units[cat]} onChange={(e) => setUnit(cat)(e.target.value)}>
+      {UNITS[cat].map((u) => <option key={u.label} value={u.label}>{u.label}</option>)}
+    </select>
+  );
   const presetName = (["SI", "Field"] as const).find((k) => (Object.keys(PRESETS[k]) as Cat[]).every((cc) => PRESETS[k][cc] === units[cc])) ?? "Custom";
 
   const warnings = useMemo(() => {
@@ -269,6 +279,18 @@ export default function Page() {
     [applied, wells, tNow, aq, boundary, extent],
   );
 
+  // CO2 saturation (Buckley-Leverett plume around each injector)
+  const satModel = useMemo(() => makeSatModel(sat, aq.viscosityMPas), [sat, aq.viscosityMPas]);
+  const gridSat = useMemo(
+    () => (applied && wells.length ? satGrid(wells, tNow, aq, satModel, extent) : null),
+    [applied, wells, tNow, aq, satModel, extent],
+  );
+  const plumes = useMemo(() => wells.map((w) => ({
+    name: w.name,
+    massMt: w.rateMtpa * effTime(w, tNow),
+    radius: plumeRadius(w, tNow, aq, satModel),
+  })), [wells, tNow, aq, satModel]);
+
   // ---- chart specs (display units applied) ----
   const mapSpec = (g: NonNullable<typeof grid>): ChartSpec => ({
     kind: "map",
@@ -279,6 +301,15 @@ export default function Page() {
         { level: threshold, label: `Interference threshold\n${P(threshold, 3)} ${pU.label} (detection only)`, cls: "thr" },
         ...(lim.maxBuildupMPa > 0 ? [{ level: lim.maxBuildupMPa, label: `Max allowable buildup\n${P(lim.maxBuildupMPa)} ${pU.label} (pass/fail limit)`, cls: "lim" as const }] : []),
       ],
+    },
+  });
+  const satSpec = (g: NonNullable<typeof gridSat>): ChartSpec => ({
+    kind: "map",
+    opts: {
+      grid: g, wells, points, boundary: { ...boundary, type: "none" }, pf: 1, pLabel: "", pDec: 1, df: dU.f, dLabel: dU.label,
+      geo: geo.on ? { lat0: geo.lat0, lon0: geo.lon0 } : undefined,
+      legendTitle: "CO₂ saturation Sg", palette: "sat", tickDec: 1,
+      contourLevels: [{ level: 0.05, label: "Plume edge\n(Sg = 0.05)", cls: "thr" }],
     },
   });
   const lineSpec = (m: Mode, ser: Series[], withMarker: boolean): ChartSpec => ({
@@ -305,6 +336,7 @@ export default function Page() {
     },
   });
   /* eslint-disable react-hooks/exhaustive-deps */
+  const specSat = useMemo(() => (gridSat ? satSpec(gridSat) : null), [gridSat, wells, points, geo, dU]);
   const specMap = useMemo(() => (grid ? mapSpec(grid) : null), [grid, wells, points, boundary, threshold, lim, pU, dU]);
   const specSeries = useMemo(() => lineSpec(mode, seriesNow, true), [seriesNow, mode, lim, pU, tNow]);
   const specStack = useMemo(stackSpec, [fieldDrivers, pU]);
@@ -379,6 +411,7 @@ export default function Page() {
         return { png: await svgToPngDataUrl(r.svg, r.width, r.height, 2), w: r.width, h: r.height };
       };
       const figures = {
+        sat: await fig(satSpec(satGrid(wells, tNow, aq, satModel, extent))),
         map: await fig(mapSpec(buildupGrid(wells, tNow, aq, boundary, extent))),
         bhp: await fig(lineSpec("bhp", buildSeries("bhp"), false)),
         compare: await fig(compareSpec(worst)),
@@ -416,6 +449,11 @@ export default function Page() {
           ["Interference threshold", P(threshold, 3), pU.label],
           ["Hydraulic diffusivity, η", num(c.eta), "m²/s"],
           ["Analysis horizon", String(horizon), "yr"],
+          ["Irreducible brine saturation, S_wr", num(sat.swr), "–"],
+          ["Maximum CO₂ relative permeability, k_rg,max", num(sat.krgMax), "–"],
+          ["Corey exponent, brine, n_w", num(sat.nw), "–"],
+          ["Corey exponent, CO₂, n_g", num(sat.ng), "–"],
+          ["CO₂ viscosity, μ_g", uv("viscosity", sat.muCo2MPas), un("viscosity")],
           ...(wells.some((w) => w.skinSrc === "calc")
             ? [["Damaged-zone permeability, k_s", uv("perm", applied.skin.ksMd), un("perm")], ["Damaged-zone radius, r_s", uv("length", applied.skin.rsM), un("length")]]
             : []),
@@ -470,6 +508,13 @@ export default function Page() {
         arrivalRows: arrivals.map((row, i) => [names[i], ...row.map((v) => (v === null ? "–" : v.toFixed(2)))]),
         pointCheckHead: ["Point", `Peak buildup (${pU.label})`, "Time (yr)", "Threshold reached?", "First reached (yr)"],
         pointCheckRows: pointChecks.map((pc) => [pc.name, P(pc.peak, 3), pc.tPeak.toFixed(1), pc.first !== null ? "Yes" : "No", pc.first !== null ? pc.first.toFixed(2) : "–"]),
+        satHead: ["Well", "CO₂ injected (Mt)", `Plume radius (${dU.label})`, "S_g behind front", "Max S_g"],
+        satRows: plumes.map((q) => [q.name, q.massMt.toFixed(2), D(q.radius), satModel.sf.toFixed(2), satModel.smax.toFixed(2)]),
+        satSentence: (() => {
+          const rs = plumes.map((q) => q.radius);
+          const big = plumes.reduce((m, q) => (q.radius > m.radius ? q : m), plumes[0]);
+          return `At t = ${tNow.toFixed(1)} yr the CO₂ plume fronts lie between ${D(Math.min(...rs))} and ${D(Math.max(...rs))} ${dU.label} from the injectors (largest: ${big.name}). Behind the front the CO₂ saturation is ${satModel.sf.toFixed(2)} and it rises to the maximum of ${satModel.smax.toFixed(2)} at the wells. Saturation was calculated per well with the radial Buckley–Leverett solution and added where plumes overlap (capped at the maximum); gravity override, dissolution, capillarity and residual trapping are not included, so the plume extent is an estimate of the piston-like front.`;
+        })(),
         compareHead: ["Well", ...cases.map((k) => k.label)],
         compareRows: [
           ...wells.map((w, i) => [w.name, ...cases.map((k) => P(k.perWell[i].peak))]),
@@ -529,28 +574,14 @@ export default function Page() {
 
           <section>
             <div className="row-head">
-              <h2>Units</h2>
-              <select className="preset" aria-label="Unit preset" value={presetName}
+              <h2>Input</h2>
+              <select className="preset" aria-label="Unit preset" title="Unit preset" value={presetName}
                 onChange={(e) => { if (e.target.value !== "Custom") setUnits(PRESETS[e.target.value as "SI" | "Field"]); }}>
-                <option value="SI">SI (metric)</option>
-                <option value="Field">Field (US oilfield)</option>
-                {presetName === "Custom" && <option value="Custom">Custom</option>}
+                <option value="SI">SI units</option>
+                <option value="Field">Field units</option>
+                {presetName === "Custom" && <option value="Custom">Custom units</option>}
               </select>
             </div>
-            <div className="grid2">
-              {(Object.keys(UNITS) as Cat[]).map((cat) => (
-                <label className="field" key={cat}><span>{CAT_LABELS[cat]}</span>
-                  <select value={units[cat]} onChange={(e) => setUnits((u) => ({ ...u, [cat]: e.target.value }))}>
-                    {UNITS[cat].map((u) => <option key={u.label} value={u.label}>{u.label}</option>)}
-                  </select>
-                </label>
-              ))}
-            </div>
-            <p className="hint">Values convert automatically when you change a unit. Time is always in years. CSV import/export always uses metres and Mt/yr.</p>
-          </section>
-
-          <section>
-            <h2>Input</h2>
             <div className="grid2">
               {uf("perm", { label: "Permeability", value: aqL.permMd, onChange: setA("permMd"), min: 0 })}
               {uf("length", { label: "Thickness", value: aqL.thicknessM, onChange: setA("thicknessM"), min: 0 })}
@@ -576,6 +607,18 @@ export default function Page() {
             <p className="hint">
               P₀ {(limL.initialMPa / pU.f).toFixed(fx)} {pU.label} · P<sub>frac</sub> {(limL.fractureMPa / pU.f).toFixed(fx)} {pU.label} · max buildup <b>{(limL.maxBuildupMPa / pU.f).toFixed(pDec)} {pU.label}</b>
             </p>
+          </section>
+
+          <section>
+            <h2>CO₂ saturation</h2>
+            <div className="grid2">
+              <NumField label="Residual brine Swr" unit="frac" value={satIn.swr} onChange={(v) => setSatIn((q) => ({ ...q, swr: Math.min(Math.max(v, 0), 0.95) }))} step={0.05} min={0} />
+              <NumField label="Max CO₂ rel. perm. krg" value={satIn.krgMax} onChange={(v) => setSatIn((q) => ({ ...q, krgMax: Math.min(Math.max(v, 0.01), 1) }))} step={0.05} min={0} />
+              <NumField label="Corey exponent, brine" value={satIn.nw} onChange={(v) => setSatIn((q) => ({ ...q, nw: Math.max(v, 1) }))} step={0.5} min={1} />
+              <NumField label="Corey exponent, CO₂" value={satIn.ng} onChange={(v) => setSatIn((q) => ({ ...q, ng: Math.max(v, 1) }))} step={0.5} min={1} />
+              {uf("viscosity", { label: "CO₂ viscosity", value: satIn.muCo2MPas, onChange: (v) => setSatIn((q) => ({ ...q, muCo2MPas: Math.max(v, 1e-4) })), min: 0 })}
+            </div>
+            <p className="hint">Used for the CO₂ saturation map (radial Buckley–Leverett front around each injector, using the porosity, thickness and brine viscosity above).</p>
           </section>
 
           <section>
@@ -641,7 +684,7 @@ export default function Page() {
             {geoBad && <p className="err">Latitude must be within ±90° and longitude within ±180°.</p>}
             <div className="tablewrap">
               <table className="edit">
-                <thead><tr><th>Name</th>{isGeo ? <><th>Lon (°)</th><th>Lat (°)</th></> : <><th>x ({dU.label})</th><th>y ({dU.label})</th></>}<th>{rU.label}</th><th>Start</th><th>End</th><th>Skin</th><th /></tr></thead>
+                <thead><tr><th>Name</th>{isGeo ? <><th>Lon (°)</th><th>Lat (°)</th></> : <><th>x {unitHead("distance")}</th><th>y {unitHead("distance")}</th></>}<th>Rate {unitHead("rate")}</th><th>Start</th><th>End</th><th>Skin</th><th /></tr></thead>
                 <tbody>
                   {rawWells.map((w) => (
                     <tr key={w.id}>
@@ -675,7 +718,7 @@ export default function Page() {
             <h2>Monitoring points</h2>
             <div className="tablewrap">
               <table className="edit">
-                <thead><tr><th>Name</th>{isGeo ? <><th>Lon (°)</th><th>Lat (°)</th></> : <><th>x ({dU.label})</th><th>y ({dU.label})</th></>}<th /></tr></thead>
+                <thead><tr><th>Name</th>{isGeo ? <><th>Lon (°)</th><th>Lat (°)</th></> : <><th>x {unitHead("distance")}</th><th>y {unitHead("distance")}</th></>}<th /></tr></thead>
                 <tbody>
                   {pointsL.map((p) => (
                     <tr key={p.id}>
@@ -745,7 +788,7 @@ export default function Page() {
               </div>
 
               <nav className="tabs" role="tablist">
-                {([["map", "Pressure map"], ["series", "Time series"], ["matrix", "Interference matrix"], ["limits", "Limit check"], ["compare", "Compare boundaries"]] as [View, string][]).map(([v, l]) => (
+                {([["sat", "CO₂ saturation"], ["map", "Pressure map"], ["series", "Time series"], ["matrix", "Interference matrix"], ["limits", "Limit check"], ["compare", "Compare boundaries"]] as [View, string][]).map(([v, l]) => (
                   <button key={v} role="tab" aria-selected={view === v} className={view === v ? "on" : ""} onClick={() => setView(v)}>{l}</button>
                 ))}
               </nav>
@@ -754,7 +797,12 @@ export default function Page() {
                 <label className="field slider"><span>Evaluation time <em>{tNow.toFixed(1)} yr</em></span>
                   <input type="range" min={0.1} max={horizon} step={0.1} value={tNow} onChange={(e) => setTEval(+e.target.value)} />
                 </label>
-                {view === "map" && uf("distance", { label: "Map padding", value: padM, onChange: (v) => setPadM(Math.max(0, v)), min: 0 })}
+                <label className="field"><span>Pressure unit</span>
+                  <select value={units.pressure} onChange={(e) => setUnit("pressure")(e.target.value)}>
+                    {UNITS.pressure.map((u) => <option key={u.label} value={u.label}>{u.label}</option>)}
+                  </select>
+                </label>
+                {(view === "map" || view === "sat") && uf("distance", { label: "Map padding", value: padM, onChange: (v) => setPadM(Math.max(0, v)), min: 0 })}
                 {view === "series" && (
                   <label className="field"><span>Show</span>
                     <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
@@ -765,6 +813,28 @@ export default function Page() {
                   </label>
                 )}
               </div>
+
+              {view === "sat" && specSat && (
+                <>
+                  <ChartView key={`sat-${runId}`} spec={specSat} title={`CO₂ saturation map at t = ${tNow.toFixed(1)} yr`} filename="co2-saturation-map" />
+                  <p className="caption">
+                    Saturation of the injected CO₂ (Sg) at {tNow.toFixed(1)} yr from a radial Buckley–Leverett front around each injector; overlapping plumes are added and capped at {satModel.smax.toFixed(2)}. Brine fills the rest of the pore space. The dashed contour marks the plume edge (Sg = 0.05). Gravity override, dissolution and residual trapping are not modelled. Drag the evaluation-time slider to watch the plumes grow; they stop growing at each well&apos;s shut-in.
+                  </p>
+                  <h3>CO₂ plume of each well at t = {tNow.toFixed(1)} yr</h3>
+                  <div className="tablewrap">
+                    <table className="matrix">
+                      <thead><tr><th>Well</th><th>CO₂ injected (Mt)</th><th>Plume radius ({dU.label})</th><th>Sg behind front</th><th>Max Sg (at well)</th></tr></thead>
+                      <tbody>
+                        {plumes.map((q) => (
+                          <tr key={q.name}>
+                            <th>{q.name}</th><td>{q.massMt.toFixed(2)}</td><td>{D(q.radius)}</td><td>{satModel.sf.toFixed(2)}</td><td>{satModel.smax.toFixed(2)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
 
               {view === "map" && specMap && (
                 <>
