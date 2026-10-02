@@ -35,6 +35,7 @@ export interface Well {
   rateMtpa: number; // injection rate, Mt CO2 / year
   startYr: number;
   endYr: number; // injection stops (shut-in afterwards)
+  skin: number; // well skin factor (dimensionless), adds near-well pressure drop while injecting
 }
 
 export interface Point {
@@ -147,6 +148,27 @@ export function wellContribution(
   return (q * c.mobilityTerm * dp) / 1e6;
 }
 
+/**
+ * Extra buildup (MPa) across the skin zone of a well: dp_skin = q mu s / (2 pi k h).
+ * Acts only at the injector itself and only while it is injecting (steady, proportional to rate).
+ */
+export function skinBuildup(w: Well, tYr: number, a: Aquifer, c: SolverConsts = consts(a)): number {
+  if (tYr <= w.startYr || tYr > w.endYr) return 0;
+  return (volumeRate(w, a) * c.mobilityTerm * 2 * w.skin) / 1e6;
+}
+
+/** Buildup (MPa) at a well's own wellbore: all wells' Theis contributions plus its own skin. */
+export function wellboreBuildup(
+  wells: Well[],
+  w: Well,
+  tYr: number,
+  a: Aquifer,
+  b: Boundary,
+  c: SolverConsts = consts(a),
+): number {
+  return totalBuildup(wells, w.x, w.y, tYr, a, b, c) + skinBuildup(w, tYr, a, c);
+}
+
 /** Total buildup (MPa) at a location from all wells, optionally skipping one. */
 export function totalBuildup(
   wells: Well[],
@@ -166,10 +188,12 @@ export function totalBuildup(
   return s;
 }
 
-/** Interference matrix: M[i][j] = buildup (MPa) at well j caused by well i. Diagonal is self-buildup. */
+/** Interference matrix: M[i][j] = buildup (MPa) at well j caused by well i. Diagonal is self-buildup incl. skin. */
 export function interferenceMatrix(wells: Well[], tYr: number, a: Aquifer, b: Boundary): number[][] {
   const c = consts(a);
-  return wells.map((wi) => wells.map((wj) => wellContribution(wi, wj.x, wj.y, tYr, a, b, c)));
+  return wells.map((wi, i) =>
+    wells.map((wj, j) => wellContribution(wi, wj.x, wj.y, tYr, a, b, c) + (i === j ? skinBuildup(wi, tYr, a, c) : 0)),
+  );
 }
 
 /** First time (years) a well's influence at a target location exceeds `threshold` MPa, or null. */

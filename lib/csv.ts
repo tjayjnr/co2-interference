@@ -1,9 +1,9 @@
 import type { Well } from "./physics";
 
-const HEADER = "name,x_m,y_m,rate_Mtpa,start_yr,end_yr";
+const HEADER = "name,x_m,y_m,rate_Mtpa,start_yr,end_yr,skin";
 
 export function wellsToCsv(wells: Well[]): string {
-  return [HEADER, ...wells.map((w) => [w.name, w.x, w.y, w.rateMtpa, w.startYr, w.endYr].join(","))].join("\n");
+  return [HEADER, ...wells.map((w) => [w.name, w.x, w.y, w.rateMtpa, w.startYr, w.endYr, w.skin].join(","))].join("\n");
 }
 
 export function toCsv(rows: (string | number)[][]): string {
@@ -19,7 +19,7 @@ export function toCsv(rows: (string | number)[][]): string {
     .join("\n");
 }
 
-/** Parse a wells CSV: name,x_m,y_m,rate_Mtpa,start_yr,end_yr (header optional; , ; or tab delimited). */
+/** Parse a wells CSV: name,x_m,y_m,rate_Mtpa,start_yr,end_yr[,skin] (header optional; , ; or tab delimited). */
 export function parseWellsCsv(text: string): Well[] {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (!lines.length) throw new Error("File is empty");
@@ -27,8 +27,8 @@ export function parseWellsCsv(text: string): Well[] {
   const rows = lines.map((l) => l.split(delim).map((c) => c.trim().replace(/^"|"$/g, "")));
   if (Number.isNaN(Number(rows[0][1]))) rows.shift(); // header row
   return rows.map((r, i) => {
-    if (r.length < 6) throw new Error(`Row ${i + 1}: expected 6 columns (${HEADER})`);
-    const nums = r.slice(1, 6).map(Number);
+    if (r.length < 6) throw new Error(`Row ${i + 1}: expected at least 6 columns (${HEADER})`);
+    const nums = r.slice(1, 7).map((v) => (v === "" ? 0 : Number(v)));
     if (nums.some(Number.isNaN)) throw new Error(`Row ${i + 1}: non-numeric value`);
     return {
       id: `w${Date.now().toString(36)}${i}`,
@@ -38,6 +38,7 @@ export function parseWellsCsv(text: string): Well[] {
       rateMtpa: nums[2],
       startYr: nums[3],
       endYr: nums[4],
+      skin: r.length > 6 ? nums[5] : 0,
     };
   });
 }

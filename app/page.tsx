@@ -6,7 +6,7 @@ import MapView from "@/components/MapView";
 import NumField from "@/components/NumField";
 import { parseWellsCsv, toCsv, download, wellsToCsv } from "@/lib/csv";
 import {
-  arrivalTime, buildupGrid, consts, interferenceMatrix, limits, timeGrid, totalBuildup, wellContribution,
+  arrivalTime, buildupGrid, consts, interferenceMatrix, limits, skinBuildup, timeGrid, totalBuildup, wellboreBuildup,
   type Aquifer, type Boundary, type Point, type Well,
 } from "@/lib/physics";
 
@@ -19,14 +19,14 @@ const DEFAULT_AQUIFER: Aquifer = {
 };
 
 const DEFAULT_WELLS: Well[] = [
-  { id: "w1", name: "INJ-1", x: 0, y: 0, rateMtpa: 1.0, startYr: 0, endYr: 25 },
-  { id: "w2", name: "INJ-2", x: 4000, y: 1000, rateMtpa: 1.0, startYr: 2, endYr: 25 },
-  { id: "w3", name: "INJ-3", x: 1500, y: 5000, rateMtpa: 0.8, startYr: 5, endYr: 25 },
-  { id: "w4", name: "INJ-4", x: -3500, y: 3000, rateMtpa: 0.5, startYr: 8, endYr: 20 },
+  { id: "w1", name: "INJ-1", x: 0, y: 0, rateMtpa: 1.0, startYr: 0, endYr: 25, skin: 2 },
+  { id: "w2", name: "INJ-2", x: 4000, y: 1000, rateMtpa: 1.0, startYr: 2, endYr: 25, skin: 5 },
+  { id: "w3", name: "INJ-3", x: 1500, y: 5000, rateMtpa: 0.8, startYr: 5, endYr: 25, skin: 0 },
+  { id: "w4", name: "INJ-4", x: -3500, y: 3000, rateMtpa: 0.5, startYr: 8, endYr: 20, skin: 3 },
 ];
 const DEFAULT_POINTS: Point[] = [{ id: "p1", name: "Legacy well", x: 8000, y: -3000 }];
 
-type View = "map" | "series" | "matrix" | "limits";
+type View = "map" | "series" | "matrix" | "limits" | "compare";
 type Mode = "total" | "interference";
 let seq = 100;
 const uid = (p: string) => `${p}${seq++}`;
@@ -74,7 +74,7 @@ export default function Page() {
     wells.forEach((w, i) => {
       out.push({
         name: w.name, color: COLORS[i % COLORS.length], x: times,
-        y: times.map((t) => totalBuildup(wells, w.x, w.y, t, aq, boundary, c, mode === "interference" ? w.id : undefined)),
+        y: times.map((t) => mode === "interference" ? totalBuildup(wells, w.x, w.y, t, aq, boundary, c, w.id) : wellboreBuildup(wells, w, t, aq, boundary, c)),
       });
     });
     points.forEach((p, i) => {
@@ -96,14 +96,36 @@ export default function Page() {
 
   // Peak buildup per well (total, at wellbore) over the horizon.
   const peaks = useMemo(() => wells.map((w) => {
-    const ys = times.map((t) => totalBuildup(wells, w.x, w.y, t, aq, boundary, c));
+    const ys = times.map((t) => wellboreBuildup(wells, w, t, aq, boundary, c));
     const iMax = ys.reduce((m, v, i) => (v > ys[m] ? i : m), 0);
-    const selfAtPeak = wellContribution(w, w.x, w.y, times[iMax], aq, boundary, c);
-    return { peak: ys[iMax], t: times[iMax], self: selfAtPeak, interference: ys[iMax] - selfAtPeak };
+    const skinAtPeak = skinBuildup(w, times[iMax], aq, c);
+    const interference = totalBuildup(wells, w.x, w.y, times[iMax], aq, boundary, c, w.id);
+    return { peak: ys[iMax], t: times[iMax], self: ys[iMax] - interference - skinAtPeak, skin: skinAtPeak, interference };
   }), [wells, times, aq, boundary, c]);
 
   const worst = peaks.reduce((m, p, i) => (p.peak > peaks[m].peak ? i : m), 0);
   const scaleToLimit = peaks.length && peaks[worst].peak > 0 ? lim.maxBuildupMPa / peaks[worst].peak : Infinity;
+
+  // Same wells, three boundary conditions. Bounded cases use the boundary line set in the panel.
+  const cases = useMemo(() => {
+    const defs: { key: Boundary["type"]; label: string; color: string; dash?: string }[] = [
+      { key: "none", label: "Infinite-acting", color: "#2a6fdb" },
+      { key: "constant", label: "Constant-pressure boundary", color: "#2f9e44", dash: "6 4" },
+      { key: "noflow", label: "No-flow boundary", color: "#d9480f", dash: "2 4" },
+    ];
+    const cc = consts(aq);
+    return defs.map((d) => {
+      const b: Boundary = { ...boundary, type: d.key };
+      const perWell = wells.map((w) => {
+        const ys = times.map((t) => wellboreBuildup(wells, w, t, aq, b, cc));
+        const k = ys.reduce((m, v, i) => (v > ys[m] ? i : m), 0);
+        return { ys, peak: ys[k], t: times[k] };
+      });
+      return { ...d, perWell };
+    });
+  }, [wells, aq, boundary, times]);
+  const [cmpWell, setCmpWell] = useState(0);
+  const cmpIdx = Math.min(cmpWell, Math.max(wells.length - 1, 0));
 
   const extent = useMemo(() => {
     const all = [...wells, ...points];
@@ -138,8 +160,8 @@ export default function Page() {
     matrix.forEach((r, i) => rows.push([names[i], ...r.map((v) => +v.toFixed(5))]));
     rows.push([], ["# Time series (MPa buildup, " + mode + ")"], ["time_yr", ...series.map((s) => s.name)]);
     times.forEach((t, k) => rows.push([+t.toFixed(4), ...series.map((s) => +s.y[k].toFixed(5))]));
-    rows.push([], ["# Peak check"], ["well", "peak_MPa", "time_yr", "self_MPa", "interference_MPa", "limit_MPa"]);
-    wells.forEach((w, i) => rows.push([w.name, ...[peaks[i].peak, peaks[i].t, peaks[i].self, peaks[i].interference].map((v) => +v.toFixed(4)), +lim.maxBuildupMPa.toFixed(4)]));
+    rows.push([], ["# Peak check"], ["well", "peak_MPa", "time_yr", "self_MPa", "skin_MPa", "interference_MPa", "limit_MPa"]);
+    wells.forEach((w, i) => rows.push([w.name, ...[peaks[i].peak, peaks[i].t, peaks[i].self, peaks[i].skin, peaks[i].interference].map((v) => +v.toFixed(4)), +lim.maxBuildupMPa.toFixed(4)]));
     download("co2-interference-results.csv", toCsv(rows));
   };
 
@@ -187,7 +209,7 @@ export default function Page() {
           </section>
 
           <section>
-            <h2>Boundary</h2>
+            <h2>Boundary condition</h2>
             <div className="grid2">
               <label className="field"><span>Type</span>
                 <select value={boundary.type} onChange={(e) => setBoundary({ ...boundary, type: e.target.value as Boundary["type"] })}>
@@ -204,6 +226,7 @@ export default function Page() {
               </label>
               <NumField label="Position" unit="m" value={boundary.positionM} onChange={(v) => setBoundary({ ...boundary, positionM: v })} />
             </div>
+            <p className="hint">The Compare boundaries tab runs all three conditions side by side using this line.</p>
           </section>
 
           <section>
@@ -218,7 +241,7 @@ export default function Page() {
             {csvError && <p className="err">{csvError}</p>}
             <div className="tablewrap">
               <table className="edit">
-                <thead><tr><th>Name</th><th>x (m)</th><th>y (m)</th><th>Mt/yr</th><th>Start</th><th>End</th><th /></tr></thead>
+                <thead><tr><th>Name</th><th>x (m)</th><th>y (m)</th><th>Mt/yr</th><th>Start</th><th>End</th><th>Skin</th><th /></tr></thead>
                 <tbody>
                   {wells.map((w) => (
                     <tr key={w.id}>
@@ -228,14 +251,15 @@ export default function Page() {
                       <td><NumField ariaLabel={`${w.name} rate`} value={w.rateMtpa} onChange={(v) => updWell(w.id, { rateMtpa: v })} min={0} /></td>
                       <td><NumField ariaLabel={`${w.name} start`} value={w.startYr} onChange={(v) => updWell(w.id, { startYr: v })} min={0} /></td>
                       <td><NumField ariaLabel={`${w.name} end`} value={w.endYr} onChange={(v) => updWell(w.id, { endYr: v })} min={0} /></td>
+                      <td><NumField ariaLabel={`${w.name} skin`} value={w.skin} onChange={(v) => updWell(w.id, { skin: v })} /></td>
                       <td><button className="x" aria-label={`Remove ${w.name}`} onClick={() => setWells((ws) => ws.filter((q) => q.id !== w.id))}>×</button></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-            <button className="ghost" onClick={() => setWells((ws) => [...ws, { id: uid("w"), name: `INJ-${ws.length + 1}`, x: 0, y: 0, rateMtpa: 1, startYr: 0, endYr: 25 }])}>+ Add well</button>
-            <p className="hint">CSV columns: name, x_m, y_m, rate_Mtpa, start_yr, end_yr. Excel: save as CSV.</p>
+            <button className="ghost" onClick={() => setWells((ws) => [...ws, { id: uid("w"), name: `INJ-${ws.length + 1}`, x: 0, y: 0, rateMtpa: 1, startYr: 0, endYr: 25, skin: 0 }])}>+ Add well</button>
+            <p className="hint">CSV columns: name, x_m, y_m, rate_Mtpa, start_yr, end_yr, skin (optional). Excel: save as CSV.</p>
           </section>
 
           <section>
@@ -283,7 +307,7 @@ export default function Page() {
           </div>
 
           <nav className="tabs" role="tablist">
-            {([["map", "Pressure map"], ["series", "Time series"], ["matrix", "Interference matrix"], ["limits", "Limit check"]] as [View, string][]).map(([v, l]) => (
+            {([["map", "Pressure map"], ["series", "Time series"], ["matrix", "Interference matrix"], ["limits", "Limit check"], ["compare", "Compare boundaries"]] as [View, string][]).map(([v, l]) => (
               <button key={v} role="tab" aria-selected={view === v} className={view === v ? "on" : ""} onClick={() => setView(v)}>{l}</button>
             ))}
           </nav>
@@ -381,7 +405,7 @@ export default function Page() {
             <>
               <div className="tablewrap">
                 <table className="matrix">
-                  <thead><tr><th>Well</th><th>Peak buildup (MPa)</th><th>at (yr)</th><th>of which self</th><th>of which interference</th><th>Bottomhole P (MPa)</th><th>Margin (MPa)</th><th>Status</th></tr></thead>
+                  <thead><tr><th>Well</th><th>Peak buildup (MPa)</th><th>at (yr)</th><th>of which self</th><th>of which skin</th><th>of which interference</th><th>Bottomhole P (MPa)</th><th>Margin (MPa)</th><th>Status</th></tr></thead>
                   <tbody>
                     {wells.map((w, i) => {
                       const p = peaks[i], margin = lim.maxBuildupMPa - p.peak;
@@ -389,7 +413,7 @@ export default function Page() {
                         <tr key={w.id}>
                           <th>{w.name}</th>
                           <td>{p.peak.toFixed(2)}</td><td>{p.t.toFixed(1)}</td>
-                          <td>{p.self.toFixed(2)}</td><td>{p.interference.toFixed(2)}</td>
+                          <td>{p.self.toFixed(2)}</td><td>{p.skin.toFixed(2)}</td><td>{p.interference.toFixed(2)}</td>
                           <td>{(lim.initialMPa + p.peak).toFixed(2)}</td>
                           <td>{margin.toFixed(2)}</td>
                           <td className={margin < 0 ? "bad-cell" : "good-cell"}>{margin < 0 ? "Exceeds" : "OK"}</td>
@@ -406,12 +430,58 @@ export default function Page() {
             </>
           )}
 
+          {view === "compare" && (
+            <>
+              <div className="controls">
+                <label className="field"><span>Well shown in chart</span>
+                  <select value={cmpIdx} onChange={(e) => setCmpWell(+e.target.value)}>
+                    {wells.map((w, i) => <option key={w.id} value={i}>{w.name}</option>)}
+                  </select>
+                </label>
+              </div>
+              {wells.length > 0 && (
+                <>
+                  <LineChart
+                    series={cases.map((k) => ({ name: k.label, color: k.color, dash: k.dash, x: times, y: k.perWell[cmpIdx].ys }))}
+                    xLabel="Time (years)" yLabel={`${wells[cmpIdx].name} wellbore buildup incl. skin (MPa)`}
+                    hline={lim.maxBuildupMPa > 0 ? { y: lim.maxBuildupMPa, label: "allowable buildup" } : undefined}
+                  />
+                  <ul className="swatches">{cases.map((k) => <li key={k.key}><i style={{ background: k.color }} />{k.label}</li>)}</ul>
+                </>
+              )}
+              <h3>Peak wellbore buildup (MPa), skin included</h3>
+              <div className="tablewrap">
+                <table className="matrix">
+                  <thead><tr><th>Well</th>{cases.map((k) => <th key={k.key}>{k.label}</th>)}</tr></thead>
+                  <tbody>
+                    {wells.map((w, i) => (
+                      <tr key={w.id}>
+                        <th>{w.name}</th>
+                        {cases.map((k) => {
+                          const v = k.perWell[i].peak;
+                          return <td key={k.key} className={v > lim.maxBuildupMPa ? "bad-cell" : ""}>{v.toFixed(2)}</td>;
+                        })}
+                      </tr>
+                    ))}
+                    <tr className="total">
+                      <th>Allowed</th>
+                      {cases.map((k) => <td key={k.key}>{lim.maxBuildupMPa.toFixed(2)}</td>)}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p className="caption">
+                Boundary line: {boundary.axis} = {boundary.positionM} m. Red cells exceed the allowable buildup. A no-flow boundary is the most conservative case (the image well adds pressure); a constant-pressure boundary the least (the image well relieves pressure).
+              </p>
+            </>
+          )}
+
           <details className="assump">
             <summary>Model assumptions and limitations</summary>
             <ul>
               <li>Homogeneous, isotropic, confined aquifer of constant thickness; single-phase slightly-compressible flow (Theis line source) with Δp = qμ/(4πkh)·E₁(r²/4ηt).</li>
               <li>CO₂ mass is converted to reservoir volume with the given CO₂ density and the brine viscosity is used everywhere (brine-equivalent). This overstates near-well pressure because CO₂ is less viscous than brine, but is reasonable for far-field interference.</li>
-              <li>Wells are evaluated at the wellbore radius with no skin, wellbore storage or non-Darcy effects. Add a skin/CO₂-mobility correction before using near-well values for design.</li>
+              <li>Wells are evaluated at the wellbore radius. Skin adds a steady pressure drop Δp = qμs/(2πkh) at the injector itself, only while injecting; it does not change interference at other wells. Wellbore storage, non-Darcy flow and CO₂-mobility effects are not modelled.</li>
               <li>Boundaries are one straight line handled by image wells. Leaky caprock, multiple faults, heterogeneity, dissolution and brine production are not modelled.</li>
               <li>Use for screening and ranking of well layouts; confirm with numerical simulation before decisions.</li>
             </ul>
