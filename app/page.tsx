@@ -3,10 +3,11 @@
 import { useMemo, useRef, useState } from "react";
 import LineChart, { type Series } from "@/components/LineChart";
 import MapView from "@/components/MapView";
+import StackedChart from "@/components/StackedChart";
 import NumField from "@/components/NumField";
 import { parseWellsCsv, toCsv, download, wellsToCsv } from "@/lib/csv";
 import {
-  arrivalTime, buildupGrid, consts, hawkinsSkin, interferenceMatrix, limits, skinBuildup, timeGrid, totalBuildup, wellboreBuildup,
+  arrivalTime, buildupGrid, consts, hawkinsSkin, interferenceMatrix, limits, skinBuildup, timeGrid, totalBuildup, wellboreBuildup, wellContribution,
   type Aquifer, type Boundary, type Point, type Well,
 } from "@/lib/physics";
 
@@ -92,14 +93,37 @@ export default function Page() {
         y: times.map((t) => base + totalBuildup(wells, p.x, p.y, t, aq, boundary, c)),
       });
     });
-    if (mode === "bhp" && wells.length > 1) {
+    if (wells.length > 1) {
       // Field-wide view: all wells together as one pressure envelope and average.
       const wellSeries = out.slice(0, wells.length);
-      out.push({ name: "Field maximum BHP", color: "#111111", x: times, y: times.map((_, k) => Math.max(...wellSeries.map((s) => s.y[k]))) });
-      out.push({ name: "Field average BHP", color: "#868e96", dash: "8 3 2 3", x: times, y: times.map((_, k) => wellSeries.reduce((a, s) => a + s.y[k], 0) / wellSeries.length) });
+      out.push({ name: mode === "bhp" ? "Field maximum BHP" : "Field maximum", color: "#111111", x: times, y: times.map((_, k) => Math.max(...wellSeries.map((s) => s.y[k]))) });
+      out.push({ name: mode === "bhp" ? "Field average BHP" : "Field average", color: "#868e96", dash: "8 3 2 3", x: times, y: times.map((_, k) => wellSeries.reduce((a, s) => a + s.y[k], 0) / wellSeries.length) });
     }
     return out;
   }, [wells, points, times, aq, boundary, c, mode, lim.initialMPa]);
+
+  // What drives the field maximum: at each time, find the well with the highest buildup
+  // and split that pressure into the contribution of every injector (self included) plus skin.
+  const fieldDrivers = useMemo(() => {
+    const layers = wells.map((w, i) => ({ name: w.name, color: COLORS[i % COLORS.length], x: times, y: [] as number[] }));
+    const skinLayer = { name: "Skin (controlling well)", color: "#adb5bd", x: times, y: [] as number[] };
+    const controlling: number[] = [];
+    for (const t of times) {
+      let best = 0, bestV = -Infinity;
+      wells.forEach((w, j) => {
+        const v = wellboreBuildup(wells, w, t, aq, boundary, c);
+        if (v > bestV) { bestV = v; best = j; }
+      });
+      controlling.push(best);
+      const wj = wells[best];
+      wells.forEach((wi, i) => layers[i].y.push(wellContribution(wi, wj.x, wj.y, t, aq, boundary, c)));
+      skinLayer.y.push(skinBuildup(wj, t, aq, c));
+    }
+    const all = [...layers, skinLayer];
+    const totals = times.map((_, k) => all.reduce((s, l) => s + l.y[k], 0));
+    const kPeak = totals.reduce((m, v, k) => (v > totals[m] ? k : m), 0);
+    return { layers: all, controlling, kPeak, peak: totals[kPeak] };
+  }, [wells, times, aq, boundary, c]);
 
   const matrix = useMemo(() => interferenceMatrix(wells, tNow, aq, boundary), [wells, tNow, aq, boundary]);
 
@@ -398,6 +422,32 @@ export default function Page() {
               <ul className="swatches">
                 {series.map((s) => <li key={s.name}><i style={{ background: s.color }} />{s.name}</li>)}
               </ul>
+              {wells.length > 0 && (
+                <>
+                  <h3>What drives the field maximum</h3>
+                  <p className="caption">
+                    At each time the well with the highest pressure is the controlling well. The chart splits its buildup into the share caused by each injector (its own injection is the layer with its own name) plus skin. Add {lim.initialMPa.toFixed(1)} MPa for absolute BHP.
+                  </p>
+                  <StackedChart layers={fieldDrivers.layers} xLabel="Time (years)" yLabel="Field-maximum buildup by source (MPa)" />
+                  <ul className="swatches">
+                    {fieldDrivers.layers.map((l) => <li key={l.name}><i style={{ background: l.color, height: 10 }} />{l.name}</li>)}
+                  </ul>
+                  <div className="tablewrap">
+                    <table className="matrix">
+                      <thead><tr><th>At field peak: {fieldDrivers.peak.toFixed(2)} MPa ({(lim.initialMPa + fieldDrivers.peak).toFixed(1)} MPa BHP) at {times[fieldDrivers.kPeak].toFixed(1)} yr in {wells[fieldDrivers.controlling[fieldDrivers.kPeak]].name}</th><th>MPa</th><th>Share</th></tr></thead>
+                      <tbody>
+                        {fieldDrivers.layers.map((l) => (
+                          <tr key={l.name}>
+                            <th>{l.name}{l.name === wells[fieldDrivers.controlling[fieldDrivers.kPeak]].name ? " (own injection)" : ""}</th>
+                            <td>{l.y[fieldDrivers.kPeak].toFixed(3)}</td>
+                            <td>{fieldDrivers.peak > 0 ? Math.round((l.y[fieldDrivers.kPeak] / fieldDrivers.peak) * 100) : 0}%</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
               <p className="caption">Wells are evaluated at the wellbore radius; dashed lines are monitoring points. Bottomhole pressure = initial pressure + own buildup + skin + interference from every other well; the field lines show the highest and the average BHP across all wells at each time. Interference-only removes each well&apos;s own contribution at its own location.</p>
             </>
           )}
