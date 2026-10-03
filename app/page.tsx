@@ -122,9 +122,18 @@ export default function Page() {
   const [applied, setApplied] = useState<Inputs | null>(null);
   const [runId, setRunId] = useState(0);
   const runNow = () => { setApplied(inputsL); setRunId((n) => n + 1); };
-  const stale = useMemo(() => applied !== null && JSON.stringify(applied) !== JSON.stringify(inputsL), [applied, inputsL]);
+  // Names are cosmetic (they update everywhere without a new RUN), so they are ignored when checking for stale results.
+  const sig = (i: Inputs) => JSON.stringify({ ...i, wells: i.wells.map(({ name, ...r }) => (void name, r)), points: i.points.map(({ name, ...r }) => (void name, r)) });
+  const stale = useMemo(() => applied !== null && sig(applied) !== sig(inputsL), [applied, inputsL]); // eslint-disable-line react-hooks/exhaustive-deps
   const cur = applied ?? inputsL; // before the first RUN nothing is displayed; this only keeps the hooks well-defined
-  const { aq, boundary, wells, points, horizon, threshold, geo, sat } = cur;
+  const { aq, boundary, horizon, threshold, geo, sat } = cur;
+  // Well and point names follow the editable tables immediately; everything else comes from the last run.
+  const wellNameKey = rawWells.map((w) => `${w.id}${w.name}`).join("");
+  const pointNameKey = pointsL.map((q) => `${q.id}${q.name}`).join("");
+  /* eslint-disable react-hooks/exhaustive-deps */
+  const wells = useMemo(() => { const m = new Map(rawWells.map((w) => [w.id, w.name])); return cur.wells.map((w) => ({ ...w, name: m.get(w.id) ?? w.name })); }, [cur.wells, wellNameKey]);
+  const points = useMemo(() => { const m = new Map(pointsL.map((q) => [q.id, q.name])); return cur.points.map((q) => ({ ...q, name: m.get(q.id) ?? q.name })); }, [cur.points, pointNameKey]);
+  /* eslint-enable react-hooks/exhaustive-deps */
   const lim = useMemo(() => limits(aq), [aq]);
   const c = useMemo(() => consts(aq), [aq]);
   const tNow = Math.min(tEval, horizon);
@@ -286,6 +295,7 @@ export default function Page() {
     [applied, wells, tNow, aq, satModel, extent],
   );
   const plumes = useMemo(() => wells.map((w) => ({
+    id: w.id,
     name: w.name,
     massMt: w.rateMtpa * effTime(w, tNow),
     radius: plumeRadius(w, tNow, aq, satModel),
@@ -831,13 +841,14 @@ export default function Page() {
                     Saturation of the injected CO₂ (Sg) at {tNow.toFixed(1)} yr from a radial Buckley–Leverett front around each injector; overlapping plumes are added and capped at {satModel.smax.toFixed(2)}. Brine fills the rest of the pore space. Each well is a black dot with its name beside the plume. Gravity override, dissolution and residual trapping are not modelled. Drag the evaluation-time slider to watch the plumes grow; they stop growing at each well&apos;s shut-in.
                   </p>
                   <h3>CO₂ plume of each well at t = {tNow.toFixed(1)} yr</h3>
+                  <p className="caption" style={{ marginTop: 0 }}>Tip: click a well name in the table to rename it. The new name appears at once on every chart, table and report (you can also edit it in the Injection wells table).</p>
                   <div className="tablewrap">
                     <table className="matrix">
                       <thead><tr><th>Well</th><th>CO₂ injected (Mt)</th><th>Plume radius ({dU.label})</th><th>Sg behind front</th><th>Max Sg (at well)</th></tr></thead>
                       <tbody>
                         {plumes.map((q) => (
-                          <tr key={q.name}>
-                            <th>{q.name}</th><td>{q.massMt.toFixed(2)}</td><td>{D(q.radius)}</td><td>{satModel.sf.toFixed(2)}</td><td>{satModel.smax.toFixed(2)}</td>
+                          <tr key={q.id}>
+                            <th><input className="nameedit" aria-label={`Rename ${q.name}`} title="Click to rename this well" value={q.name} onChange={(e) => updWell(q.id, { name: e.target.value })} /></th><td>{q.massMt.toFixed(2)}</td><td>{D(q.radius)}</td><td>{satModel.sf.toFixed(2)}</td><td>{satModel.smax.toFixed(2)}</td>
                           </tr>
                         ))}
                       </tbody>

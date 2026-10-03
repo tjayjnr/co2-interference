@@ -120,7 +120,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   b.push({ t: "h2", text: "4.7 Injection wells" });
   fig("wells", "Figure 4. The Injection wells section.");
   table("Table 5. Columns of the wells table.", ["Column", "Meaning"], [
-    ["Name", "Label shown on charts and tables."],
+    ["Name", "Label shown on charts, tables and reports. Type any name you like; it updates everywhere at once, without a new RUN. You can also rename a well directly in the plume table on the CO₂ saturation tab."],
     ["x, y (or Lon, Lat)", "Well location. Choose the units with the selector in the column header."],
     ["Rate", "CO₂ injection rate (default unit Mt/yr). Change the unit in the column header."],
     ["Start, End", "Year injection starts and stops. After the end year the well is shut in and its pressure recovers."],
@@ -160,7 +160,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
 
   b.push({ t: "h2", text: "6.2 CO₂ saturation tab" });
   fig("sat", "Figure 6. CO₂ saturation map with the plume of each injector and the table of plume radii.");
-  p("The map shows the saturation of injected CO₂ (Sg) at the evaluation time, with a labelled colour scale from 0 up to the maximum saturation. Each injector creates a roughly circular plume, shown with a black dot at the well and its name beside the plume; the plume edge is where the colour returns to the dark-blue brine background. Plumes of neighbouring wells are added where they overlap. Below the map, a table lists for each well the mass injected so far, the plume radius, the saturation just behind the front and the maximum saturation at the well. Drag the Evaluation time slider to watch the plumes grow; each plume stops growing when its well is shut in.");
+  p("The map shows the saturation of injected CO₂ (Sg) at the evaluation time, with a labelled colour scale from 0 up to the maximum saturation. Each injector creates a roughly circular plume; the well is identified by its name, placed beside the plume (click a name in the table below the map to rename it); the plume edge is where the colour returns to the dark-blue brine background. Plumes of neighbouring wells are added where they overlap. Below the map, a table lists for each well the mass injected so far, the plume radius, the saturation just behind the front and the maximum saturation at the well. Drag the Evaluation time slider to watch the plumes grow; each plume stops growing when its well is shut in.");
 
   b.push({ t: "h2", text: "6.3 Pressure map tab" });
   fig("pressure-map", "Figure 7. Pressure buildup map with the interference-threshold and allowable-buildup contours.");

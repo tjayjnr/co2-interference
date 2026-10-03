@@ -158,3 +158,6 @@ body { min-height: 100vh; display: flex; flex-direction: column; }
 
 .calcfield { margin-top: 8px; }
 .calcval { flex: 1 1 auto; min-width: 0; padding: 5px 8px; border: 1px dashed var(--muted); border-radius: 6px; background: transparent; font-weight: 600; font-variant-numeric: lining-nums tabular-nums; }
+
+.nameedit { width: 100%; min-width: 90px; font: inherit; font-weight: 700; background: transparent; border: 1px dashed var(--line); border-radius: 4px; padding: 3px 6px; }
+.nameedit:hover { border-color: var(--accent); }
