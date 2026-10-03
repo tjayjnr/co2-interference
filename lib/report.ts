@@ -53,6 +53,10 @@ export interface ReportData {
   driverHead: string[];
   driverRows: string[][];
   driverSentence: string;
+  threeZone: boolean;
+  zoneHead: string[];
+  zoneRows: string[][];
+  zoneNote: string;
   scheduleHead: string[];
   scheduleRows: string[][];
   satHead: string[];
@@ -91,6 +95,7 @@ export function buildBlocks(d: ReportData): Block[] {
   b.push(E("Δp(r, t) = q μ / (4π k h) · E₁(r² / 4ηt),   η = k / (φ μ c_t)"));
   b.push({ t: "p", text: "where k is permeability, h thickness, μ viscosity, φ porosity, c_t total compressibility, η the hydraulic diffusivity and E₁ the exponential integral:" });
   b.push(E("E₁(u) = integral of ( e^(−s) / s ) ds, taken from s = u to infinity"));
+  if (d.threeZone) b.push({ t: "p", text: "In this analysis the single-phase pressure function p_D is replaced by the three-zone CO₂–brine function of Section 2.8; the Theis expression above is its limit when all three zones have the properties of brine." });
   b.push({ t: "h2", text: "2.2 Multi-well superposition and shut-in" });
   b.push({ t: "p", text: "Because the governing equation is linear, the buildup at any point is the sum of the contributions of all wells and of all rate changes of each well. A well i that injects at rates q_i,1, q_i,2, …, q_i,N (each in force until the next change) is represented by one single-well solution per rate change, with the elapsed time since that change; the final change is the shut-in (q = 0), which superposes a negative rate and makes the pressure recover towards the initial value:" });
   b.push(E("Δp(x, t) = Σ_i Σ_j (q_i,j − q_i,j−1) · μ / (4π k h) · E₁( r_i² / 4η (t − t_i,j−1) ),   q_i,0 = 0"));
@@ -121,10 +126,20 @@ export function buildBlocks(d: ReportData): Block[] {
   b.push({ t: "p", text: "where c_eq is the mass of water carried per mass of CO₂ at equilibrium. It follows from equality of the water fugacity in the CO₂-rich phase and in the brine, using the IAPWS saturation pressure P_sat(T), a Poynting correction Π_w and the NaCl water activity a_w (screening value Φ_w ≈ 1 unless a different fugacity coefficient is entered). It is evaluated at the initial reservoir pressure P:" });
   b.push(E("y_w = a_w P_sat Π_w / (Φ_w P),   c_eq = (M_w / M_CO2) · y_w / (1 − y_w),   Π_w = exp[ V_w (P − P_sat) / (R T) ]"));
 
+  if (d.threeZone) {
+    b.push({ t: "h2", text: "2.8 Three-zone pressure kernel" });
+    b.push({ t: "p", text: "Injected CO₂ displaces brine and creates three regions around each well: a dry CO₂ zone (zone 1, r ≤ r_d), a CO₂–brine two-phase zone (zone 2, r_d < r ≤ r_g) and the undisturbed brine zone (zone 3, r > r_g). Each zone has its own mobility and diffusivity, and in each zone the dimensionless pressure has the similarity form" });
+    b.push(E("P_D,n(r_D, t_D) = a_n + b_n E₁( r_D² / 4 D_n t_D ),   n = 1, 2, 3"));
+    b.push({ t: "p", text: "with r_D = r / r_w, t_D = k t / (μ_w φ c_t r_w²) and the brine zone as reference. The zone diffusivity ratio is D_n = m_n / c*_n, where m_n = Λ_n / Λ_0 is the mobility ratio (Λ_0 = k / μ_w) and c*_n = c_t,n / c_t the storage ratio. The mobility ratios are m_1 = k_rg,1 μ_w / μ_g, m_2 = k_rg(S̄) μ_w / μ_g + k_rw(S̄) at the average saturation S̄ = 1/β_g behind the front, and m_3 = 1; the zone compressibilities are c_t,1 = c_f + c_g, c_t,2 = c_f + (1 − S̄) c_w + S̄ c_g and c_t,3 = c_t. The constants follow from the line-source condition (b_1 = 1 / 2m_1), the far-field condition (a_3 = 0) and continuity of pressure and flux at the two fronts:" });
+    b.push(E("b_2 = e^(u_2d − u_1d) / 2m_2,   b_3 = e^((u_2d − u_1d) + (u_3g − u_2g)) / 2m_3,   a_2 = b_3 E₁(u_3g) − b_2 E₁(u_2g),   a_1 = a_2 + b_2 E₁(u_2d) − b_1 E₁(u_1d)"));
+    b.push({ t: "p", text: "Here u_nd = r_dD² / 4 D_n t_D and u_ng = r_gD² / 4 D_n t_D are constants because the dry front r_d and the gas front r_g both grow with √t (Sections 2.6 and 2.7). The pressure change is Δp = q μ_w P_D / (2π k h) plus the skin term. For a variable rate each rate change is represented by this kernel evaluated with the rate of the period that starts at that change (a shut-in uses the rate it stops), and the contributions are added by superposition in time." });
+  }
+
   b.push({ t: "h1", text: "3. Input Data" });
   b.push({ t: "p", text: `Aquifer, fluid and pressure-limit parameters are listed in Table ${tab + 1}, and the well and monitoring-point data in Tables ${tab + 2} and ${tab + 3}. ${d.coordDesc} ${d.boundaryDesc}` });
   b.push(T("Aquifer, fluid and pressure-limit input parameters.", d.paramHead, d.paramRows));
   b.push(T("Injection well data (coordinates, CO₂ injection rate, injection period and skin factor).", d.wellHead, d.wellRows));
+  if (d.threeZone) b.push(T("Zone properties of the three-zone pressure model.", d.zoneHead, d.zoneRows, d.zoneNote));
   if (d.scheduleRows.length) b.push(T("Rate changes of the injection wells (the new rate is in force from the stated year until the next change or the shut-in at the end year).", d.scheduleHead, d.scheduleRows));
   if (d.pointRows.length) b.push(T("Monitoring points.", d.pointHead, d.pointRows));
 
@@ -165,7 +180,7 @@ export function buildBlocks(d: ReportData): Block[] {
     items: [
       "Homogeneous, isotropic, confined aquifer of constant thickness; no leakage through the caprock.",
       "Brine-equivalent single-phase flow: the CO₂ is converted to reservoir volume and brine viscosity is used everywhere. This overstates near-well pressure because CO₂ is less viscous than brine, but is reasonable for far-field interference.",
-      "Wells are evaluated at the wellbore radius with a constant skin factor; wellbore storage, non-Darcy flow and CO₂-mobility effects are not modelled. The pressure kernel is the single-phase (brine-equivalent) Theis solution; the three-zone CO₂–brine kernel is not used.",
+      "Wells are evaluated at the wellbore radius with a constant skin factor; wellbore storage, non-Darcy flow and CO₂-mobility effects are not modelled. The pressure kernel is either the single-phase (brine-equivalent) Theis solution or the three-zone CO₂–brine kernel; zone properties are taken at the average saturation behind the front, and the kernel treats the fronts as sharp.",
       "A single straight boundary is represented by image wells; multiple faults, heterogeneity, dissolution and brine production are not modelled.",
       "The results are intended for screening and ranking of well layouts and should be confirmed with numerical reservoir simulation before engineering decisions are made.",
     ],
@@ -203,7 +218,7 @@ function pdfBlocks(blocks: Block[]): Block[] {
       case "abstract": return { ...b, text: pdfSafe(b.text), keywords: pdfSafe(b.keywords) };
       case "h1": case "h2": case "p": return { ...b, text: pdfSafe(b.text) };
       case "bullets": return { ...b, items: b.items.map(pdfSafe) };
-      case "eq": return { ...b, text: pdfSafe(b.text) };
+      case "eq": return { ...b, text: pdfSafe(b.text).replace(/√/g, "sqrt") }; // the italic PDF font has no radical sign
       case "table": return { ...b, caption: pdfSafe(b.caption), head: b.head.map(pdfSafe), rows: b.rows.map((r) => r.map(pdfSafe)), note: b.note && pdfSafe(b.note) };
       case "fig": return { ...b, caption: pdfSafe(b.caption) };
       case "refs": return { ...b, items: b.items.map(pdfSafe) };
@@ -279,12 +294,13 @@ export async function renderPdf(rawBlocks: Block[], fonts: FontData, runningTitl
       case "eq": {
         font("italic", 11);
         const lh = 11 * PT * 1.6;
-        ensure(lh + 2);
+        const lines = doc.splitTextToSize(blk.text, CW - 22) as string[]; // long equations wrap onto several centred lines
+        ensure(lh * lines.length + 2);
         y += 1;
-        doc.text(blk.text, ML + CW / 2, y + lh * 0.7, { align: "center", maxWidth: CW - 22 });
+        lines.forEach((ln, i) => doc.text(ln, ML + CW / 2, y + lh * 0.7 + i * lh, { align: "center" }));
         font("normal", 10.5);
-        doc.text(`(${blk.n})`, ML + CW, y + lh * 0.7, { align: "right" });
-        y += lh + 2;
+        doc.text(`(${blk.n})`, ML + CW, y + lh * 0.7 + ((lines.length - 1) * lh) / 2, { align: "right" });
+        y += lh * lines.length + 2;
         break;
       }
       case "table": {

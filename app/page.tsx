@@ -13,6 +13,7 @@ import {
 } from "@/lib/physics";
 import { buildBlocks, renderDocx, renderPdf, type FigureData, type ReportData } from "@/lib/report";
 import { dryRadius, type DryParams } from "@/lib/dryzone";
+import { buildZones, type ZoneSummary } from "@/lib/threezone";
 import { makeSatModel, plumeRadius, satGrid, type SatParams } from "@/lib/saturation";
 import { CAT_LABELS, PRESETS, UNITS, findUnit, type Cat } from "@/lib/units";
 
@@ -45,6 +46,7 @@ interface Inputs {
   threshold: number;
   sat: SatParams;
   dry: DryParams;
+  pressure: { model: "single" | "three"; rockComp: number; co2Comp: number; zones?: ZoneSummary };
   skin: { ksMd: number; rsM: number; s: number };
   geo: { on: boolean; lat0: number; lon0: number };
   project: string;
@@ -76,6 +78,9 @@ export default function Page() {
   const [horizonL, setHorizon] = useState(40);
   const [satIn, setSatIn] = useState<SatParams>({ swr: 0.2, krgMax: 0.4, nw: 4, ng: 2, muCo2MPas: 0.06 });
   const [dryIn, setDryIn] = useState<DryParams>({ tempC: 60, salinity: 0.1, brineDensityKgM3: 1050, phiW: 1 });
+  const [pressureModel, setPressureModel] = useState<"single" | "three">("three");
+  const [rockCompIn, setRockCompIn] = useState(4e-5); // 1/MPa
+  const [co2CompIn, setCo2CompIn] = useState(0.02); // 1/MPa
   const [thresholdL, setThreshold] = useState(0.1);
   const [project, setProject] = useState("");
   const [author, setAuthor] = useState("");
@@ -116,10 +121,15 @@ export default function Page() {
   const limL = useMemo(() => limits(aqL), [aqL]);
   const geoBad = isGeo && [...rawWells, ...pointsL].some((o) => !validLatLon(o.lat ?? 0, o.lon ?? 0));
 
+  const zonesL = useMemo(
+    () => (pressureModel === "three" ? buildZones(aqL, { sat: satIn, dry: dryIn, rockCompPerMPa: rockCompIn, co2CompPerMPa: co2CompIn }, limL.initialMPa) : undefined),
+    [pressureModel, aqL, satIn, dryIn, rockCompIn, co2CompIn, limL.initialMPa],
+  );
   const inputsL: Inputs = useMemo(() => ({
-    aq: aqL, boundary: boundaryEff, wells: wellsL, points: pointsP, horizon: horizonL, threshold: thresholdL, sat: satIn, dry: dryIn,
+    pressure: { model: pressureModel, rockComp: rockCompIn, co2Comp: co2CompIn, zones: zonesL },
+    aq: zonesL ? { ...aqL, zones: zonesL.consts } : aqL, boundary: boundaryEff, wells: wellsL, points: pointsP, horizon: horizonL, threshold: thresholdL, sat: satIn, dry: dryIn,
     skin: { ksMd: dmg.ksMd, rsM: dmg.rsM, s: calcSkin }, geo: { on: isGeo, lat0: origin?.lat ?? 0, lon0: origin?.lon ?? 0 }, project, author,
-  }), [aqL, boundaryEff, wellsL, pointsP, horizonL, thresholdL, satIn, dryIn, dmg, calcSkin, isGeo, origin, project, author]);
+  }), [aqL, boundaryEff, wellsL, pointsP, horizonL, thresholdL, satIn, dryIn, zonesL, pressureModel, rockCompIn, co2CompIn, dmg, calcSkin, isGeo, origin, project, author]);
 
   // ---- RUN ----
   const [applied, setApplied] = useState<Inputs | null>(null);
@@ -129,7 +139,7 @@ export default function Page() {
   const sig = (i: Inputs) => JSON.stringify({ ...i, wells: i.wells.map(({ name, ...r }) => (void name, r)), points: i.points.map(({ name, ...r }) => (void name, r)) });
   const stale = useMemo(() => applied !== null && sig(applied) !== sig(inputsL), [applied, inputsL]); // eslint-disable-line react-hooks/exhaustive-deps
   const cur = applied ?? inputsL; // before the first RUN nothing is displayed; this only keeps the hooks well-defined
-  const { aq, boundary, horizon, threshold, geo, sat, dry } = cur;
+  const { aq, boundary, horizon, threshold, geo, sat, dry, pressure } = cur;
   // Well and point names follow the editable tables immediately; everything else comes from the last run.
   const wellNameKey = rawWells.map((w) => `${w.id}${w.name}`).join("");
   const pointNameKey = pointsL.map((q) => `${q.id}${q.name}`).join("");
@@ -470,6 +480,10 @@ export default function Page() {
           ["Interference threshold", P(threshold, 3), pU.label],
           ["Hydraulic diffusivity, η (calculated)", uv("diffusivity", c.eta), un("diffusivity")],
           ["Analysis horizon", String(horizon), "yr"],
+          ["Pressure model", pressure.model === "three" ? "Three-zone CO₂–brine" : "Single-phase (Theis)", "–"],
+          ...(pressure.model === "three"
+            ? [["Rock compressibility, c_f", uv("compress", pressure.rockComp), un("compress")], ["CO₂ compressibility, c_g", uv("compress", pressure.co2Comp), un("compress")]]
+            : []),
           ["Irreducible brine saturation, S_wr", num(sat.swr), "–"],
           ["Maximum CO₂ relative permeability, k_rg,max", num(sat.krgMax), "–"],
           ["Corey exponent, brine, n_w", num(sat.nw), "–"],
@@ -533,6 +547,14 @@ export default function Page() {
         arrivalRows: arrivals.map((row, i) => [names[i], ...row.map((v) => (v === null ? "–" : v.toFixed(2)))]),
         pointCheckHead: ["Point", `Peak buildup (${pU.label})`, "Time (yr)", "Threshold reached?", "First reached (yr)"],
         pointCheckRows: pointChecks.map((pc) => [pc.name, P(pc.peak, 3), pc.tPeak.toFixed(1), pc.first !== null ? "Yes" : "No", pc.first !== null ? pc.first.toFixed(2) : "–"]),
+        threeZone: pressure.model === "three" && !!pressure.zones,
+        zoneHead: ["Zone", "Mobility ratio m", "Storage ratio c*", "Diffusivity ratio D"],
+        zoneRows: pressure.zones
+          ? ["1  Dry CO₂", "2  CO₂ + brine", "3  Brine"].map((z, i) => [z, pressure.zones!.consts.m[i].toPrecision(3), pressure.zones!.cStar[i].toPrecision(3), pressure.zones!.consts.D[i].toPrecision(3)])
+          : [],
+        zoneNote: pressure.zones
+          ? `Average CO₂ saturation behind the front ${pressure.zones.avgSat.toFixed(2)}; dry-front coefficient α_d = ${pressure.zones.consts.alphaD.toPrecision(3)}; front slope β_g = ${pressure.zones.consts.beta.toPrecision(3)}.`
+          : "",
         scheduleHead: ["Well", "Rate changes from year", `New rate (${rU.label})`],
         scheduleRows: wells.flatMap((w) => (w.changes ?? []).filter((ch) => ch.yr > w.startYr && ch.yr < w.endYr).sort((x, y) => x.yr - y.yr).map((ch) => [w.name, num(ch.yr), num(ch.rateMtpa / rU.f)])),
         satHead: ["Well", "CO₂ injected (Mt)", `Plume radius (${dU.label})`, `Dry-zone radius (${dU.label})`, "S_g behind front", "Max S_g"],
@@ -630,6 +652,27 @@ export default function Page() {
                 </select>
               </span>
             </div>
+          </section>
+
+          <section>
+            <h2>Pressure model</h2>
+            <label className="field"><span>Pressure response of each well</span>
+              <select value={pressureModel} onChange={(e) => setPressureModel(e.target.value as "single" | "three")}>
+                <option value="three">Three-zone CO₂–brine (dry, two-phase, brine)</option>
+                <option value="single">Single-phase, brine-equivalent (Theis)</option>
+              </select>
+            </label>
+            {pressureModel === "three" && (
+              <div className="grid2" style={{ marginTop: 8 }}>
+                {uf("compress", { label: "Rock compressibility", value: rockCompIn, onChange: (v) => setRockCompIn(Math.max(v, 0)), min: 0 })}
+                {uf("compress", { label: "CO₂ compressibility", value: co2CompIn, onChange: (v) => setCo2CompIn(Math.max(v, 1e-6)), min: 0 })}
+              </div>
+            )}
+            <p className="hint">
+              {pressureModel === "three"
+                ? "Replaces the single-phase kernel by a piecewise solution for the dry-CO₂ zone, the CO₂–brine zone and the brine zone (brine is the reference; the two-phase zone uses the average saturation behind the front, 1/β). Uses the saturation and dry-out inputs below. It mainly lowers the near-well pressure; the far field stays close to the brine-equivalent result."
+                : "Treats the whole aquifer as brine (CO₂ converted to reservoir volume). Overstates the pressure next to the wells."}
+            </p>
           </section>
 
           <section>
@@ -831,7 +874,7 @@ export default function Page() {
                 <div className="kpi">
                   <span>Peak buildup (worst well)</span>
                   <b>{wells.length ? P(peaks[worst].peak) : "–"} {pU.label}</b>
-                  <small>{wells.length ? `${wells[worst].name} at ${peaks[worst].t.toFixed(1)} yr` : ""}</small>
+                  <small>{wells.length ? `${wells[worst].name} at ${peaks[worst].t.toFixed(1)} yr` : ""} · {pressure.model === "three" ? "three-zone model" : "single-phase model"}</small>
                 </div>
                 <div className="kpi">
                   <span>Allowable buildup</span>
@@ -893,6 +936,22 @@ export default function Page() {
                       </tbody>
                     </table>
                   </div>
+                  {pressure.model === "three" && pressure.zones && (
+                    <>
+                      <h3>Zones used by the three-zone pressure model</h3>
+                      <p className="caption" style={{ marginTop: 0 }}>Mobility ratio m = zone mobility / (k/μw); storage ratio c* = zone compressibility / brine-zone compressibility; diffusivity ratio D = m / c*. The two-phase zone is evaluated at the average CO₂ saturation behind the front, {pressure.zones.avgSat.toFixed(2)}.</p>
+                      <div className="tablewrap">
+                        <table className="matrix">
+                          <thead><tr><th>Zone</th><th>Mobility ratio m</th><th>Storage ratio c*</th><th>Diffusivity ratio D</th></tr></thead>
+                          <tbody>
+                            {["1  Dry CO₂", "2  CO₂ + brine", "3  Brine"].map((z, i) => (
+                              <tr key={z}><th>{z}</th><td>{pressure.zones!.consts.m[i].toPrecision(3)}</td><td>{pressure.zones!.cStar[i].toPrecision(3)}</td><td>{pressure.zones!.consts.D[i].toPrecision(3)}</td></tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
                 </>
               )}
 

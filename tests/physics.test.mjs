@@ -268,3 +268,69 @@ test("wells CSV: rate changes round trip", () => {
   assert.deepEqual(parseWellsCsv("A,0,0,1,0,25").wells[0].changes, []);
   assert.throws(() => parseWellsCsv("A,0,0,1,0,25,,8-0.5"));
 });
+
+import { threeZoneKernel } from "../lib/physics.ts";
+import { buildZones } from "../lib/threezone.ts";
+
+const satIn = { swr: 0.2, krgMax: 0.4, nw: 4, ng: 2, muCo2MPas: 0.06 };
+const dryIn = { tempC: 60, salinity: 0.1, brineDensityKgM3: 1050, phiW: 1 };
+const zin = { sat: satIn, dry: dryIn, rockCompPerMPa: 4e-5, co2CompPerMPa: 0.02 };
+
+test("three-zone kernel: reduces exactly to Theis when all zones are the brine reference", () => {
+  const unit = { m: [1, 1, 1], D: [1, 1, 1], alphaD: 0.01, beta: 3 };
+  const a1 = { ...aq, zones: unit };
+  const w = { ...W("a", 0, 0, 1, 0, 20), skin: 0 };
+  for (const [r, t] of [[0.1, 1], [50, 5], [1500, 10], [8000, 19]]) {
+    close(wellContribution(w, r, 0, t, a1, none), wellContribution(w, r, 0, t, aq, none), 1e-10);
+  }
+});
+
+test("three-zone kernel: line-source, continuity of pressure and flux at both fronts, far-field", () => {
+  const zs = buildZones(aq, zin, 21);
+  const a3 = { ...aq, zones: zs.consts };
+  const c = consts(a3);
+  assert.ok(zs.consts.m[0] > 1 && zs.consts.m[1] > 0 && zs.consts.D.every((d) => d > 0 && Number.isFinite(d)));   // CO2 is more mobile than brine (m1 > 1) but much more compressible (D1 < 1)
+  const q = rateToM3s(1, aq), t = 10 * 365.25 * 86400, z = zs.consts;
+  const rd = Math.sqrt((z.alphaD * q * t) / (Math.PI * aq.porosity * aq.thicknessM));
+  const rg = Math.sqrt((z.beta * q * t) / (Math.PI * aq.porosity * aq.thicknessM));
+  assert.ok(rd > aq.wellboreRadiusM && rd < rg);
+  const P = (r) => threeZoneKernel(r, t, q, a3, c);
+  const eps = 1e-6;
+  // pressure continuity (the kernel is evaluated just inside / outside each front)
+  for (const rf of [rd, rg]) close(P(rf * (1 - eps)), P(rf * (1 + eps)), 1e-6);
+  // flux continuity: m dP/dr is the same on both sides
+  const dP = (r, h) => (P(r + h) - P(r - h)) / (2 * h);
+  const mAt = (r) => (r < rd ? z.m[0] : r < rg ? z.m[1] : z.m[2]);
+  for (const rf of [rd, rg]) {
+    const h = rf * 1e-4;
+    const inside = mAt(rf * (1 - 1e-3)) * (P(rf * (1 - 1e-3)) - P(rf * (1 - 1e-3 - 2e-4))) / (rf * 2e-4);
+    const outside = mAt(rf * (1 + 1e-3)) * (P(rf * (1 + 1e-3 + 2e-4)) - P(rf * (1 + 1e-3))) / (rf * 2e-4);
+    assert.ok(Math.abs(inside / outside - 1) < 0.01, `flux ${inside} vs ${outside}`);
+    void h; void dP;
+  }
+  // line source: -m1 r dP/dr -> 1 / 2 * 2 = 1 per unit (in P_D units  -m r dP/dr = 1 for r_D units) -> check -m1 r dP/dr ~ 1
+  const r0 = rd * 0.05;
+  close(-z.m[0] * r0 * (P(r0 * 1.001) - P(r0 * 0.999)) / (r0 * 0.002), 1, 5e-3);
+  // far field: amplitude of the brine zone is ~ 1/2 (Theis)
+  const far = P(rg * 20), theis = 0.5 * expint1((rg * 20) ** 2 / (4 * c.eta * t));
+  close(far / theis, Math.exp(Math.log(far / theis)), 1e-12); assert.ok(Math.abs(far / theis - 1) < 0.02);   // brine-zone amplitude ~ Theis (small shift from the compressible CO2 zones)
+  // lumped-resistance check at the wellbore: (1/m1) ln(rd/rw) + (1/m2) ln(rg/rd) + P(rg)
+  const rw = aq.wellboreRadiusM;
+  const approx = Math.log(rd / rw) / z.m[0] + Math.log(rg / rd) / z.m[1] + P(rg);
+  assert.ok(Math.abs(P(rw) / approx - 1) < 0.01, `wellbore ${P(rw)} vs ${approx}`);
+});
+
+test("three-zone model: lower wellbore pressure than brine-equivalent, same far field, superposition and shut-in still work", () => {
+  const zs = buildZones(aq, zin, 21);
+  const a3 = { ...aq, zones: zs.consts };
+  const A = { ...W("a", 0, 0, 1, 0, 20), skin: 0, changes: [{ yr: 10, rateMtpa: 0.5 }] };
+  const B = { ...W("b", 4000, 0, 1, 0, 20), skin: 0 };
+  const self3 = wellContribution(A, 0, 0, 15, a3, none), self1 = wellContribution(A, 0, 0, 15, aq, none);
+  assert.ok(self3 < self1 && self3 > 0.5 * self1, `${self3} vs ${self1}`);          // mobile CO2 near the well lowers the pressure
+  const far3 = wellContribution(A, 4000, 0, 15, a3, none), far1 = wellContribution(A, 4000, 0, 15, aq, none);
+  assert.ok(Math.abs(far3 / far1 - 1) < 0.02);
+  const tot3 = totalBuildup([A, B], 0, 0, 15, a3, none);
+  close(tot3, wellContribution(A, 0, 0, 15, a3, none) + wellContribution(B, 0, 0, 15, a3, none), 1e-12);
+  assert.ok(wellContribution(A, 500, 0, 300, a3, none) < 0.05 * wellContribution(A, 500, 0, 19.99, a3, none));   // recovers after shut-in
+  assert.ok(wellContribution(A, 500, 0, 12, a3, none) < wellContribution(A, 500, 0, 9.999, a3, none));          // rate reduction lowers pressure
+});

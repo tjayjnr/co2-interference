@@ -17,6 +17,18 @@ export interface Aquifer {
   hydroGradientMPaPerM: number; // initial pressure gradient
   fracGradientMPaPerM: number; // fracture-pressure gradient
   safetyFactor: number; // fraction of fracture pressure allowed (e.g. 0.9)
+  zones?: ZoneConsts; // when present the three-zone CO2-brine pressure kernel is used instead of the single-phase Theis kernel
+}
+
+/**
+ * Constants of the three-zone CO2-brine pressure kernel (zone 1: dry CO2, zone 2: CO2-brine two-phase, zone 3: brine).
+ * m_n = mobility ratio to the brine reference k/mu_w, D_n = m_n / c*_n = diffusivity ratio, with c*_n the storage ratio.
+ */
+export interface ZoneConsts {
+  m: [number, number, number];
+  D: [number, number, number];
+  alphaD: number; // dry-front coefficient: r_d^2 = alphaD * q t / (pi phi h)
+  beta: number; // slope of the fractional-flow curve at the front: r_g^2 = beta * q t / (pi phi h)
 }
 
 export type BoundaryType = "none" | "noflow" | "constant";
@@ -85,6 +97,8 @@ export function expint1(x: number): number {
 export interface SolverConsts {
   eta: number; // hydraulic diffusivity, m2/s
   mobilityTerm: number; // mu / (4 pi k h), Pa.s/m3
+  ctPa: number; // total compressibility of the brine zone, 1/Pa
+  zones?: ZoneConsts;
 }
 
 export function consts(a: Aquifer): SolverConsts {
@@ -94,6 +108,8 @@ export function consts(a: Aquifer): SolverConsts {
   return {
     eta: k / (a.porosity * mu * ct),
     mobilityTerm: mu / (4 * Math.PI * k * a.thicknessM),
+    ctPa: ct,
+    zones: a.zones,
   };
 }
 
@@ -139,6 +155,34 @@ export function injectedMt(w: Well, t: number): number {
   return m;
 }
 
+/**
+ * Dimensionless three-zone pressure P_D^(3) at distance r (m) and elapsed time tSec (s) after a step to rate qM3s (m3/s).
+ * Piecewise a_n + b_n E1(r^2 / 4 D_n eta t) with the constants fixed by the line-source condition, the far-field
+ * condition and pressure / flux continuity at the dry front r_d(t) and the gas front r_g(t) (both grow as sqrt(t)).
+ * With m_n = D_n = 1 it reduces exactly to the Theis solution P_D = E1(r^2 / 4 eta t) / 2.
+ */
+export function threeZoneKernel(r: number, tSec: number, qM3s: number, a: Aquifer, c: SolverConsts): number {
+  const z = c.zones as ZoneConsts;
+  const rho0 = qM3s * c.ctPa * c.mobilityTerm; // q ct mu / (4 pi k h): the similarity position of a front is its coefficient times rho0
+  const rhoD = z.alphaD * rho0;
+  const rhoG = z.beta * rho0;
+  const [m1, m2, m3] = z.m;
+  const [D1, D2, D3] = z.D;
+  const u1d = rhoD / D1, u2d = rhoD / D2, u2g = rhoG / D2, u3g = rhoG / D3;
+  const b1 = 1 / (2 * m1);
+  const b2 = Math.exp(u2d - u1d) / (2 * m2);
+  const b3 = Math.exp(u2d - u1d + (u3g - u2g)) / (2 * m3);
+  const rd2 = (z.alphaD * qM3s * tSec) / (Math.PI * a.porosity * a.thicknessM);
+  const rg2 = (z.beta * qM3s * tSec) / (Math.PI * a.porosity * a.thicknessM);
+  const r2 = r * r;
+  const arg = (D: number) => r2 / (4 * D * c.eta * tSec);
+  if (r2 > rg2) return b3 * expint1(arg(D3));
+  const a2 = b3 * expint1(u3g) - b2 * expint1(u2g);
+  if (r2 > rd2) return a2 + b2 * expint1(arg(D2));
+  const a1 = a2 + b2 * expint1(u2d) - b1 * expint1(u1d);
+  return a1 + b1 * expint1(arg(D1));
+}
+
 interface Source {
   x: number;
   y: number;
@@ -180,7 +224,15 @@ export function wellContribution(
     let qPrev = 0;
     for (const st of steps) {
       if (tYr <= st.t) break;
-      term += rateToM3s(st.q - qPrev, a) * expint1(r2 / (4 * c.eta * (tYr - st.t) * SECONDS_PER_YEAR));
+      const tSec = (tYr - st.t) * SECONDS_PER_YEAR;
+      const dq = rateToM3s(st.q - qPrev, a);
+      if (c.zones) {
+        // three-zone kernel: each rate period uses its own rate for the front positions (shut-in uses the rate it stops)
+        const qRef = rateToM3s(st.q > 0 ? st.q : qPrev, a);
+        if (qRef > 0) term += 2 * dq * threeZoneKernel(Math.sqrt(r2), tSec, qRef, a, c);
+      } else {
+        term += dq * expint1(r2 / (4 * c.eta * tSec));
+      }
       qPrev = st.q;
     }
     dp += s.sign * term;

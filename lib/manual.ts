@@ -42,7 +42,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     "Step 1. Check the values in the Input panel on the left. Change anything you like; each number has its own unit selector beside it.",
     "Step 2. Check the injection wells table: location, injection rate in Mt of CO₂ per year, start and end year of injection, and skin (leave blank to calculate it).",
     "Step 3. Press ▶ RUN analysis (green-blue button at the top of the left panel, or the link in the “No results yet” message). Nothing is calculated until you do this.",
-    "Step 4. Read the status card: with the example data the peak buildup is about 10.05 MPa against an allowable 8.70 MPa, so it reports “Limit exceeded”.",
+    "Step 4. Read the status card: with the example data and the default three-zone pressure model the peak buildup is about 8.57 MPa against an allowable 8.70 MPa, so it reports “Within limit”. (With the single-phase option in the Pressure model section the peak is about 10.05 MPa and the status is “Limit exceeded”.)",
     "Step 5. Click through the result tabs: CO₂ saturation, Pressure map, Time series, Interference matrix, Limit check and Compare boundaries.",
     "Step 6. Change an input and press RUN again. A yellow banner reminds you whenever the displayed results are older than the inputs.",
     "Step 7. Export what you need: chart images (PNG or SVG), the results CSV, or the full report (PDF or Word).",
@@ -79,6 +79,17 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Analysis horizon", "Length of the time series, in years. The evaluation-time slider runs from 0 to this value.", "20 to 100 yr"],
   ]);
 
+  b.push({ t: "h2", text: "4.2.1 Pressure model" });
+  p("The Pressure model section chooses how the pressure around each well is calculated. The default is the Three-zone CO₂–brine model, which recognises that injected CO₂ creates three regions: a dry CO₂ zone next to the well, a CO₂–brine two-phase zone and the undisturbed brine. Each region has its own mobility (how easily it flows) and diffusivity (how fast pressure spreads), and the pressure solution is matched at the two fronts. Choose Single-phase, brine-equivalent (Theis) to treat the whole aquifer as brine, as in the earlier versions of the application.");
+  table("Table 2a. How the three-zone model is set up.", ["Item", "Setting"], [
+    ["Reference", "Brine: mobility k/μw and the compressibility entered above."],
+    ["Zone 1 (dry CO₂)", "Mobility ratio m1 = krg,max μw/μg; compressibility = rock + CO₂."],
+    ["Zone 2 (CO₂ + brine)", "Evaluated at the average CO₂ saturation behind the front (1/β, shown under the plume table); mobility from the relative-permeability curves; compressibility from the saturation-weighted brine and CO₂."],
+    ["Zone 3 (brine)", "Mobility ratio 1, compressibility = the total compressibility entered above."],
+    ["Rock and CO₂ compressibility", "Two extra inputs (default 4×10⁻⁵ and 0.02 1/MPa). The brine compressibility is the total minus the rock value."],
+    ["Fronts", "Dry front and gas front radii from the dry-out and saturation inputs; both grow with the square root of time."],
+    ["Rate changes", "Each rate period uses the kernel with its own rate; a shut-in uses the rate it stops."],
+  ], "In practice the model lowers the pressure next to each well (CO₂ is more mobile than brine) and leaves the pressure far from the wells close to the brine-equivalent value.");
   b.push({ t: "h2", text: "4.3 Pressure limit" });
   p("The allowable buildup is calculated as: safety factor × fracture pressure − initial pressure, where the initial pressure is the hydrostatic gradient times the depth, and the fracture pressure is the fracture gradient times the depth. The panel shows the initial pressure, the fracture pressure and the resulting maximum buildup under the inputs.");
   table("Table 3. Pressure-limit inputs.", ["Input", "Meaning", "Typical value"], [
@@ -222,7 +233,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     "Homogeneous, isotropic, confined aquifer of constant thickness; no leakage through the caprock.",
     "Brine-equivalent flow for the pressure calculation: CO₂ is converted to reservoir volume with the CO₂ density and brine viscosity is used everywhere. This overstates near-well pressure but is reasonable for interference between wells.",
     "The CO₂ saturation map neglects gravity override, dissolution, capillary pressure and residual trapping, and does not feel the aquifer boundary. The dry-zone radius is a screening estimate (water fugacity coefficient set by you, default 1) evaluated at the initial reservoir pressure.",
-    "The pressure calculation uses the single-phase (brine-equivalent) kernel everywhere; the different mobility and compressibility of the dry, two-phase and brine zones are not included in the pressure response.",
+    "The three-zone pressure model treats the dry and gas fronts as sharp and uses the average saturation behind the front for the two-phase zone; with rate changes each period uses its own rate for the front positions. The single-phase option ignores the CO₂ zones altogether.",
     "Skin is a constant factor applied only at the injector while it injects.",
     "Only one straight boundary can be modelled. Multiple faults, heterogeneity, brine production and geomechanical effects are not included.",
     "Results are for screening and ranking; confirm with numerical simulation before making decisions.",
