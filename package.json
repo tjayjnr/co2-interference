@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "test": "node --test tests/physics.test.mjs",
+    "manual": "node scripts/build-manual.mjs"
   },
   "dependencies": {
     "docx": "^9.8.1",
