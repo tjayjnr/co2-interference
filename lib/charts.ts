@@ -358,9 +358,13 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   const id = `clip${++uid}`;
   let s = tb.svg + clipDef(id, plot) + `<g clip-path="url(#${id})">`;
   const ix = px(g.x0), iy = py(g.y1);
-  if (fill === "none") s += `<rect x="${f1(ix)}" y="${f1(iy)}" width="${f1(px(g.x1) - ix)}" height="${f1(py(g.y0) - iy)}" style="fill:#f8f9fa"/>`;
+  if (fill === "none") s += `<rect x="${f1(ix)}" y="${f1(iy)}" width="${f1(px(g.x1) - ix)}" height="${f1(py(g.y0) - iy)}" style="fill:#ffffff"/>`;
   else s += `<image x="${f1(ix)}" y="${f1(iy)}" width="${f1(px(g.x1) - ix)}" height="${f1(py(g.y0) - iy)}" preserveAspectRatio="none" href="${png}" xlink:href="${png}"/>`;
 
+  const rgbAt = (u: number) => {
+    const [r, gg, bb] = ramp(u, stops);
+    return `rgb(${Math.round(r)},${Math.round(gg)},${Math.round(bb)})`;
+  };
   // contour lines: only within reach of the wells, at round values spanning the pressure range found there
   let contourStep = 0;
   let contourLevels: number[] = [];
@@ -395,7 +399,10 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
       const segs = isoSegments(g.values, g.nx, g.ny, v * o.pf);
       if (!segs.length) continue;
       const lines = segs.map((q) => `<line x1="${f1(gx(q[0]))}" y1="${f1(gy(q[1]))}" x2="${f1(gx(q[2]))}" y2="${f1(gy(q[3]))}"/>`).join("");
-      s += `<g style="stroke:#fff;stroke-width:2.6;stroke-opacity:0.55">${lines}</g><g style="stroke:#161616;stroke-width:1;stroke-opacity:0.9">${lines}</g>`;
+      // no fill: a classic contour plot with every line coloured by its value; otherwise dark lines over the fill
+      s += fill === "none"
+        ? `<g style="stroke:${rgbAt(g.max > 0 ? (v * o.pf) / g.max : 0)};stroke-width:2.2;stroke-linecap:round">${lines}</g>`
+        : `<g style="stroke:#fff;stroke-width:2.6;stroke-opacity:0.55">${lines}</g><g style="stroke:#161616;stroke-width:1;stroke-opacity:0.9">${lines}</g>`;
       if (st.contourLabels) {
         let best: Segment | null = null;
         let bestX = -Infinity;
@@ -487,7 +494,7 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   s += `<text x="${lx}" y="${ly + 10}" style="${FONT};font-size:12px;font-weight:700;fill:${p.text}">${esc(o.legendTitle ?? "Pressure buildup")}${o.pLabel ? ` (${esc(o.pLabel)})` : ""}</text>`;
   ly += 18;
   const cbH = 300;
-  if (fill !== "none") {
+  if (fill !== "none" || contourLevels.length > 0) {
     s += `<defs><linearGradient id="cb${id}" x1="0" y1="1" x2="0" y2="0">${stops.map((c, i) => `<stop offset="${(i / (stops.length - 1)) * 100}%" stop-color="rgb(${c.map(Math.round).join(",")})"/>`).join("")}</linearGradient></defs>`;
     let barTicks: number[];
     if (bounds) {
@@ -531,7 +538,7 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   };
   if (o.points.length) s += row(`<rect x="${lx + 4}" y="${ly - 5}" width="10" height="10" style="fill:#1c7ed6;stroke:#888;stroke-width:1"/>`, "Monitoring point");
   if (st.contours && contourStep > 0) {
-    s += row(`<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#161616;stroke-width:1"/>`, `Contour lines${contourNear ? " (near the wells)" : ""}\nevery ${+contourStep.toFixed(4)} ${o.pLabel}`.trim());
+    s += row(`<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:${fill === "none" ? rgbAt(0.75) : "#161616"};stroke-width:${fill === "none" ? 2.2 : 1}"/>`, `Contour lines${contourNear ? " (near the wells)" : ""}\nevery ${+contourStep.toFixed(4)} ${o.pLabel}`.trim());
   }
   if (st.streamlines) {
     s += row(`<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#161616;stroke-width:1"/><polygon points="${lx + 22},${ly} ${lx + 15},${ly - 3.5} ${lx + 15},${ly + 3.5}" style="fill:#161616"/>`, "Streamlines\n(flow direction)");

@@ -1002,7 +1002,7 @@ export default function Page() {
                       <>
                         <label className="field"><span>Levels</span>
                           <select aria-label="Number of contour levels" value={mapStyle.nContours} onChange={(e) => setStyle({ nContours: +e.target.value })}>
-                            {[5, 8, 10, 15, 20].map((n) => <option key={n} value={n}>{n}</option>)}
+                            {[5, 8, 10, 15, 20, 30, 40].map((n) => <option key={n} value={n}>{n}</option>)}
                           </select>
                         </label>
                         <label className="field"><span>Contour reach</span>
