@@ -183,7 +183,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
 
   b.push({ t: "h2", text: "6.3 Pressure map tab" });
   fig("pressure-map", "Figure 7. Pressure buildup map with the interference-threshold and allowable-buildup contours.");
-  p("The map shows the total pressure buildup caused by all wells at the evaluation time, with a labelled colour scale. The dashed teal contour is the interference threshold (detection only). The solid white-and-black contour is the max allowable buildup (the pass/fail limit); it appears only near wells that approach the limit. Use Map padding to enlarge or shrink the area drawn around the wells.");
+  p("The map shows the total pressure buildup caused by all wells at the evaluation time, with a labelled colour scale. The dashed teal contour is the interference threshold (detection only). The solid white-and-black contour is the max allowable buildup (the pass/fail limit); it appears only near wells that approach the limit. Each well is drawn as a thin vertical line with its name on top, as on the saturation map. Use Map padding to enlarge or shrink the area drawn around the wells.");
 
   b.push({ t: "h2", text: "6.4 Time series tab" });
   fig("time-series", "Figure 8. Time series of pressure at every well and monitoring point, with the field maximum and average.");

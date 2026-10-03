@@ -317,19 +317,14 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   for (const q of o.points) {
     s += `<rect x="${f1(px(q.x) - 5)}" y="${f1(py(q.y) - 5)}" width="10" height="10" style="fill:#1c7ed6;stroke:#fff;stroke-width:1.5"/>${label(px(q.x), py(q.y), q.name)}`;
   }
-  if (o.palette === "sat") {
-    // Saturation map: each well is a thin vertical line starting at the plume centre and pointing up,
-    // with its name centred on top of the line.
+  // Wells on every map: a thin vertical line starting at the well and pointing up, with the name centred on top of it.
+  {
     const lineH = 40;
     for (const w of o.wells) {
       const cx = px(w.x), cy = py(w.y);
       s += `<line x1="${f1(cx)}" x2="${f1(cx)}" y1="${f1(cy)}" y2="${f1(cy - lineH)}" style="stroke:#fff;stroke-width:4.5;stroke-linecap:butt"/>`;
       s += `<line x1="${f1(cx)}" x2="${f1(cx)}" y1="${f1(cy)}" y2="${f1(cy - lineH)}" style="stroke:#000;stroke-width:2.2;stroke-linecap:butt"/>`;
       s += `<text x="${f1(cx)}" y="${f1(cy - lineH - 6)}" text-anchor="middle" style="${FONT};font-size:12px;font-weight:700;fill:#fff;stroke:#000;stroke-width:3;paint-order:stroke">${esc(w.name)}</text>`;
-    }
-  } else {
-    for (const w of o.wells) {
-      s += `<circle cx="${f1(px(w.x))}" cy="${f1(py(w.y))}" r="6" style="fill:#fff;stroke:#111;stroke-width:2"/>${label(px(w.x), py(w.y), w.name)}`;
     }
   }
   s += "</g>";
@@ -370,7 +365,6 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
     ly += 12 + lines.length * 12;
     return out;
   };
-  if (o.palette !== "sat") s += row(`<circle cx="${lx + 9}" cy="${ly}" r="6" style="fill:#fff;stroke:#111;stroke-width:2"/>`, "Injection well");
   if (o.points.length) s += row(`<rect x="${lx + 4}" y="${ly - 5}" width="10" height="10" style="fill:#1c7ed6;stroke:#888;stroke-width:1"/>`, "Monitoring point");
   for (const c of o.contourLevels) {
     s += row(
