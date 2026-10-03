@@ -319,7 +319,7 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
     s += `<rect x="${f1(px(q.x) - 5)}" y="${f1(py(q.y) - 5)}" width="10" height="10" style="fill:#1c7ed6;stroke:#fff;stroke-width:1.5"/>${label(px(q.x), py(q.y), q.name)}`;
   }
   if (o.palette === "sat") {
-    // Saturation map: no marker on the plume; each well is identified by its name, placed beside (outside) the plume so it stays readable.
+    // Saturation map: each well is a thin vertical line at the plume centre, with its name placed beside (outside) the plume so it stays readable.
     const k = S / (d.x1 - d.x0);
     const circles = o.wells.map((w, i) => ({ cx: px(w.x), cy: py(w.y), r: (o.wellRadii?.[i] ?? 0) * k }));
     const placed: number[][] = [];
@@ -345,6 +345,11 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
       placed.push(pick.box);
       s += `<text x="${f1(pick.x)}" y="${f1(pick.y)}" text-anchor="${pick.a}" style="${FONT};font-size:12px;font-weight:700;fill:#fff;stroke:#000;stroke-width:3;paint-order:stroke">${esc(w.name)}</text>`;
     });
+    // A thin vertical line (the well) at the centre of each plume
+    for (const c of circles) {
+      s += `<line x1="${f1(c.cx)}" x2="${f1(c.cx)}" y1="${f1(c.cy - 12)}" y2="${f1(c.cy + 12)}" style="stroke:#fff;stroke-width:4.5;stroke-linecap:round"/>`;
+      s += `<line x1="${f1(c.cx)}" x2="${f1(c.cx)}" y1="${f1(c.cy - 12)}" y2="${f1(c.cy + 12)}" style="stroke:#000;stroke-width:2.2;stroke-linecap:round"/>`;
+    }
   } else {
     for (const w of o.wells) {
       s += `<circle cx="${f1(px(w.x))}" cy="${f1(py(w.y))}" r="6" style="fill:#fff;stroke:#111;stroke-width:2"/>${label(px(w.x), py(w.y), w.name)}`;

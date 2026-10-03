@@ -838,7 +838,7 @@ export default function Page() {
                 <>
                   <ChartView key={`sat-${runId}`} spec={specSat} title={`CO₂ saturation map at t = ${tNow.toFixed(1)} yr`} filename="co2-saturation-map" />
                   <p className="caption">
-                    Saturation of the injected CO₂ (Sg) at {tNow.toFixed(1)} yr from a radial Buckley–Leverett front around each injector; overlapping plumes are added and capped at {satModel.smax.toFixed(2)}. Brine fills the rest of the pore space. Each well is a black dot with its name beside the plume. Gravity override, dissolution and residual trapping are not modelled. Drag the evaluation-time slider to watch the plumes grow; they stop growing at each well&apos;s shut-in.
+                    Saturation of the injected CO₂ (Sg) at {tNow.toFixed(1)} yr from a radial Buckley–Leverett front around each injector; overlapping plumes are added and capped at {satModel.smax.toFixed(2)}. Brine fills the rest of the pore space. Each well is a thin vertical line at the plume centre with its name beside the plume. Gravity override, dissolution and residual trapping are not modelled. Drag the evaluation-time slider to watch the plumes grow; they stop growing at each well&apos;s shut-in.
                   </p>
                   <h3>CO₂ plume of each well at t = {tNow.toFixed(1)} yr</h3>
                   <p className="caption" style={{ marginTop: 0 }}>Tip: click a well name in the table to rename it. The new name appears at once on every chart, table and report (you can also edit it in the Injection wells table).</p>
