@@ -49,7 +49,6 @@ export interface MapOpts {
   legendTitle?: string; // default "Pressure buildup"
   palette?: "heat" | "sat"; // colour scale
   tickDec?: number; // minimum decimals on the colour-bar labels
-  wellRadii?: number[]; // saturation map: plume radius (m) of each well, used to place the name outside the plume
 }
 
 export type ChartSpec =
@@ -319,36 +318,14 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
     s += `<rect x="${f1(px(q.x) - 5)}" y="${f1(py(q.y) - 5)}" width="10" height="10" style="fill:#1c7ed6;stroke:#fff;stroke-width:1.5"/>${label(px(q.x), py(q.y), q.name)}`;
   }
   if (o.palette === "sat") {
-    // Saturation map: each well is a thin vertical line at the plume centre, with its name placed beside (outside) the plume so it stays readable.
-    const k = S / (d.x1 - d.x0);
-    const circles = o.wells.map((w, i) => ({ cx: px(w.x), cy: py(w.y), r: (o.wellRadii?.[i] ?? 0) * k }));
-    const placed: number[][] = [];
-    const hitsCircle = (box: number[], c: { cx: number; cy: number; r: number }) => {
-      const nx = Math.min(Math.max(c.cx, box[0]), box[2]), ny = Math.min(Math.max(c.cy, box[1]), box[3]);
-      return Math.hypot(nx - c.cx, ny - c.cy) < c.r + 2;
-    };
-    o.wells.forEach((w, i) => {
-      const c = circles[i];
-      const tw = w.name.length * 7.4 + 6, th = 15, gap = 7;
-      const cands = [
-        { x: c.cx + c.r + gap, y: c.cy + 4, a: "start", box: [c.cx + c.r + gap, c.cy - th / 2, c.cx + c.r + gap + tw, c.cy + th / 2] },
-        { x: c.cx - c.r - gap, y: c.cy + 4, a: "end", box: [c.cx - c.r - gap - tw, c.cy - th / 2, c.cx - c.r - gap, c.cy + th / 2] },
-        { x: c.cx, y: c.cy - c.r - gap, a: "middle", box: [c.cx - tw / 2, c.cy - c.r - gap - th, c.cx + tw / 2, c.cy - c.r - gap] },
-        { x: c.cx, y: c.cy + c.r + gap + 11, a: "middle", box: [c.cx - tw / 2, c.cy + c.r + gap, c.cx + tw / 2, c.cy + c.r + gap + th] },
-      ];
-      const free = (cd: (typeof cands)[number]) =>
-        cd.box[0] >= L && cd.box[2] <= L + S && cd.box[1] >= T && cd.box[3] <= T + S &&
-        circles.every((cc, j) => hitsCircle(cd.box, cc) === false || j === i && true) === true &&
-        placed.every((pb) => cd.box[2] < pb[0] || cd.box[0] > pb[2] || cd.box[3] < pb[1] || cd.box[1] > pb[3]);
-      const free2 = (cd: (typeof cands)[number]) => free(cd) && circles.every((cc, j) => j === i || !hitsCircle(cd.box, cc));
-      const pick = cands.find(free2) ?? cands[0];
-      placed.push(pick.box);
-      s += `<text x="${f1(pick.x)}" y="${f1(pick.y)}" text-anchor="${pick.a}" style="${FONT};font-size:12px;font-weight:700;fill:#fff;stroke:#000;stroke-width:3;paint-order:stroke">${esc(w.name)}</text>`;
-    });
-    // A thin vertical line (the well) starting at the centre of each plume and pointing up
-    for (const c of circles) {
-      s += `<line x1="${f1(c.cx)}" x2="${f1(c.cx)}" y1="${f1(c.cy)}" y2="${f1(c.cy - 26)}" style="stroke:#fff;stroke-width:4.5;stroke-linecap:butt"/>`;
-      s += `<line x1="${f1(c.cx)}" x2="${f1(c.cx)}" y1="${f1(c.cy)}" y2="${f1(c.cy - 26)}" style="stroke:#000;stroke-width:2.2;stroke-linecap:butt"/>`;
+    // Saturation map: each well is a thin vertical line starting at the plume centre and pointing up,
+    // with its name centred on top of the line.
+    const lineH = 40;
+    for (const w of o.wells) {
+      const cx = px(w.x), cy = py(w.y);
+      s += `<line x1="${f1(cx)}" x2="${f1(cx)}" y1="${f1(cy)}" y2="${f1(cy - lineH)}" style="stroke:#fff;stroke-width:4.5;stroke-linecap:butt"/>`;
+      s += `<line x1="${f1(cx)}" x2="${f1(cx)}" y1="${f1(cy)}" y2="${f1(cy - lineH)}" style="stroke:#000;stroke-width:2.2;stroke-linecap:butt"/>`;
+      s += `<text x="${f1(cx)}" y="${f1(cy - lineH - 6)}" text-anchor="middle" style="${FONT};font-size:12px;font-weight:700;fill:#fff;stroke:#000;stroke-width:3;paint-order:stroke">${esc(w.name)}</text>`;
     }
   } else {
     for (const w of o.wells) {
