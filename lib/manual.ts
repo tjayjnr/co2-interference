@@ -189,7 +189,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Colour scale", "Sunset (default), Jet, Turbo, Viridis, Plasma, Blues, Cool–warm (diverging) or Greyscale. The colour bar and its numbers follow the choice."],
     ["Fill", "Smooth colours, Colour bands (the pressure is grouped into the chosen number of classes with a stepped colour bar) or No fill (white map, useful with contour lines)."],
     ["Reverse colours", "Flips the colour scale so that high pressure takes the colour of low pressure and vice versa."],
-    ["Contour lines", "Draws iso-pressure lines at round values (5, 8, 10, 15 or 20 levels) with the value written on each line; Labels turns the numbers off."],
+    ["Contour lines", "Draws iso-pressure lines at round values (5, 8, 10, 15 or 20 levels) with the value written on each line, only within the chosen Contour reach of the wells (Close to the wells, Around the wells, Wide, Half the map or Whole map). The levels span the pressures found inside that reach, and the colour bar is marked and labelled at the same levels, so the legend and the lines always agree. Labels turns the numbers off."],
     ["Streamlines", "Draws the flow paths of the brine (down the pressure gradient, away from the injectors), with an arrow showing the direction. They bend around the wells and are pushed away from a sealing boundary."],
     ["Reset style", "Returns to the default colours."],
   ]);

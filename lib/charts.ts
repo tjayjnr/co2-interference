@@ -280,6 +280,7 @@ export interface MapStyle {
   contours?: boolean;
   nContours?: number; // target number of contour levels
   contourLabels?: boolean;
+  contourReach?: number; // contours only within this fraction of the map half-width around each well (>= 1: whole map)
   streamlines?: boolean;
 }
 
@@ -360,13 +361,37 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   if (fill === "none") s += `<rect x="${f1(ix)}" y="${f1(iy)}" width="${f1(px(g.x1) - ix)}" height="${f1(py(g.y0) - iy)}" style="fill:#f8f9fa"/>`;
   else s += `<image x="${f1(ix)}" y="${f1(iy)}" width="${f1(px(g.x1) - ix)}" height="${f1(py(g.y0) - iy)}" preserveAspectRatio="none" href="${png}" xlink:href="${png}"/>`;
 
-  // contour lines at nice levels, optionally labelled
+  // contour lines: only within reach of the wells, at round values spanning the pressure range found there
   let contourStep = 0;
+  let contourLevels: number[] = [];
+  let contourNear = false;
   if (st.contours) {
-    const lv = ticks(0, top, st.nContours ?? 10).filter((v) => v > 0 && v < top * 0.9999);
-    contourStep = lv.length > 1 ? lv[1] - lv[0] : lv[0] ?? 0;
+    const reach = st.contourReach ?? 0.2;
+    const whole = reach >= 1 || o.wells.length === 0;
+    contourNear = !whole;
+    const reachM = reach * 0.5 * (g.x1 - g.x0);
+    const near = (x: number, y: number) => whole || o.wells.some((w) => Math.hypot(x - w.x, y - w.y) <= reachM);
+    let vmin = Infinity, vmax = -Infinity;
+    for (let j = 0; j < g.ny; j++) {
+      for (let i = 0; i < g.nx; i++) {
+        const v = g.values[j * g.nx + i];
+        if (Number.isNaN(v)) continue;
+        if (near(g.x0 + ((i + 0.5) / g.nx) * (g.x1 - g.x0), g.y0 + ((j + 0.5) / g.ny) * (g.y1 - g.y0))) {
+          if (v < vmin) vmin = v;
+          if (v > vmax) vmax = v;
+        }
+      }
+    }
+    if (vmax > vmin) {
+      contourLevels = ticks(vmin / o.pf, vmax / o.pf, st.nContours ?? 10).filter((v) => v > vmin / o.pf && v < vmax / o.pf);
+      contourStep = contourLevels.length > 1 ? contourLevels[1] - contourLevels[0] : contourLevels[0] ?? 0;
+    }
     const dec = Math.max(0, Math.ceil(-Math.log10(contourStep || 1) - 1e-9));
-    for (const v of lv) {
+    const rpx = (reachM / (d.x1 - d.x0)) * S;
+    const cid = `cc${id}`;
+    if (!whole) s += `<defs><clipPath id="${cid}">${o.wells.map((w) => `<circle cx="${f1(px(w.x))}" cy="${f1(py(w.y))}" r="${f1(rpx)}"/>`).join("")}</clipPath></defs>`;
+    s += whole ? "<g>" : `<g clip-path="url(#${cid})">`;
+    for (const v of contourLevels) {
       const segs = isoSegments(g.values, g.nx, g.ny, v * o.pf);
       if (!segs.length) continue;
       const lines = segs.map((q) => `<line x1="${f1(gx(q[0]))}" y1="${f1(gy(q[1]))}" x2="${f1(gx(q[2]))}" y2="${f1(gy(q[3]))}"/>`).join("");
@@ -376,7 +401,8 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
         let bestX = -Infinity;
         for (const q of segs) {
           const mx = (gx(q[0]) + gx(q[2])) / 2, my = (gy(q[1]) + gy(q[3])) / 2;
-          if (mx > L + 26 && mx < L + S - 26 && my > T + 10 && my < T + S - 10 && mx > bestX) { bestX = mx; best = q; }
+          const inside = whole || o.wells.some((w) => Math.hypot(mx - px(w.x), my - py(w.y)) <= rpx * 0.92);
+          if (inside && mx > L + 26 && mx < L + S - 26 && my > T + 10 && my < T + S - 10 && mx > bestX) { bestX = mx; best = q; }
         }
         if (best) {
           const mx = (gx(best[0]) + gx(best[2])) / 2, my = (gy(best[1]) + gy(best[3])) / 2;
@@ -384,6 +410,7 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
         }
       }
     }
+    s += "</g>";
   }
 
   // streamlines of the flow (down the pressure gradient, away from the injectors) with direction arrows
@@ -477,15 +504,21 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
       s += `<rect x="${lx}" y="${ly}" width="16" height="${cbH}" fill="url(#cb${id})" style="stroke:${p.frame}"/>`;
       barTicks = ticks(0, top, 10).filter((v) => v <= top * 1.0001);
     }
-    const stepV = barTicks.length > 1 ? Math.min(...barTicks.slice(1).map((v, i) => v - barTicks[i]).filter((x) => x > 0)) : 1;
-    const tickDec = Math.max(o.tickDec ?? o.pDec, Math.ceil(-Math.log10(stepV) - 1e-9), 0);
+    const withContours = contourLevels.length > 0;
+    if (withContours) barTicks = [0, ...contourLevels, top]; // the legend follows the contour levels
+    const stepV = withContours ? contourStep || 1 : barTicks.length > 1 ? Math.min(...barTicks.slice(1).map((v, i) => v - barTicks[i]).filter((x) => x > 0)) : 1;
+    const tickDec = Math.max(withContours ? 0 : o.tickDec ?? o.pDec, Math.ceil(-Math.log10(stepV) - 1e-9), 0);
+    const levelY = contourLevels.map((v) => ly + cbH * (1 - v / top));
     for (const v of barTicks) {
       const yy = ly + cbH * (1 - v / top);
+      const isLevel = withContours && contourLevels.includes(v);
+      if (withContours && !isLevel && levelY.some((ty) => Math.abs(ty - yy) < 13)) continue; // end labels yield to nearby contour labels
+      if (isLevel) s += `<line x1="${lx}" x2="${lx + 16}" y1="${f1(yy)}" y2="${f1(yy)}" style="stroke:#161616;stroke-width:1"/>`;
       s += `<line x1="${lx + 16}" x2="${lx + 21}" y1="${f1(yy)}" y2="${f1(yy)}" style="stroke:${p.frame}"/>`;
-      s += `<text x="${lx + 25}" y="${f1(yy + 4)}" style="${FONT};font-size:13px;fill:${p.text}">${v.toFixed(tickDec)}</text>`;
+      s += `<text x="${lx + 25}" y="${f1(yy + 4)}" style="${FONT};font-size:13px;${isLevel ? "font-weight:700;" : ""}fill:${isLevel || !withContours ? p.text : p.muted}">${v.toFixed(isLevel || !withContours ? tickDec : Math.max(tickDec, 2))}</text>`;
     }
     const lastY = ly + cbH * (1 - barTicks[barTicks.length - 1] / top);
-    if (lastY - ly > 14) s += `<text x="${lx + 25}" y="${ly + 4}" style="${FONT};font-size:11px;font-weight:700;fill:${p.text}">max ${top.toFixed(Math.max(tickDec, 2))}</text>`;
+    if (!withContours && lastY - ly > 14) s += `<text x="${lx + 25}" y="${ly + 4}" style="${FONT};font-size:11px;font-weight:700;fill:${p.text}">max ${top.toFixed(Math.max(tickDec, 2))}</text>`;
     ly += cbH + 28;
   } else {
     ly += 6;
@@ -498,7 +531,7 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   };
   if (o.points.length) s += row(`<rect x="${lx + 4}" y="${ly - 5}" width="10" height="10" style="fill:#1c7ed6;stroke:#888;stroke-width:1"/>`, "Monitoring point");
   if (st.contours && contourStep > 0) {
-    s += row(`<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#161616;stroke-width:1"/>`, `Contour lines\nevery ${+contourStep.toFixed(4)} ${o.pLabel}`.trim());
+    s += row(`<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#161616;stroke-width:1"/>`, `Contour lines${contourNear ? " (near the wells)" : ""}\nevery ${+contourStep.toFixed(4)} ${o.pLabel}`.trim());
   }
   if (st.streamlines) {
     s += row(`<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#161616;stroke-width:1"/><polygon points="${lx + 22},${ly} ${lx + 15},${ly - 3.5} ${lx + 15},${ly + 3.5}" style="fill:#161616"/>`, "Streamlines\n(flow direction)");

@@ -97,7 +97,7 @@ export default function Page() {
   const [view, setView] = useState<View>("sat");
   const [mode, setMode] = useState<Mode>("total");
   const [cmpWell, setCmpWell] = useState(0);
-  const DEFAULT_MAP_STYLE: MapStyle = { cmap: "sunset", reverse: false, fill: "smooth", bands: 10, contours: false, nContours: 10, contourLabels: true, streamlines: false };
+  const DEFAULT_MAP_STYLE: MapStyle = { cmap: "sunset", reverse: false, fill: "smooth", bands: 10, contours: false, nContours: 10, contourLabels: true, contourReach: 0.2, streamlines: false };
   const [mapStyle, setMapStyle] = useState<MapStyle>(DEFAULT_MAP_STYLE);
   const setStyle = (patch: Partial<MapStyle>) => setMapStyle((m) => ({ ...m, ...patch }));
   const [csvError, setCsvError] = useState("");
@@ -1003,6 +1003,15 @@ export default function Page() {
                         <label className="field"><span>Levels</span>
                           <select aria-label="Number of contour levels" value={mapStyle.nContours} onChange={(e) => setStyle({ nContours: +e.target.value })}>
                             {[5, 8, 10, 15, 20].map((n) => <option key={n} value={n}>{n}</option>)}
+                          </select>
+                        </label>
+                        <label className="field"><span>Contour reach</span>
+                          <select aria-label="Contour reach" value={String(mapStyle.contourReach ?? 0.2)} onChange={(e) => setStyle({ contourReach: +e.target.value })}>
+                            <option value="0.1">Close to the wells</option>
+                            <option value="0.2">Around the wells</option>
+                            <option value="0.35">Wide</option>
+                            <option value="0.5">Half the map</option>
+                            <option value="1">Whole map</option>
                           </select>
                         </label>
                         <label className="check"><input type="checkbox" aria-label="Contour labels" checked={!!mapStyle.contourLabels} onChange={(e) => setStyle({ contourLabels: e.target.checked })} /> Labels</label>
