@@ -345,10 +345,10 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
       placed.push(pick.box);
       s += `<text x="${f1(pick.x)}" y="${f1(pick.y)}" text-anchor="${pick.a}" style="${FONT};font-size:12px;font-weight:700;fill:#fff;stroke:#000;stroke-width:3;paint-order:stroke">${esc(w.name)}</text>`;
     });
-    // A thin vertical line (the well) at the centre of each plume
+    // A thin vertical line (the well) starting at the centre of each plume and pointing up
     for (const c of circles) {
-      s += `<line x1="${f1(c.cx)}" x2="${f1(c.cx)}" y1="${f1(c.cy - 12)}" y2="${f1(c.cy + 12)}" style="stroke:#fff;stroke-width:4.5;stroke-linecap:round"/>`;
-      s += `<line x1="${f1(c.cx)}" x2="${f1(c.cx)}" y1="${f1(c.cy - 12)}" y2="${f1(c.cy + 12)}" style="stroke:#000;stroke-width:2.2;stroke-linecap:round"/>`;
+      s += `<line x1="${f1(c.cx)}" x2="${f1(c.cx)}" y1="${f1(c.cy)}" y2="${f1(c.cy - 26)}" style="stroke:#fff;stroke-width:4.5;stroke-linecap:butt"/>`;
+      s += `<line x1="${f1(c.cx)}" x2="${f1(c.cx)}" y1="${f1(c.cy)}" y2="${f1(c.cy - 26)}" style="stroke:#000;stroke-width:2.2;stroke-linecap:butt"/>`;
     }
   } else {
     for (const w of o.wells) {
