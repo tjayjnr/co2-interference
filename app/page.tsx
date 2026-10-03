@@ -81,6 +81,12 @@ export default function Page() {
   const [pressureModel, setPressureModel] = useState<"single" | "three">("three");
   const [rockCompIn, setRockCompIn] = useState(4e-5); // 1/MPa
   const [co2CompIn, setCo2CompIn] = useState(0.02); // 1/MPa
+  // Values actually used by the calculation: the typed inputs limited to a physically sensible range.
+  const clampN = (v: number, lo: number, hi: number) => (Number.isFinite(v) ? Math.min(Math.max(v, lo), hi) : lo);
+  const satEff = useMemo<SatParams>(() => ({ swr: clampN(satIn.swr, 0, 0.95), krgMax: clampN(satIn.krgMax, 0.01, 1), nw: clampN(satIn.nw, 1, 20), ng: clampN(satIn.ng, 1, 20), muCo2MPas: clampN(satIn.muCo2MPas, 1e-4, 10) }), [satIn]);
+  const dryEff = useMemo<DryParams>(() => ({ tempC: clampN(dryIn.tempC, 5, 250), salinity: clampN(dryIn.salinity, 0, 0.26), brineDensityKgM3: clampN(dryIn.brineDensityKgM3, 500, 1500), phiW: clampN(dryIn.phiW, 0.01, 1) }), [dryIn]);
+  const rockEff = clampN(rockCompIn, 0, 1e-2);
+  const co2Eff = clampN(co2CompIn, 1e-6, 1);
   const [thresholdL, setThreshold] = useState(0.1);
   const [project, setProject] = useState("");
   const [author, setAuthor] = useState("");
@@ -122,14 +128,14 @@ export default function Page() {
   const geoBad = isGeo && [...rawWells, ...pointsL].some((o) => !validLatLon(o.lat ?? 0, o.lon ?? 0));
 
   const zonesL = useMemo(
-    () => (pressureModel === "three" ? buildZones(aqL, { sat: satIn, dry: dryIn, rockCompPerMPa: rockCompIn, co2CompPerMPa: co2CompIn }, limL.initialMPa) : undefined),
-    [pressureModel, aqL, satIn, dryIn, rockCompIn, co2CompIn, limL.initialMPa],
+    () => (pressureModel === "three" ? buildZones(aqL, { sat: satEff, dry: dryEff, rockCompPerMPa: rockEff, co2CompPerMPa: co2Eff }, limL.initialMPa) : undefined),
+    [pressureModel, aqL, satEff, dryEff, rockEff, co2Eff, limL.initialMPa],
   );
   const inputsL: Inputs = useMemo(() => ({
-    pressure: { model: pressureModel, rockComp: rockCompIn, co2Comp: co2CompIn, zones: zonesL },
-    aq: zonesL ? { ...aqL, zones: zonesL.consts } : aqL, boundary: boundaryEff, wells: wellsL, points: pointsP, horizon: horizonL, threshold: thresholdL, sat: satIn, dry: dryIn,
+    pressure: { model: pressureModel, rockComp: rockEff, co2Comp: co2Eff, zones: zonesL },
+    aq: zonesL ? { ...aqL, zones: zonesL.consts } : aqL, boundary: boundaryEff, wells: wellsL, points: pointsP, horizon: horizonL, threshold: thresholdL, sat: satEff, dry: dryEff,
     skin: { ksMd: dmg.ksMd, rsM: dmg.rsM, s: calcSkin }, geo: { on: isGeo, lat0: origin?.lat ?? 0, lon0: origin?.lon ?? 0 }, project, author,
-  }), [aqL, boundaryEff, wellsL, pointsP, horizonL, thresholdL, satIn, dryIn, zonesL, pressureModel, rockCompIn, co2CompIn, dmg, calcSkin, isGeo, origin, project, author]);
+  }), [aqL, boundaryEff, wellsL, pointsP, horizonL, thresholdL, satEff, dryEff, zonesL, pressureModel, rockEff, co2Eff, dmg, calcSkin, isGeo, origin, project, author]);
 
   // ---- RUN ----
   const [applied, setApplied] = useState<Inputs | null>(null);
@@ -478,7 +484,7 @@ export default function Page() {
           ["Fracture gradient, G_f", uv("gradient", aq.fracGradientMPaPerM), un("gradient")],
           ["Safety factor, f", num(aq.safetyFactor), "× P_frac"],
           ["Interference threshold", P(threshold, 3), pU.label],
-          ["Hydraulic diffusivity, η (calculated)", uv("diffusivity", c.eta), un("diffusivity")],
+          ["Hydraulic diffusivity of the brine zone, η (calculated)", uv("diffusivity", c.eta), un("diffusivity")],
           ["Analysis horizon", String(horizon), "yr"],
           ["Pressure model", pressure.model === "three" ? "Three-zone CO₂–brine" : "Single-phase (Theis)", "–"],
           ...(pressure.model === "three"
@@ -548,9 +554,9 @@ export default function Page() {
         pointCheckHead: ["Point", `Peak buildup (${pU.label})`, "Time (yr)", "Threshold reached?", "First reached (yr)"],
         pointCheckRows: pointChecks.map((pc) => [pc.name, P(pc.peak, 3), pc.tPeak.toFixed(1), pc.first !== null ? "Yes" : "No", pc.first !== null ? pc.first.toFixed(2) : "–"]),
         threeZone: pressure.model === "three" && !!pressure.zones,
-        zoneHead: ["Zone", "Mobility ratio m", "Storage ratio c*", "Diffusivity ratio D"],
+        zoneHead: ["Zone", "Mobility ratio m", "Storage ratio c*", "Diffusivity ratio D", `Diffusivity η (${un("diffusivity")})`],
         zoneRows: pressure.zones
-          ? ["1  Dry CO₂", "2  CO₂ + brine", "3  Brine"].map((z, i) => [z, pressure.zones!.consts.m[i].toPrecision(3), pressure.zones!.cStar[i].toPrecision(3), pressure.zones!.consts.D[i].toPrecision(3)])
+          ? ["1  Dry CO₂", "2  CO₂ + brine", "3  Brine"].map((z, i) => [z, pressure.zones!.consts.m[i].toPrecision(3), pressure.zones!.cStar[i].toPrecision(3), pressure.zones!.consts.D[i].toPrecision(3), uv("diffusivity", c.eta * pressure.zones!.consts.D[i])])
           : [],
         zoneNote: pressure.zones
           ? `Average CO₂ saturation behind the front ${pressure.zones.avgSat.toFixed(2)}; dry-front coefficient α_d = ${pressure.zones.consts.alphaD.toPrecision(3)}; front slope β_g = ${pressure.zones.consts.beta.toPrecision(3)}.`
@@ -642,15 +648,28 @@ export default function Page() {
               {uf("length", { label: "Wellbore radius", value: aqL.wellboreRadiusM, onChange: setA("wellboreRadiusM"), min: 0.01 })}
               {uf("length", { label: "Depth", value: aqL.depthM, onChange: setA("depthM"), min: 0 })}
               <NumField label="Analysis horizon" unit="yr" value={horizonL} onChange={(v) => setHorizon(Math.max(1, v))} min={1} />
-              <NumField label="Reservoir temperature" unit="°C" value={dryIn.tempC} onChange={(v) => setDryIn((q) => ({ ...q, tempC: Math.min(Math.max(v, 5), 250) }))} />
-              <NumField label="Brine salinity (NaCl)" unit="mass frac" value={dryIn.salinity} onChange={(v) => setDryIn((q) => ({ ...q, salinity: Math.min(Math.max(v, 0), 0.26) }))} step={0.01} min={0} />
-              {uf("density", { label: "Brine density", value: dryIn.brineDensityKgM3, onChange: (v) => setDryIn((q) => ({ ...q, brineDensityKgM3: Math.max(v, 500) })), min: 500 })}
-              <NumField label="Water fugacity coeff. Φw" unit="in CO₂" value={dryIn.phiW} onChange={(v) => setDryIn((q) => ({ ...q, phiW: Math.min(Math.max(v, 0.01), 1) }))} step={0.05} min={0.01} />
+              <NumField label="Reservoir temperature" unit="°C" value={dryIn.tempC} onChange={(v) => setDryIn((q) => ({ ...q, tempC: v }))} />
+              <NumField label="Brine salinity (NaCl)" unit="mass frac" value={dryIn.salinity} onChange={(v) => setDryIn((q) => ({ ...q, salinity: v }))} step={0.01} min={0} />
+              {uf("density", { label: "Brine density", value: dryIn.brineDensityKgM3, onChange: (v) => setDryIn((q) => ({ ...q, brineDensityKgM3: v })), min: 500 })}
+              <NumField label="Water fugacity coeff. Φw" unit="in CO₂" value={dryIn.phiW} onChange={(v) => setDryIn((q) => ({ ...q, phiW: v }))} step={0.05} min={0.01} />
             </div>
             <div className="field calcfield">
-              <span>Hydraulic diffusivity η <em>calculated = k / (φ·μ·c<sub>t</sub>), updates with the inputs above</em></span>
+              <span>
+                {pressureModel === "three" && zonesL ? <>Hydraulic diffusivity of each zone, η<sub>n</sub></> : <>Hydraulic diffusivity η</>}{" "}
+                <em>{pressureModel === "three" && zonesL ? "calculated = η · m_n / c*_n for the dry, two-phase and brine zones; updates with the inputs" : "calculated = k / (φ·μ·c_t); updates with the inputs"}</em>
+              </span>
               <span className="unitrow">
-                <output className="calcval" aria-label="Calculated hydraulic diffusivity">{num(consts(aqL).eta / findUnit("diffusivity", units.diffusivity).f)}</output>
+                <span className="zonevals">
+                  {(pressureModel === "three" && zonesL
+                    ? [["Zone 1 · dry CO₂", zonesL.consts.D[0]], ["Zone 2 · CO₂ + brine", zonesL.consts.D[1]], ["Zone 3 · brine", zonesL.consts.D[2]]]
+                    : [["Aquifer (brine-equivalent)", 1]]
+                  ).map(([lab, d]) => (
+                    <span className="zrow" key={lab as string}>
+                      <span className="zlab">{lab as string}</span>
+                      <output className="calcval" aria-label={`Calculated hydraulic diffusivity, ${lab}`}>{num((consts(aqL).eta * (d as number)) / findUnit("diffusivity", units.diffusivity).f)}</output>
+                    </span>
+                  ))}
+                </span>
                 <select className="unitsel" aria-label="Diffusivity unit" value={units.diffusivity} onChange={(e) => setUnit("diffusivity")(e.target.value)}>
                   {UNITS.diffusivity.map((u) => <option key={u.label} value={u.label}>{u.label}</option>)}
                 </select>
@@ -668,8 +687,8 @@ export default function Page() {
             </label>
             {pressureModel === "three" && (
               <div className="grid2" style={{ marginTop: 8 }}>
-                {uf("compress", { label: "Rock compressibility", value: rockCompIn, onChange: (v) => setRockCompIn(Math.max(v, 0)), min: 0 })}
-                {uf("compress", { label: "CO₂ compressibility", value: co2CompIn, onChange: (v) => setCo2CompIn(Math.max(v, 1e-6)), min: 0 })}
+                {uf("compress", { label: "Rock compressibility", value: rockCompIn, onChange: (v) => setRockCompIn(v), min: 0 })}
+                {uf("compress", { label: "CO₂ compressibility", value: co2CompIn, onChange: (v) => setCo2CompIn(v), min: 0 })}
               </div>
             )}
             <p className="hint">
@@ -695,11 +714,11 @@ export default function Page() {
           <section>
             <h2>CO₂ saturation</h2>
             <div className="grid2">
-              <NumField label="Residual brine Swr" unit="frac" value={satIn.swr} onChange={(v) => setSatIn((q) => ({ ...q, swr: Math.min(Math.max(v, 0), 0.95) }))} step={0.05} min={0} />
-              <NumField label="Max CO₂ rel. perm. krg" value={satIn.krgMax} onChange={(v) => setSatIn((q) => ({ ...q, krgMax: Math.min(Math.max(v, 0.01), 1) }))} step={0.05} min={0} />
-              <NumField label="Corey exponent, brine" value={satIn.nw} onChange={(v) => setSatIn((q) => ({ ...q, nw: Math.max(v, 1) }))} step={0.5} min={1} />
-              <NumField label="Corey exponent, CO₂" value={satIn.ng} onChange={(v) => setSatIn((q) => ({ ...q, ng: Math.max(v, 1) }))} step={0.5} min={1} />
-              {uf("viscosity", { label: "CO₂ viscosity", value: satIn.muCo2MPas, onChange: (v) => setSatIn((q) => ({ ...q, muCo2MPas: Math.max(v, 1e-4) })), min: 0 })}
+              <NumField label="Residual brine Swr" unit="frac" value={satIn.swr} onChange={(v) => setSatIn((q) => ({ ...q, swr: v }))} step={0.05} min={0} />
+              <NumField label="Max CO₂ rel. perm. krg" value={satIn.krgMax} onChange={(v) => setSatIn((q) => ({ ...q, krgMax: v }))} step={0.05} min={0} />
+              <NumField label="Corey exponent, brine" value={satIn.nw} onChange={(v) => setSatIn((q) => ({ ...q, nw: v }))} step={0.5} min={1} />
+              <NumField label="Corey exponent, CO₂" value={satIn.ng} onChange={(v) => setSatIn((q) => ({ ...q, ng: v }))} step={0.5} min={1} />
+              {uf("viscosity", { label: "CO₂ viscosity", value: satIn.muCo2MPas, onChange: (v) => setSatIn((q) => ({ ...q, muCo2MPas: v })), min: 0 })}
             </div>
             <p className="hint">Used for the CO₂ saturation map (radial Buckley–Leverett front around each injector, using the porosity, thickness and brine viscosity above). The dry-zone radius shown with it comes from the reservoir temperature, brine salinity, brine density and water fugacity coefficient in the Input section (Φw = 1 is the screening value; a smaller value means the CO₂ carries more water and the dry zone is larger).</p>
           </section>
@@ -938,10 +957,10 @@ export default function Page() {
                       <p className="caption" style={{ marginTop: 0 }}>Mobility ratio m = zone mobility / (k/μw); storage ratio c* = zone compressibility / brine-zone compressibility; diffusivity ratio D = m / c*. The two-phase zone is evaluated at the average CO₂ saturation behind the front, {pressure.zones.avgSat.toFixed(2)}.</p>
                       <div className="tablewrap">
                         <table className="matrix">
-                          <thead><tr><th>Zone</th><th>Mobility ratio m</th><th>Storage ratio c*</th><th>Diffusivity ratio D</th></tr></thead>
+                          <thead><tr><th>Zone</th><th>Mobility ratio m</th><th>Storage ratio c*</th><th>Diffusivity ratio D</th><th>Diffusivity η ({units.diffusivity})</th></tr></thead>
                           <tbody>
                             {["1  Dry CO₂", "2  CO₂ + brine", "3  Brine"].map((z, i) => (
-                              <tr key={z}><th>{z}</th><td>{pressure.zones!.consts.m[i].toPrecision(3)}</td><td>{pressure.zones!.cStar[i].toPrecision(3)}</td><td>{pressure.zones!.consts.D[i].toPrecision(3)}</td></tr>
+                              <tr key={z}><th>{z}</th><td>{pressure.zones!.consts.m[i].toPrecision(3)}</td><td>{pressure.zones!.cStar[i].toPrecision(3)}</td><td>{pressure.zones!.consts.D[i].toPrecision(3)}</td><td>{num((consts(aq).eta * pressure.zones!.consts.D[i]) / findUnit("diffusivity", units.diffusivity).f)}</td></tr>
                             ))}
                           </tbody>
                         </table>

@@ -75,7 +75,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["CO₂ density", "Density of CO₂ at reservoir pressure and temperature; converts injected mass into reservoir volume.", "400 to 800 kg/m³"],
     ["Wellbore radius", "Radius at which each well's own pressure is evaluated.", "0.07 to 0.15 m"],
     ["Depth", "Mid-depth of the injection interval; sets the initial and fracture pressures.", "800 to 4000 m"],
-    ["Hydraulic diffusivity (calculated)", "Shown read-only under the inputs and calculated as k / (φ μ ct); it updates as soon as you change permeability, porosity, viscosity or compressibility. Only its display unit can be chosen.", "0.1 to 10 m²/s"],
+    ["Hydraulic diffusivity (calculated)", "Shown read-only under the inputs. With the three-zone pressure model it is shown for each zone (dry CO₂, CO₂ + brine, brine) as η × m / c*, and with the single-phase model as k / (φ μ ct). It updates as soon as you change any input; only its display unit can be chosen.", "brine 0.1 to 10 m²/s"],
     ["Analysis horizon", "Length of the time series, in years. The evaluation-time slider runs from 0 to this value.", "20 to 100 yr"],
     ["Reservoir temperature", "Used for the dry-zone calculation (water content of CO₂).", "40 to 120 °C"],
     ["Brine salinity (NaCl)", "NaCl mass fraction of the brine; lowers the water activity.", "0 to 0.26"],

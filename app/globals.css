@@ -165,3 +165,8 @@ body { min-height: 100vh; display: flex; flex-direction: column; }
 table.edit td.actions { white-space: nowrap; }
 table.edit tr.subrow td { background: color-mix(in srgb, var(--accent) 6%, transparent); }
 table.edit td.sub { font-size: 12px; color: var(--muted); font-style: italic; }
+
+.zonevals { flex: 1 1 auto; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.zrow { display: flex; gap: 8px; align-items: center; }
+.zrow .zlab { flex: 0 0 150px; font-size: 12px; color: var(--muted); }
+.zrow .calcval { flex: 1 1 auto; }
