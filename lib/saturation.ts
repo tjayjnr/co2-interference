@@ -7,7 +7,7 @@
 // residual trapping are ignored; overlapping plumes are added and capped at the maximum saturation.
 
 import type { Aquifer, GridResult, Well } from "./physics.ts";
-import { SECONDS_PER_YEAR, volumeRate } from "./physics.ts";
+import { injectedMt } from "./physics.ts";
 
 export interface SatParams {
   swr: number; // irreducible brine saturation
@@ -69,22 +69,21 @@ export function satProfile(m: SatModel, x: number): number {
   return m.s[lo] + f * (m.s[hi] - m.s[lo]);
 }
 
-/** Effective injection time (years): the plume stops growing at shut-in. */
-export const effTime = (w: Well, tYr: number) => Math.max(0, Math.min(tYr, w.endYr) - w.startYr);
+/** Reservoir volume (m3) of CO2 injected by a well up to time t. */
+export const injectedVolume = (w: Well, tYr: number, a: Aquifer) => (injectedMt(w, tYr) * 1e9) / a.co2DensityKgM3;
 
-/** Radius (m) of the plume front of one well. */
+/** Radius (m) of the plume front of one well (depends on the cumulative volume injected, not on the rate history). */
 export function plumeRadius(w: Well, tYr: number, a: Aquifer, m: SatModel): number {
-  const t = effTime(w, tYr) * SECONDS_PER_YEAR;
-  if (t <= 0) return 0;
-  return Math.sqrt((volumeRate(w, a) * t * m.xiFront) / (Math.PI * a.porosity * a.thicknessM));
+  const v = injectedVolume(w, tYr, a);
+  if (v <= 0) return 0;
+  return Math.sqrt((v * m.xiFront) / (Math.PI * a.porosity * a.thicknessM));
 }
 
 export function satFromWell(w: Well, px: number, py: number, tYr: number, a: Aquifer, m: SatModel): number {
-  const t = effTime(w, tYr) * SECONDS_PER_YEAR;
-  const q = volumeRate(w, a);
-  if (t <= 0 || q <= 0) return 0;
+  const v = injectedVolume(w, tYr, a);
+  if (v <= 0) return 0;
   const r = Math.max(Math.hypot(px - w.x, py - w.y), a.wellboreRadiusM);
-  return satProfile(m, (Math.PI * a.porosity * a.thicknessM * r * r) / (q * t));
+  return satProfile(m, (Math.PI * a.porosity * a.thicknessM * r * r) / v);
 }
 
 export function totalSaturation(wells: Well[], px: number, py: number, tYr: number, a: Aquifer, m: SatModel): number {

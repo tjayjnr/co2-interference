@@ -36,6 +36,7 @@ export interface Well {
   startYr: number;
   endYr: number; // injection stops (shut-in afterwards)
   skin: number; // well skin factor (dimensionless), adds near-well pressure drop while injecting
+  changes?: { yr: number; rateMtpa: number }[]; // optional rate changes between startYr and endYr (new rate from that year on)
 }
 
 export interface Point {
@@ -96,9 +97,46 @@ export function consts(a: Aquifer): SolverConsts {
   };
 }
 
-/** Reservoir-volume injection rate, m3/s. */
+/** Convert a mass rate (Mt/yr) to a reservoir-volume rate (m3/s). */
+export function rateToM3s(mtpa: number, a: Aquifer): number {
+  return (mtpa * 1e9) / a.co2DensityKgM3 / SECONDS_PER_YEAR;
+}
+
+/** Reservoir-volume injection rate of the first rate period, m3/s. */
 export function volumeRate(w: Well, a: Aquifer): number {
-  return (w.rateMtpa * 1e9) / a.co2DensityKgM3 / SECONDS_PER_YEAR;
+  return rateToM3s(w.rateMtpa, a);
+}
+
+export interface RateStep {
+  t: number; // year the rate changes
+  q: number; // new rate, Mt/yr (0 = shut in)
+}
+
+/** Rate history of a well as steps: start of injection, optional rate changes, shut-in (q = 0) at endYr. */
+export function rateSteps(w: Well): RateStep[] {
+  if (!(w.endYr > w.startYr)) return [];
+  const mid = (w.changes ?? []).filter((c) => c.yr > w.startYr && c.yr < w.endYr).sort((x, y) => x.yr - y.yr);
+  return [{ t: w.startYr, q: w.rateMtpa }, ...mid.map((c) => ({ t: c.yr, q: c.rateMtpa })), { t: w.endYr, q: 0 }];
+}
+
+/** Injection rate (Mt/yr) in force at time t; the last rate stays in force through endYr. */
+export function rateAt(w: Well, t: number): number {
+  const st = rateSteps(w);
+  if (!st.length || t <= st[0].t || t > w.endYr) return 0;
+  let q = 0;
+  for (const x of st) if (x.t < t) q = x.q;
+  return q;
+}
+
+/** Mass of CO2 injected (Mt) up to time t. */
+export function injectedMt(w: Well, t: number): number {
+  const st = rateSteps(w);
+  let m = 0;
+  for (let i = 0; i < st.length - 1; i++) {
+    const t1 = Math.min(st[i + 1].t, t);
+    if (t1 > st[i].t) m += st[i].q * (t1 - st[i].t);
+  }
+  return m;
 }
 
 interface Source {
@@ -119,7 +157,8 @@ function sourcesFor(w: Well, b: Boundary): Source[] {
 
 /**
  * Pressure buildup (MPa) at (px, py) and time tYr caused by a single well.
- * Rate is a boxcar: on at startYr, off at endYr (shut-in recovery by superposed negative rate).
+ * Superposition in time over the rate history: every rate change dq_j = q_j - q_(j-1) (including the
+ * final shut-in, q = 0) adds dq_j * E1(r^2 / 4 eta (t - t_j)) for t > t_j.
  */
 export function wellContribution(
   w: Well,
@@ -130,22 +169,23 @@ export function wellContribution(
   b: Boundary,
   c: SolverConsts = consts(a),
 ): number {
-  if (tYr <= w.startYr || w.rateMtpa === 0) return 0;
-  const q = volumeRate(w, a);
+  const steps = rateSteps(w);
+  if (!steps.length || tYr <= steps[0].t) return 0;
   let dp = 0;
   for (const s of sourcesFor(w, b)) {
     let r = Math.hypot(px - s.x, py - s.y);
     if (s.real) r = Math.max(r, a.wellboreRadiusM);
     const r2 = r * r;
-    const t1 = (tYr - w.startYr) * SECONDS_PER_YEAR;
-    let term = expint1(r2 / (4 * c.eta * t1));
-    if (tYr > w.endYr) {
-      const t2 = (tYr - w.endYr) * SECONDS_PER_YEAR;
-      term -= expint1(r2 / (4 * c.eta * t2));
+    let term = 0;
+    let qPrev = 0;
+    for (const st of steps) {
+      if (tYr <= st.t) break;
+      term += rateToM3s(st.q - qPrev, a) * expint1(r2 / (4 * c.eta * (tYr - st.t) * SECONDS_PER_YEAR));
+      qPrev = st.q;
     }
     dp += s.sign * term;
   }
-  return (q * c.mobilityTerm * dp) / 1e6;
+  return (c.mobilityTerm * dp) / 1e6;
 }
 
 /**
@@ -163,7 +203,7 @@ export function hawkinsSkin(permMd: number, ksMd: number, rsM: number, rwM: numb
  */
 export function skinBuildup(w: Well, tYr: number, a: Aquifer, c: SolverConsts = consts(a)): number {
   if (tYr <= w.startYr || tYr > w.endYr) return 0;
-  return (volumeRate(w, a) * c.mobilityTerm * 2 * w.skin) / 1e6;
+  return (rateToM3s(rateAt(w, tYr), a) * c.mobilityTerm * 2 * w.skin) / 1e6;
 }
 
 /** Buildup (MPa) at a well's own wellbore: all wells' Theis contributions plus its own skin. */
@@ -217,24 +257,36 @@ export function arrivalTime(
 ): number | null {
   const c = consts(a);
   const f = (t: number) => wellContribution(src, px, py, t, a, b, c);
-  // Buildup rises monotonically while injecting, so scan only up to endYr.
-  const tEnd = Math.min(horizonYr, src.endYr);
-  if (f(tEnd) < threshold) return null;
-  let lo = src.startYr;
-  let hi = tEnd;
-  for (let i = 0; i < 60; i++) {
-    const mid = 0.5 * (lo + hi);
-    if (f(mid) >= threshold) hi = mid;
-    else lo = mid;
+  // With rate changes the buildup is no longer monotonic, so scan for the first crossing and refine it by bisection.
+  const t0 = src.startYr;
+  const n = 600;
+  let prev = t0;
+  for (let k = 1; k <= n; k++) {
+    const t = t0 + ((horizonYr - t0) * k) / n;
+    if (t <= t0) continue;
+    if (f(t) >= threshold) {
+      let lo = prev;
+      let hi = t;
+      for (let i = 0; i < 60; i++) {
+        const mid = 0.5 * (lo + hi);
+        if (f(mid) >= threshold) hi = mid;
+        else lo = mid;
+      }
+      return hi;
+    }
+    prev = t;
   }
-  return hi;
+  return null;
 }
 
 export function timeGrid(horizonYr: number, wells: Well[], n = 160): number[] {
   const set = new Set<number>();
   for (let i = 1; i <= n; i++) set.add((horizonYr * i) / n);
   for (const w of wells) {
-    for (const t of [w.startYr + 1e-3, w.endYr]) if (t > 0 && t <= horizonYr) set.add(t);
+    const st = rateSteps(w);
+    if (st.length) set.add(st[0].t + 1e-3);
+    for (const x of st) if (x.t > 0 && x.t <= horizonYr) set.add(x.t);
+    if (st.length && st[0].t + 1e-3 <= horizonYr) set.add(st[0].t + 1e-3);
   }
   return [...set].sort((x, y) => x - y);
 }

@@ -53,6 +53,8 @@ export interface ReportData {
   driverHead: string[];
   driverRows: string[][];
   driverSentence: string;
+  scheduleHead: string[];
+  scheduleRows: string[][];
   satHead: string[];
   satRows: string[][];
   satSentence: string;
@@ -90,8 +92,8 @@ export function buildBlocks(d: ReportData): Block[] {
   b.push({ t: "p", text: "where k is permeability, h thickness, μ viscosity, φ porosity, c_t total compressibility, η the hydraulic diffusivity and E₁ the exponential integral:" });
   b.push(E("E₁(u) = integral of ( e^(−s) / s ) ds, taken from s = u to infinity"));
   b.push({ t: "h2", text: "2.2 Multi-well superposition and shut-in" });
-  b.push({ t: "p", text: "Because the governing equation is linear, the buildup at any point is the sum of the contributions of all wells. Each well injects at a constant rate between its start time t_s and end time t_e; shut-in is represented by superposing a negative rate from t_e:" });
-  b.push(E("Δp(x, t) = Σ_i [ Δp_i(x, t − t_s,i) − Δp_i(x, t − t_e,i) ]"));
+  b.push({ t: "p", text: "Because the governing equation is linear, the buildup at any point is the sum of the contributions of all wells and of all rate changes of each well. A well i that injects at rates q_i,1, q_i,2, …, q_i,N (each in force until the next change) is represented by one single-well solution per rate change, with the elapsed time since that change; the final change is the shut-in (q = 0), which superposes a negative rate and makes the pressure recover towards the initial value:" });
+  b.push(E("Δp(x, t) = Σ_i Σ_j (q_i,j − q_i,j−1) · μ / (4π k h) · E₁( r_i² / 4η (t − t_i,j−1) ),   q_i,0 = 0"));
   b.push({ t: "h2", text: "2.3 Boundary conditions" });
   b.push({ t: "p", text: "Three conditions were evaluated: an infinite-acting aquifer; a constant-pressure boundary; and a no-flow (sealing) boundary. The bounded cases are solved with the method of images (Matthews and Russell, 1967): each well is mirrored across the straight boundary, and the image carries the same sign for a no-flow boundary (pressure is reinforced) and the opposite sign for a constant-pressure boundary (pressure is relieved):" });
   b.push(E("Δp = Δp_real ± Δp_image,   x′ = 2x_b − x"));
@@ -111,10 +113,19 @@ export function buildBlocks(d: ReportData): Block[] {
   b.push(E("f_g = 1 / (1 + k_rw μ_g / (k_rg μ_w)),   k_rw = (1 − S*)^n_w,   k_rg = k_rg,max · S*^n_g,   S* = S_g / (1 − S_wr)"));
   b.push({ t: "p", text: "The saturation jumps at the plume front to the Welge tangent value, where df_g/dS_g equals f_g/S_g. Overlapping plumes of neighbouring wells are added and capped at 1 − S_wr, and each plume stops growing at the end of injection of its well. Gravity override, dissolution, capillary effects and residual trapping are not included." });
 
+  b.push({ t: "p", text: "For quadratic Corey curves the shock saturation and the front radius reduce to closed form, which was used to verify the numerical solution (β_g is the slope of the fractional-flow curve at the front and M_λ the end-point mobility ratio):" });
+  b.push(E("r_g(t) = √( r_w² + β_g V(t) / (π φ h) ),   β_g = (1 + √(1 + M_λ)) / (2 (1 − S_wr)),   M_λ = k_rg0 μ_w / (k_rw0 μ_g)"));
+  b.push({ t: "h2", text: "2.7 Dry-zone radius" });
+  b.push({ t: "p", text: "Next to the injector the CO₂ evaporates the brine and leaves a dry zone. A water balance at the moving dry front, using the cumulative reservoir volume V(t) of CO₂ injected, gives" });
+  b.push(E("r_d(t) = √( r_w² + α_d V(t) / (π φ h) ),   α_d = ρ_g c_eq / ( ρ_b (1 − X_s) S_wr + ρ_g c_eq (1 − S_wr) )"));
+  b.push({ t: "p", text: "where c_eq is the mass of water carried per mass of CO₂ at equilibrium. It follows from equality of the water fugacity in the CO₂-rich phase and in the brine, using the IAPWS saturation pressure P_sat(T), a Poynting correction Π_w and the NaCl water activity a_w (screening value Φ_w ≈ 1 unless a different fugacity coefficient is entered). It is evaluated at the initial reservoir pressure P:" });
+  b.push(E("y_w = a_w P_sat Π_w / (Φ_w P),   c_eq = (M_w / M_CO2) · y_w / (1 − y_w),   Π_w = exp[ V_w (P − P_sat) / (R T) ]"));
+
   b.push({ t: "h1", text: "3. Input Data" });
   b.push({ t: "p", text: `Aquifer, fluid and pressure-limit parameters are listed in Table ${tab + 1}, and the well and monitoring-point data in Tables ${tab + 2} and ${tab + 3}. ${d.coordDesc} ${d.boundaryDesc}` });
   b.push(T("Aquifer, fluid and pressure-limit input parameters.", d.paramHead, d.paramRows));
   b.push(T("Injection well data (coordinates, CO₂ injection rate, injection period and skin factor).", d.wellHead, d.wellRows));
+  if (d.scheduleRows.length) b.push(T("Rate changes of the injection wells (the new rate is in force from the stated year until the next change or the shut-in at the end year).", d.scheduleHead, d.scheduleRows));
   if (d.pointRows.length) b.push(T("Monitoring points.", d.pointHead, d.pointRows));
 
   b.push({ t: "h1", text: "4. Results" });
@@ -154,7 +165,7 @@ export function buildBlocks(d: ReportData): Block[] {
     items: [
       "Homogeneous, isotropic, confined aquifer of constant thickness; no leakage through the caprock.",
       "Brine-equivalent single-phase flow: the CO₂ is converted to reservoir volume and brine viscosity is used everywhere. This overstates near-well pressure because CO₂ is less viscous than brine, but is reasonable for far-field interference.",
-      "Wells are evaluated at the wellbore radius with a constant skin factor; wellbore storage, non-Darcy flow and CO₂-mobility effects are not modelled.",
+      "Wells are evaluated at the wellbore radius with a constant skin factor; wellbore storage, non-Darcy flow and CO₂-mobility effects are not modelled. The pressure kernel is the single-phase (brine-equivalent) Theis solution; the three-zone CO₂–brine kernel is not used.",
       "A single straight boundary is represented by image wells; multiple faults, heterogeneity, dissolution and brine production are not modelled.",
       "The results are intended for screening and ranking of well layouts and should be confirmed with numerical reservoir simulation before engineering decisions are made.",
     ],
@@ -163,10 +174,12 @@ export function buildBlocks(d: ReportData): Block[] {
   b.push({
     t: "refs",
     items: [
+      "Buckley, S.E., Leverett, M.C., 1942. Mechanism of fluid displacement in sands. Transactions of the AIME, 146, 107–116.",
       "Earlougher, R.C., Jr., 1977. Advances in Well Test Analysis. SPE Monograph Series, Vol. 5. Society of Petroleum Engineers, Richardson, TX.",
       "Hawkins, M.F., Jr., 1956. A note on the skin effect. Transactions of the AIME, 207, 356–357.",
       "Matthews, C.S., Russell, D.G., 1967. Pressure Buildup and Flow Tests in Wells. SPE Monograph Series, Vol. 1. Society of Petroleum Engineers, New York.",
       "Theis, C.V., 1935. The relation between the lowering of the piezometric surface and the rate and duration of discharge of a well using ground-water storage. Transactions of the American Geophysical Union, 16(2), 519–524.",
+      "Welge, H.J., 1952. A simplified method for computing oil recovery by gas or water drive. Transactions of the AIME, 195, 91–98.",
     ],
   });
   return b;

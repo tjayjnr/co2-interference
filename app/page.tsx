@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { Fragment, useMemo, useRef, useState } from "react";
 import ChartView from "@/components/ChartView";
 import NumField from "@/components/NumField";
 import { render, type ChartSpec, type Series } from "@/lib/charts";
@@ -8,11 +8,12 @@ import { parseWellsCsv, toCsv, download, wellsToCsv, type PointIn, type WellIn }
 import { centroid, project as projectXY, unproject, validLatLon } from "@/lib/geo";
 import { downloadBlob, svgToPngDataUrl } from "@/lib/exportImage";
 import {
-  arrivalTime, buildupGrid, consts, hawkinsSkin, interferenceMatrix, limits, skinBuildup, timeGrid, totalBuildup, wellboreBuildup, wellContribution,
+  arrivalTime, buildupGrid, consts, hawkinsSkin, interferenceMatrix, limits, injectedMt, skinBuildup, timeGrid, totalBuildup, wellboreBuildup, wellContribution,
   type Aquifer, type Boundary, type Point, type Well,
 } from "@/lib/physics";
 import { buildBlocks, renderDocx, renderPdf, type FigureData, type ReportData } from "@/lib/report";
-import { effTime, makeSatModel, plumeRadius, satGrid, type SatParams } from "@/lib/saturation";
+import { dryRadius, type DryParams } from "@/lib/dryzone";
+import { makeSatModel, plumeRadius, satGrid, type SatParams } from "@/lib/saturation";
 import { CAT_LABELS, PRESETS, UNITS, findUnit, type Cat } from "@/lib/units";
 
 const COLORS = ["#2a6fdb", "#d9480f", "#2f9e44", "#9c36b5", "#c2255c", "#1098ad", "#e8890c", "#5c677d"];
@@ -43,6 +44,7 @@ interface Inputs {
   horizon: number;
   threshold: number;
   sat: SatParams;
+  dry: DryParams;
   skin: { ksMd: number; rsM: number; s: number };
   geo: { on: boolean; lat0: number; lon0: number };
   project: string;
@@ -73,6 +75,7 @@ export default function Page() {
   const [pointsL, setPoints] = useState(DEFAULT_POINTS);
   const [horizonL, setHorizon] = useState(40);
   const [satIn, setSatIn] = useState<SatParams>({ swr: 0.2, krgMax: 0.4, nw: 4, ng: 2, muCo2MPas: 0.06 });
+  const [dryIn, setDryIn] = useState<DryParams>({ tempC: 60, salinity: 0.1, brineDensityKgM3: 1050, phiW: 1 });
   const [thresholdL, setThreshold] = useState(0.1);
   const [project, setProject] = useState("");
   const [author, setAuthor] = useState("");
@@ -114,9 +117,9 @@ export default function Page() {
   const geoBad = isGeo && [...rawWells, ...pointsL].some((o) => !validLatLon(o.lat ?? 0, o.lon ?? 0));
 
   const inputsL: Inputs = useMemo(() => ({
-    aq: aqL, boundary: boundaryEff, wells: wellsL, points: pointsP, horizon: horizonL, threshold: thresholdL, sat: satIn,
+    aq: aqL, boundary: boundaryEff, wells: wellsL, points: pointsP, horizon: horizonL, threshold: thresholdL, sat: satIn, dry: dryIn,
     skin: { ksMd: dmg.ksMd, rsM: dmg.rsM, s: calcSkin }, geo: { on: isGeo, lat0: origin?.lat ?? 0, lon0: origin?.lon ?? 0 }, project, author,
-  }), [aqL, boundaryEff, wellsL, pointsP, horizonL, thresholdL, satIn, dmg, calcSkin, isGeo, origin, project, author]);
+  }), [aqL, boundaryEff, wellsL, pointsP, horizonL, thresholdL, satIn, dryIn, dmg, calcSkin, isGeo, origin, project, author]);
 
   // ---- RUN ----
   const [applied, setApplied] = useState<Inputs | null>(null);
@@ -126,7 +129,7 @@ export default function Page() {
   const sig = (i: Inputs) => JSON.stringify({ ...i, wells: i.wells.map(({ name, ...r }) => (void name, r)), points: i.points.map(({ name, ...r }) => (void name, r)) });
   const stale = useMemo(() => applied !== null && sig(applied) !== sig(inputsL), [applied, inputsL]); // eslint-disable-line react-hooks/exhaustive-deps
   const cur = applied ?? inputsL; // before the first RUN nothing is displayed; this only keeps the hooks well-defined
-  const { aq, boundary, horizon, threshold, geo, sat } = cur;
+  const { aq, boundary, horizon, threshold, geo, sat, dry } = cur;
   // Well and point names follow the editable tables immediately; everything else comes from the last run.
   const wellNameKey = rawWells.map((w) => `${w.id}${w.name}`).join("");
   const pointNameKey = pointsL.map((q) => `${q.id}${q.name}`).join("");
@@ -297,9 +300,10 @@ export default function Page() {
   const plumes = useMemo(() => wells.map((w) => ({
     id: w.id,
     name: w.name,
-    massMt: w.rateMtpa * effTime(w, tNow),
+    massMt: injectedMt(w, tNow),
     radius: plumeRadius(w, tNow, aq, satModel),
-  })), [wells, tNow, aq, satModel]);
+    dryR: dryRadius(w, tNow, aq, dry, sat.swr, lim.initialMPa),
+  })), [wells, tNow, aq, satModel, dry, sat.swr, lim.initialMPa]);
 
   // ---- chart specs (display units applied) ----
   const mapSpec = (g: NonNullable<typeof grid>): ChartSpec => ({
@@ -355,6 +359,13 @@ export default function Page() {
 
   const updWell = (id: string, patch: Partial<WellIn>) => setWells((ws) => ws.map((w) => (w.id === id ? { ...w, ...patch } : w)));
   const updPoint = (id: string, patch: Partial<PointIn>) => setPoints((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+
+  const addChange = (id: string) =>
+    setWells((ws) => ws.map((w) => (w.id !== id ? w : { ...w, changes: [...(w.changes ?? []), { yr: +((w.startYr + w.endYr) / 2).toFixed(2), rateMtpa: w.rateMtpa }] })));
+  const updChange = (id: string, idx: number, patch: Partial<{ yr: number; rateMtpa: number }>) =>
+    setWells((ws) => ws.map((w) => (w.id !== id ? w : { ...w, changes: (w.changes ?? []).map((c, i) => (i === idx ? { ...c, ...patch } : c)) })));
+  const delChange = (id: string, idx: number) =>
+    setWells((ws) => ws.map((w) => (w.id !== id ? w : { ...w, changes: (w.changes ?? []).filter((_, i) => i !== idx) })));
 
   const switchCoord = (next: "local" | "geo") => {
     if (next === coordMode) return;
@@ -464,6 +475,10 @@ export default function Page() {
           ["Corey exponent, brine, n_w", num(sat.nw), "–"],
           ["Corey exponent, CO₂, n_g", num(sat.ng), "–"],
           ["CO₂ viscosity, μ_g", uv("viscosity", sat.muCo2MPas), un("viscosity")],
+          ["Reservoir temperature", num(dry.tempC), "°C"],
+          ["Brine salinity, X_s (NaCl mass fraction)", num(dry.salinity), "–"],
+          ["Brine density, ρ_b", uv("density", dry.brineDensityKgM3), un("density")],
+          ["Water fugacity coefficient in CO₂, Φ_w", num(dry.phiW), "–"],
           ...(wells.some((w) => w.skinSrc === "calc")
             ? [["Damaged-zone permeability, k_s", uv("perm", applied.skin.ksMd), un("perm")], ["Damaged-zone radius, r_s", uv("length", applied.skin.rsM), un("length")]]
             : []),
@@ -518,12 +533,14 @@ export default function Page() {
         arrivalRows: arrivals.map((row, i) => [names[i], ...row.map((v) => (v === null ? "–" : v.toFixed(2)))]),
         pointCheckHead: ["Point", `Peak buildup (${pU.label})`, "Time (yr)", "Threshold reached?", "First reached (yr)"],
         pointCheckRows: pointChecks.map((pc) => [pc.name, P(pc.peak, 3), pc.tPeak.toFixed(1), pc.first !== null ? "Yes" : "No", pc.first !== null ? pc.first.toFixed(2) : "–"]),
-        satHead: ["Well", "CO₂ injected (Mt)", `Plume radius (${dU.label})`, "S_g behind front", "Max S_g"],
-        satRows: plumes.map((q) => [q.name, q.massMt.toFixed(2), D(q.radius), satModel.sf.toFixed(2), satModel.smax.toFixed(2)]),
+        scheduleHead: ["Well", "Rate changes from year", `New rate (${rU.label})`],
+        scheduleRows: wells.flatMap((w) => (w.changes ?? []).filter((ch) => ch.yr > w.startYr && ch.yr < w.endYr).sort((x, y) => x.yr - y.yr).map((ch) => [w.name, num(ch.yr), num(ch.rateMtpa / rU.f)])),
+        satHead: ["Well", "CO₂ injected (Mt)", `Plume radius (${dU.label})`, `Dry-zone radius (${dU.label})`, "S_g behind front", "Max S_g"],
+        satRows: plumes.map((q) => [q.name, q.massMt.toFixed(2), D(q.radius), D(q.dryR), satModel.sf.toFixed(2), satModel.smax.toFixed(2)]),
         satSentence: (() => {
           const rs = plumes.map((q) => q.radius);
           const big = plumes.reduce((m, q) => (q.radius > m.radius ? q : m), plumes[0]);
-          return `At t = ${tNow.toFixed(1)} yr the CO₂ plume fronts lie between ${D(Math.min(...rs))} and ${D(Math.max(...rs))} ${dU.label} from the injectors (largest: ${big.name}). Behind the front the CO₂ saturation is ${satModel.sf.toFixed(2)} and it rises to the maximum of ${satModel.smax.toFixed(2)} at the wells. Saturation was calculated per well with the radial Buckley–Leverett solution and added where plumes overlap (capped at the maximum); gravity override, dissolution, capillarity and residual trapping are not included, so the plume extent is an estimate of the piston-like front.`;
+          return `At t = ${tNow.toFixed(1)} yr the CO₂ plume fronts lie between ${D(Math.min(...rs))} and ${D(Math.max(...rs))} ${dU.label} from the injectors (largest: ${big.name}). The dry (evaporation) zone next to the wells extends to ${D(Math.min(...plumes.map((q) => q.dryR)))}–${D(Math.max(...plumes.map((q) => q.dryR)))} ${dU.label}. Behind the front the CO₂ saturation is ${satModel.sf.toFixed(2)} and it rises to the maximum of ${satModel.smax.toFixed(2)} at the wells. Saturation was calculated per well with the radial Buckley–Leverett solution and added where plumes overlap (capped at the maximum); gravity override, dissolution, capillarity and residual trapping are not included, so the plume extent is an estimate of the piston-like front.`;
         })(),
         compareHead: ["Well", ...cases.map((k) => k.label)],
         compareRows: [
@@ -638,6 +655,14 @@ export default function Page() {
               {uf("viscosity", { label: "CO₂ viscosity", value: satIn.muCo2MPas, onChange: (v) => setSatIn((q) => ({ ...q, muCo2MPas: Math.max(v, 1e-4) })), min: 0 })}
             </div>
             <p className="hint">Used for the CO₂ saturation map (radial Buckley–Leverett front around each injector, using the porosity, thickness and brine viscosity above).</p>
+            <h2 style={{ marginTop: 12 }}>Dry-out zone</h2>
+            <div className="grid2">
+              <NumField label="Reservoir temperature" unit="°C" value={dryIn.tempC} onChange={(v) => setDryIn((q) => ({ ...q, tempC: Math.min(Math.max(v, 5), 250) }))} />
+              <NumField label="Brine salinity (NaCl)" unit="mass frac" value={dryIn.salinity} onChange={(v) => setDryIn((q) => ({ ...q, salinity: Math.min(Math.max(v, 0), 0.26) }))} step={0.01} min={0} />
+              {uf("density", { label: "Brine density", value: dryIn.brineDensityKgM3, onChange: (v) => setDryIn((q) => ({ ...q, brineDensityKgM3: Math.max(v, 500) })), min: 500 })}
+              <NumField label="Water fugacity coeff. Φw" unit="in CO₂" value={dryIn.phiW} onChange={(v) => setDryIn((q) => ({ ...q, phiW: Math.min(Math.max(v, 0.01), 1) }))} step={0.05} min={0.01} />
+            </div>
+            <p className="hint">Gives the radius of the dry zone around each well, where the injected CO₂ has evaporated the brine (water balance at the dry front). Φw = 1 is the screening approximation; a smaller value (CO₂ carries more water) enlarges the dry zone.</p>
           </section>
 
           <section>
@@ -706,7 +731,8 @@ export default function Page() {
                 <thead><tr><th>Name</th>{isGeo ? <><th>Lon (°)</th><th>Lat (°)</th></> : <><th>x {unitHead("distance")}</th><th>y {unitHead("distance")}</th></>}<th>Rate {unitHead("rate")}</th><th>Start</th><th>End</th><th>Skin</th><th /></tr></thead>
                 <tbody>
                   {rawWells.map((w) => (
-                    <tr key={w.id}>
+                    <Fragment key={w.id}>
+                    <tr>
                       <td><input value={w.name} aria-label="Well name" onChange={(e) => updWell(w.id, { name: e.target.value })} /></td>
                       {isGeo ? (
                         <>
@@ -723,14 +749,28 @@ export default function Page() {
                       <td><NumField ariaLabel={`${w.name} start`} value={w.startYr} onChange={(v) => updWell(w.id, { startYr: v })} min={0} /></td>
                       <td><NumField ariaLabel={`${w.name} end`} value={w.endYr} onChange={(v) => updWell(w.id, { endYr: v })} min={0} /></td>
                       <td><input type="number" step="any" className="skininput" aria-label={`${w.name} skin`} value={w.skinText} placeholder={calcSkin.toFixed(2)} title={`Type a skin value, or leave blank to use the calculated value (${calcSkin.toFixed(2)})`} onChange={(e) => updWell(w.id, { skinText: e.target.value })} /></td>
-                      <td><button className="x" aria-label={`Remove ${w.name}`} onClick={() => setWells((ws) => ws.filter((q) => q.id !== w.id))}>×</button></td>
+                      <td className="actions">
+                        <button className="x" aria-label={`Add a rate change for ${w.name}`} title="Add a rate change (a new rate from a later year)" onClick={() => addChange(w.id)}>＋</button>
+                        <button className="x" aria-label={`Remove ${w.name}`} onClick={() => setWells((ws) => ws.filter((q) => q.id !== w.id))}>×</button>
+                      </td>
                     </tr>
+                    {(w.changes ?? []).map((ch, ci) => (
+                      <tr key={`${w.id}-c${ci}`} className="subrow">
+                        <td className="sub">↳ rate change</td>
+                        <td colSpan={2} className="sub">new rate from year →</td>
+                        <td>{uf("rate", { ariaLabel: `${w.name} new rate ${ci + 1}`, value: ch.rateMtpa, onChange: (v) => updChange(w.id, ci, { rateMtpa: v }), min: 0 })}</td>
+                        <td><NumField ariaLabel={`${w.name} rate change year ${ci + 1}`} value={ch.yr} onChange={(v) => updChange(w.id, ci, { yr: v })} min={0} /></td>
+                        <td colSpan={2} />
+                        <td><button className="x" aria-label={`Remove rate change ${ci + 1} of ${w.name}`} onClick={() => delChange(w.id, ci)}>×</button></td>
+                      </tr>
+                    ))}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
             </div>
             <button className="ghost" onClick={() => setWells((ws) => [...ws, { id: uid("w"), name: `INJ-${ws.length + 1}`, x: 0, y: 0, lon: origin?.lon ?? geoRef.lon, lat: origin?.lat ?? geoRef.lat, rateMtpa: 1, startYr: 0, endYr: 25, skin: 0, skinText: "" }])}>+ Add well</button>
-            <p className="hint">Skin: type a value if you have it; leave it blank and the app calculates it (grey number = calculated value). CSV columns (metres or degrees, Mt/yr): name, x_m, y_m <i>or</i> lon_deg, lat_deg, rate_Mtpa, start_yr, end_yr, skin (optional). Excel: save as CSV.</p>
+            <p className="hint">Rate: use ＋ on a well to add a rate change (a new rate from a later year; the last rate stays in force until End, then the well is shut in). Skin: type a value if you have it; leave it blank and the app calculates it (grey number = calculated value). CSV columns (metres or degrees, Mt/yr): name, x_m, y_m <i>or</i> lon_deg, lat_deg, rate_Mtpa, start_yr, end_yr, skin (optional), changes (optional, e.g. 8:0.5|15:0.2). Excel: save as CSV.</p>
           </section>
 
           <section>
@@ -843,11 +883,11 @@ export default function Page() {
                   <p className="caption" style={{ marginTop: 0 }}>Tip: click a well name in the table to rename it. The new name appears at once on every chart, table and report (you can also edit it in the Injection wells table).</p>
                   <div className="tablewrap">
                     <table className="matrix">
-                      <thead><tr><th>Well</th><th>CO₂ injected (Mt)</th><th>Plume radius ({dU.label})</th><th>Sg behind front</th><th>Max Sg (at well)</th></tr></thead>
+                      <thead><tr><th>Well</th><th>CO₂ injected (Mt)</th><th>Plume radius ({dU.label})</th><th>Dry-zone radius ({dU.label})</th><th>Sg behind front</th><th>Max Sg (at well)</th></tr></thead>
                       <tbody>
                         {plumes.map((q) => (
                           <tr key={q.id}>
-                            <th><input className="nameedit" aria-label={`Rename ${q.name}`} title="Click to rename this well" value={q.name} onChange={(e) => updWell(q.id, { name: e.target.value })} /></th><td>{q.massMt.toFixed(2)}</td><td>{D(q.radius)}</td><td>{satModel.sf.toFixed(2)}</td><td>{satModel.smax.toFixed(2)}</td>
+                            <th><input className="nameedit" aria-label={`Rename ${q.name}`} title="Click to rename this well" value={q.name} onChange={(e) => updWell(q.id, { name: e.target.value })} /></th><td>{q.massMt.toFixed(2)}</td><td>{D(q.radius)}</td><td>{D(q.dryR)}</td><td>{satModel.sf.toFixed(2)}</td><td>{satModel.smax.toFixed(2)}</td>
                           </tr>
                         ))}
                       </tbody>

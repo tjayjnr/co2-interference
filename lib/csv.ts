@@ -12,11 +12,11 @@ export interface PointIn extends Point {
   lat?: number;
 }
 
-const HEADER_LOCAL = "name,x_m,y_m,rate_Mtpa,start_yr,end_yr,skin";
-const HEADER_GEO = "name,lon_deg,lat_deg,rate_Mtpa,start_yr,end_yr,skin";
+const HEADER_LOCAL = "name,x_m,y_m,rate_Mtpa,start_yr,end_yr,skin,changes";
+const HEADER_GEO = "name,lon_deg,lat_deg,rate_Mtpa,start_yr,end_yr,skin,changes";
 
 export function wellsToCsv(wells: WellIn[], geo: boolean): string {
-  const rows = wells.map((w) => [w.name, geo ? w.lon ?? 0 : w.x, geo ? w.lat ?? 0 : w.y, w.rateMtpa, w.startYr, w.endYr, w.skinText].join(","));
+  const rows = wells.map((w) => [w.name, geo ? w.lon ?? 0 : w.x, geo ? w.lat ?? 0 : w.y, w.rateMtpa, w.startYr, w.endYr, w.skinText, (w.changes ?? []).map((c) => `${c.yr}:${c.rateMtpa}`).join("|")].join(","));
   return [geo ? HEADER_GEO : HEADER_LOCAL, ...rows].join("\n");
 }
 
@@ -36,7 +36,8 @@ export function toCsv(rows: (string | number)[][]): string {
 /**
  * Parse a wells CSV. Local: name,x_m,y_m,rate_Mtpa,start_yr,end_yr[,skin].
  * Geographic (detected from a header containing "lon"): name,lon_deg,lat_deg,rate_Mtpa,start_yr,end_yr[,skin].
- * A blank skin means "calculate it". Header optional; , ; or tab delimited.
+ * A blank skin means "calculate it". Optional last column "changes": rate changes as year:rate pairs separated by | (e.g. 8:0.5|15:0.2).
+ * Header optional; , ; or tab delimited.
  */
 export function parseWellsCsv(text: string): { wells: WellIn[]; geo: boolean } {
   const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
@@ -53,6 +54,15 @@ export function parseWellsCsv(text: string): { wells: WellIn[]; geo: boolean } {
     const nums = r.slice(1, 6).map(Number);
     if (nums.some(Number.isNaN)) throw new Error(`Row ${i + 1}: non-numeric value`);
     const skinText = (r[6] ?? "").trim();
+    const changes = (r[7] ?? "")
+      .split("|")
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .map((x) => {
+        const [yr, q] = x.split(":").map(Number);
+        if (!Number.isFinite(yr) || !Number.isFinite(q)) throw new Error(`Row ${i + 1}: rate changes must look like 8:0.5|15:0.2 (year:rate)`);
+        return { yr, rateMtpa: q };
+      });
     if (skinText !== "" && Number.isNaN(Number(skinText))) throw new Error(`Row ${i + 1}: skin must be a number or blank`);
     if (geo && (Math.abs(nums[1]) > 90 || Math.abs(nums[0]) > 180)) throw new Error(`Row ${i + 1}: longitude/latitude out of range`);
     return {
@@ -67,6 +77,7 @@ export function parseWellsCsv(text: string): { wells: WellIn[]; geo: boolean } {
       endYr: nums[4],
       skin: 0,
       skinText,
+      changes,
     };
   });
   return { wells, geo };

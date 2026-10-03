@@ -169,3 +169,102 @@ test("CO2 plume radius grows with sqrt(time), stops at shut-in, and overlap is c
   const B = { ...W("b", 0, 0, 1, 0, 10), skin: 0 };
   assert.ok(totalSaturation([A, B], 0, 0, 5, aq, m) <= m.smax + 1e-12);
 });
+
+import { rateSteps, rateAt, injectedMt, rateToM3s, timeGrid } from "../lib/physics.ts";
+import { waterSaturationPressureMPa, waterActivity, equilibriumWaterContent, evaporationCoefficient, dryRadius } from "../lib/dryzone.ts";
+
+test("rate schedules: single-period case unchanged, steps and cumulative mass", () => {
+  const A = { ...W("a", 0, 0, 1, 2, 12), skin: 0, changes: [{ yr: 6, rateMtpa: 0.5 }, { yr: 9, rateMtpa: 2 }] };
+  assert.deepEqual(rateSteps(A).map((s) => [s.t, s.q]), [[2, 1], [6, 0.5], [9, 2], [12, 0]]);
+  assert.equal(rateAt(A, 1), 0); assert.equal(rateAt(A, 4), 1); assert.equal(rateAt(A, 7), 0.5); assert.equal(rateAt(A, 12), 2); assert.equal(rateAt(A, 13), 0);
+  close(injectedMt(A, 12), 4 * 1 + 3 * 0.5 + 3 * 2); close(injectedMt(A, 100), 11.5); close(injectedMt(A, 4), 2);
+  // a change that restates the same rate must not alter the pressure
+  const B = { ...A, changes: [{ yr: 6, rateMtpa: 1 }], endYr: 12 }, C = { ...A, changes: [] };
+  close(wellContribution(B, 800, 0, 10, aq, none), wellContribution(C, 800, 0, 10, aq, none), 1e-12);
+  assert.ok(timeGrid(40, [A]).includes(6) && timeGrid(40, [A]).includes(9));
+});
+
+test("variable rate: rate drop partly offsets the buildup, pressure returns to zero after shut-in", () => {
+  const A = { ...W("a", 0, 0, 1, 0, 20), skin: 0, changes: [{ yr: 10, rateMtpa: 0.4 }] };
+  const before = wellContribution(A, 500, 0, 9.999, aq, none), after = wellContribution(A, 500, 0, 12, aq, none);
+  assert.ok(after < before);
+  const late = wellContribution(A, 500, 0, 400, aq, none);
+  assert.ok(late > 0 && late < 0.02 * before);
+  const s = { ...A, skin: 4 };
+  close(skinBuildup(s, 5, aq), 2.5 * skinBuildup(s, 15, aq), 1e-9);
+});
+
+test("derivation validation: field-unit single-well and two-well superposition agree with the SI implementation", () => {
+  // field units: k=76 md, mu=1 cp, B=1.08, h=20 ft, phi=0.2, ct=1e-5 1/psi, rw=0.25 ft
+  const k = 76, mu = 1, B = 1.08, h = 20, phi = 0.2, ct = 1e-5, rw = 0.25;
+  const pD = (rD, tD) => 0.5 * expint1(rD * rD / (4 * tD));
+  const tD = (t) => 0.0002637 * k * t / (phi * mu * ct * rw * rw);
+  const fieldDp = (qB, r, t, s = 0) => 141.2 * mu / (k * h) * qB * (pD(r / rw, tD(t)) + s);
+  const dp40 = fieldDp(100 * B, rw, 40);
+  assert.ok(Math.abs(dp40 - 82.7) < 1.0, `field dp ${dp40}`);
+  const FT = 0.3048, PSI = 0.006894757, BBL = 0.158987294928;
+  const si = { permMd: k, thicknessM: h * FT, porosity: phi, compressibilityPerMPa: ct / PSI, viscosityMPas: mu, co2DensityKgM3: 1000, wellboreRadiusM: rw * FT,
+    depthM: 2000, hydroGradientMPaPerM: 0.0105, fracGradientMPaPerM: 0.0165, safetyFactor: 0.9 };
+  const m3s = (rbd) => rbd * BBL / 86400;
+  const mtpa = (rbd) => m3s(rbd) * 1000 * 365.25 * 86400 / 1e9;
+  const yr = (hr) => hr / (365.25 * 24);
+  const W1 = { id: "1", name: "1", x: 0, y: 0, rateMtpa: mtpa(100 * B), startYr: 0, endYr: yr(1e9), skin: 0, changes: [] };
+  close(wellContribution(W1, 0, 0, yr(40), si, none) / PSI, dp40, 2e-3);
+  const W2a = { id: "a", name: "a", x: 0, y: 0, rateMtpa: mtpa(100 * B), startYr: 0, endYr: yr(1e9), skin: 5, changes: [{ yr: yr(10), rateMtpa: mtpa(50 * B) }] };
+  const W2b = { id: "b", name: "b", x: 100 * FT, y: 0, rateMtpa: mtpa(25 * B), startYr: 0, endYr: yr(1e9), skin: 1.7, changes: [{ yr: yr(8), rateMtpa: mtpa(100 * B) }] };
+  const t = 11;
+  const own1 = fieldDp(100 * B, rw, t) + fieldDp((50 - 100) * B, rw, t - 10) + 141.2 * mu / (k * h) * 50 * B * 5;
+  const own2 = fieldDp(25 * B, rw, t) + fieldDp((100 - 25) * B, rw, t - 8) + 141.2 * mu / (k * h) * 100 * B * 1.7;
+  const cross12 = fieldDp(100 * B, 100, t) + fieldDp(-50 * B, 100, t - 10);
+  const cross21 = fieldDp(25 * B, 100, t) + fieldDp(75 * B, 100, t - 8);
+  const p1 = totalBuildup([W2a, W2b], W2a.x, W2a.y, yr(t), si, none) + skinBuildup(W2a, yr(t), si);
+  const p2 = totalBuildup([W2a, W2b], W2b.x, W2b.y, yr(t), si, none) + skinBuildup(W2b, yr(t), si);
+  close(p1 / PSI, own1 + cross21, 2e-3);
+  close(p2 / PSI, own2 + cross12, 2e-3);
+  assert.ok(rateToM3s(1, si) > 0);
+});
+
+test("derivation validation: closed-form gas front (beta_g) matches the numerical Buckley-Leverett model", () => {
+  const swr = 0.56, M = (0.33 * 0.30) / (1 * 0.064);
+  close(M, 1.5469, 1e-4);
+  const beta = (1 + Math.sqrt(1 + M)) / (2 * (1 - swr));
+  close(beta, 2.950, 2e-3);
+  const m = makeSatModel({ swr, krgMax: 0.33, nw: 2, ng: 2, muCo2MPas: 0.064 }, 0.30);
+  assert.ok(Math.abs(m.xiFront / beta - 1) < 5e-3, `numerical ${m.xiFront} vs closed form ${beta}`);
+  const V = 1.0e6 * 0.0025 * 7300;
+  const rg = Math.sqrt((beta * V) / (Math.PI * 0.15 * 40));
+  assert.ok(Math.abs(rg - 1690) < 5, `rg ${rg}`);
+  assert.ok(Math.abs(rg / 1701 - 1) < 0.01);
+  const aq2 = { ...aq, porosity: 0.15, thicknessM: 40, co2DensityKgM3: 700, wellboreRadiusM: 0.1 };
+  const mass = (V * 700) / 1e9;
+  const wY = 7300 / 365.25;
+  const Wf = { id: "f", name: "f", x: 0, y: 0, rateMtpa: mass / wY, startYr: 0, endYr: 100, skin: 0 };
+  assert.ok(Math.abs(plumeRadius(Wf, wY, aq2, m) / rg - 1) < 5e-3);
+});
+
+test("dry zone: IAPWS saturation pressure, water activity and evaporation front", () => {
+  close(waterSaturationPressureMPa(373.15), 0.101325, 5e-3);
+  close(waterSaturationPressureMPa(333.15), 0.019946, 5e-3);
+  close(waterActivity(0), 1, 1e-12);
+  assert.ok(waterActivity(0.1) < 0.95 && waterActivity(0.1) > 0.9);
+  const d = { tempC: 60, salinity: 0.1, brineDensityKgM3: 1050, phiW: 1 };
+  const ceq = equilibriumWaterContent(21, d);
+  assert.ok(ceq > 1e-4 && ceq < 2e-3, `ceq ${ceq}`);
+  assert.ok(equilibriumWaterContent(21, { ...d, phiW: 0.3 }) > 2.5 * ceq);
+  const alpha = evaporationCoefficient(21, aq, d, 0.2);
+  assert.ok(alpha > 0 && alpha < 0.05);
+  const Wd = { ...W("d", 0, 0, 1, 0, 20), skin: 0 };
+  const r10 = dryRadius(Wd, 10, aq, d, 0.2, 21), r20 = dryRadius(Wd, 20, aq, d, 0.2, 21);
+  assert.ok(r10 > aq.wellboreRadiusM && r20 > r10);
+  assert.ok(r20 < 0.5 * plumeRadius(Wd, 20, aq, makeSatModel({ swr: 0.2, krgMax: 0.4, nw: 4, ng: 2, muCo2MPas: 0.06 }, 0.5)));
+  close((r20 ** 2 - aq.wellboreRadiusM ** 2) / (r10 ** 2 - aq.wellboreRadiusM ** 2), 2, 1e-9);
+});
+
+test("wells CSV: rate changes round trip", () => {
+  const text = "name,x_m,y_m,rate_Mtpa,start_yr,end_yr,skin,changes\nA,0,0,1,0,25,,8:0.5|15:0.2";
+  const r = parseWellsCsv(text);
+  assert.deepEqual(r.wells[0].changes, [{ yr: 8, rateMtpa: 0.5 }, { yr: 15, rateMtpa: 0.2 }]);
+  assert.ok(wellsToCsv(r.wells, false).includes("8:0.5|15:0.2"));
+  assert.deepEqual(parseWellsCsv("A,0,0,1,0,25").wells[0].changes, []);
+  assert.throws(() => parseWellsCsv("A,0,0,1,0,25,,8-0.5"));
+});

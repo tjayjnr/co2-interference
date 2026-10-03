@@ -96,7 +96,11 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Corey exponent, brine", "Shape of the brine relative-permeability curve.", "4"],
     ["Corey exponent, CO₂", "Shape of the CO₂ relative-permeability curve.", "2"],
     ["CO₂ viscosity", "Viscosity of CO₂ at reservoir conditions.", "0.06 mPa·s"],
-  ], "The defaults are illustrative; replace them with values for your formation (for example from core measurements).");
+    ["Reservoir temperature", "Used for the dry-zone calculation (water content of CO₂).", "40 to 120 °C"],
+    ["Brine salinity (NaCl)", "NaCl mass fraction of the brine; lowers the water activity.", "0 to 0.26"],
+    ["Brine density", "Density of the formation brine at reservoir conditions.", "1000 to 1200 kg/m³"],
+    ["Water fugacity coeff. Φw", "Fugacity coefficient of water in the CO₂-rich phase. 1 is the screening approximation; smaller values mean the CO₂ carries more water and the dry zone is larger.", "0.2 to 1"],
+  ], "The defaults are illustrative; replace them with values for your formation (for example from core measurements and fluid properties).");
 
   b.push({ t: "h2", text: "4.5 Well skin" });
   p("Skin describes extra pressure loss (positive skin, formation damage) or gain (negative skin, stimulation) near a well. Skin is set per well in the Skin column of the wells table:");
@@ -122,12 +126,16 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   table("Table 5. Columns of the wells table.", ["Column", "Meaning"], [
     ["Name", "Label shown on charts, tables and reports. Type any name you like; it updates everywhere at once, without a new RUN. You can also rename a well directly in the plume table on the CO₂ saturation tab."],
     ["x, y (or Lon, Lat)", "Well location. Choose the units with the selector in the column header."],
-    ["Rate", "CO₂ injection rate (default unit Mt/yr). Change the unit in the column header."],
+    ["Rate", "CO₂ injection rate of the first period (default unit Mt/yr). Change the unit in the column header."],
     ["Start, End", "Year injection starts and stops. After the end year the well is shut in and its pressure recovers."],
     ["Skin", "Typed skin value, or empty to calculate it (Section 4.5)."],
+    ["＋", "Adds a rate change to the well (Section 4.7.1)."],
     ["×", "Removes the well."],
   ]);
   p("Use + Add well to add a well. Import CSV loads a table of wells from a file and Export saves the current table (Section 9).");
+
+  b.push({ t: "h2", text: "4.7.1 Rate changes (variable injection rate)" });
+  p("A well can inject at more than one rate. Click ＋ at the end of a well's row to add a rate change: a new row appears below the well with the year from which the new rate applies and the new rate. Add as many changes as you need. Each rate stays in force until the next change, the last rate stays in force until the End year, and the well is then shut in. The pressure effect of every change is added by superposition in time, so a rate reduction partly offsets the earlier buildup and the pressure recovers after shut-in. Skin acts on the rate in force, and the CO₂ plume depends on the total volume injected so far.");
 
   b.push({ t: "h2", text: "4.8 Real-world coordinates (longitude and latitude)" });
   p("If your wells are known as longitude and latitude, set Location input to “Longitude / latitude (real-world)”. The x and y columns are replaced by Lon (°) and Lat (°); the same applies to the monitoring points. Enter WGS84 decimal degrees, with east and north positive.");
@@ -160,7 +168,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
 
   b.push({ t: "h2", text: "6.2 CO₂ saturation tab" });
   fig("sat", "Figure 6. CO₂ saturation map with the plume of each injector and the table of plume radii.");
-  p("The map shows the saturation of injected CO₂ (Sg) at the evaluation time, with a labelled colour scale from 0 up to the maximum saturation. Each injector creates a roughly circular plume; the well is drawn as a thin vertical line that starts at the plume centre and points upward, with its name centred on top of the line (click a name in the table below the map to rename it); the plume edge is where the colour returns to the dark-blue brine background. Plumes of neighbouring wells are added where they overlap. Below the map, a table lists for each well the mass injected so far, the plume radius, the saturation just behind the front and the maximum saturation at the well. Drag the Evaluation time slider to watch the plumes grow; each plume stops growing when its well is shut in.");
+  p("The map shows the saturation of injected CO₂ (Sg) at the evaluation time, with a labelled colour scale from 0 up to the maximum saturation. Each injector creates a roughly circular plume; the well is drawn as a thin vertical line that starts at the plume centre and points upward, with its name centred on top of the line (click a name in the table below the map to rename it); the plume edge is where the colour returns to the dark-blue brine background. Plumes of neighbouring wells are added where they overlap. Below the map, a table lists for each well the mass injected so far, the plume radius (the CO₂ front), the dry-zone radius (the evaporation front next to the well, where the brine has been dried out), the saturation just behind the front and the maximum saturation at the well. Drag the Evaluation time slider to watch the plumes grow; each plume stops growing when its well is shut in.");
 
   b.push({ t: "h2", text: "6.3 Pressure map tab" });
   fig("pressure-map", "Figure 7. Pressure buildup map with the interference-threshold and allowable-buildup contours.");
@@ -203,17 +211,18 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   h1("9. File formats");
   p("The wells table can be saved with Export and loaded again with Import CSV. Excel files should be saved as CSV first. Columns are separated by commas, semicolons or tabs, and the header row is optional.");
   table("Table 7. Wells CSV columns.", ["Mode", "Columns (in order)"], [
-    ["Local coordinates", "name, x_m, y_m, rate_Mtpa, start_yr, end_yr, skin (optional)"],
-    ["Longitude / latitude", "name, lon_deg, lat_deg, rate_Mtpa, start_yr, end_yr, skin (optional)"],
-  ], "An empty skin means “calculate it”. A header whose second column contains “lon” switches the application to longitude / latitude mode on import.");
+    ["Local coordinates", "name, x_m, y_m, rate_Mtpa, start_yr, end_yr, skin (optional), changes (optional)"],
+    ["Longitude / latitude", "name, lon_deg, lat_deg, rate_Mtpa, start_yr, end_yr, skin (optional), changes (optional)"],
+  ], "An empty skin means “calculate it”. The optional changes column lists rate changes as year:rate pairs separated by | , for example 8:0.5|15:0.2 (the rate becomes 0.5 Mt/yr from year 8 and 0.2 Mt/yr from year 15). A header whose second column contains “lon” switches the application to longitude / latitude mode on import.");
   p("Example (local coordinates):  INJ-1,0,0,1,0,25,   (skin left empty)   and   INJ-2,4000,1000,1,2,25,4.5");
 
   h1("10. Model summary and limitations");
-  p("Pressure buildup is calculated from the Theis line-source solution for each well, added together in space and time, with shut-in modelled by a negative rate after the end year and a straight boundary modelled with image wells. The wellbore pressure adds the skin term. CO₂ saturation follows from the radial Buckley–Leverett (Welge) solution with Corey relative permeabilities. The report contains the equations.");
+  p("Pressure buildup is calculated from the Theis line-source solution for each well, added together in space and time (one term for every rate change of every well, the shut-in being a change to zero rate), with a straight boundary modelled with image wells. The wellbore pressure adds the skin term. CO₂ saturation follows from the radial Buckley–Leverett (Welge) solution with Corey relative permeabilities. The report contains the equations.");
   bullets(
     "Homogeneous, isotropic, confined aquifer of constant thickness; no leakage through the caprock.",
     "Brine-equivalent flow for the pressure calculation: CO₂ is converted to reservoir volume with the CO₂ density and brine viscosity is used everywhere. This overstates near-well pressure but is reasonable for interference between wells.",
-    "The CO₂ saturation map neglects gravity override, dissolution, capillary pressure and residual trapping, and does not feel the aquifer boundary.",
+    "The CO₂ saturation map neglects gravity override, dissolution, capillary pressure and residual trapping, and does not feel the aquifer boundary. The dry-zone radius is a screening estimate (water fugacity coefficient set by you, default 1) evaluated at the initial reservoir pressure.",
+    "The pressure calculation uses the single-phase (brine-equivalent) kernel everywhere; the different mobility and compressibility of the dry, two-phase and brine zones are not included in the pressure response.",
     "Skin is a constant factor applied only at the injector while it injects.",
     "Only one straight boundary can be modelled. Multiple faults, heterogeneity, brine production and geomechanical effects are not included.",
     "Results are for screening and ranking; confirm with numerical simulation before making decisions.",
