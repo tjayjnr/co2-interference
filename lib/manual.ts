@@ -77,6 +77,10 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Depth", "Mid-depth of the injection interval; sets the initial and fracture pressures.", "800 to 4000 m"],
     ["Hydraulic diffusivity (calculated)", "Shown read-only under the inputs and calculated as k / (φ μ ct); it updates as soon as you change permeability, porosity, viscosity or compressibility. Only its display unit can be chosen.", "0.1 to 10 m²/s"],
     ["Analysis horizon", "Length of the time series, in years. The evaluation-time slider runs from 0 to this value.", "20 to 100 yr"],
+    ["Reservoir temperature", "Used for the dry-zone calculation (water content of CO₂).", "40 to 120 °C"],
+    ["Brine salinity (NaCl)", "NaCl mass fraction of the brine; lowers the water activity.", "0 to 0.26"],
+    ["Brine density", "Density of the formation brine at reservoir conditions.", "1000 to 1200 kg/m³"],
+    ["Water fugacity coeff. Φw", "Fugacity coefficient of water in the CO₂-rich phase. 1 is the screening approximation; smaller values mean the CO₂ carries more water and the dry zone is larger.", "0.2 to 1"],
   ]);
 
   b.push({ t: "h2", text: "4.2.1 Pressure model" });
@@ -107,11 +111,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Corey exponent, brine", "Shape of the brine relative-permeability curve.", "4"],
     ["Corey exponent, CO₂", "Shape of the CO₂ relative-permeability curve.", "2"],
     ["CO₂ viscosity", "Viscosity of CO₂ at reservoir conditions.", "0.06 mPa·s"],
-    ["Reservoir temperature", "Used for the dry-zone calculation (water content of CO₂).", "40 to 120 °C"],
-    ["Brine salinity (NaCl)", "NaCl mass fraction of the brine; lowers the water activity.", "0 to 0.26"],
-    ["Brine density", "Density of the formation brine at reservoir conditions.", "1000 to 1200 kg/m³"],
-    ["Water fugacity coeff. Φw", "Fugacity coefficient of water in the CO₂-rich phase. 1 is the screening approximation; smaller values mean the CO₂ carries more water and the dry zone is larger.", "0.2 to 1"],
-  ], "The defaults are illustrative; replace them with values for your formation (for example from core measurements and fluid properties).");
+  ], "The defaults are illustrative; replace them with values for your formation (for example from core measurements). The temperature, salinity, brine density and Φw listed in Table 2 also feed the dry-zone radius shown with the saturation results.");
 
   b.push({ t: "h2", text: "4.5 Well skin" });
   p("Skin describes extra pressure loss (positive skin, formation damage) or gain (negative skin, stimulation) near a well. Skin is set per well in the Skin column of the wells table:");

@@ -642,6 +642,10 @@ export default function Page() {
               {uf("length", { label: "Wellbore radius", value: aqL.wellboreRadiusM, onChange: setA("wellboreRadiusM"), min: 0.01 })}
               {uf("length", { label: "Depth", value: aqL.depthM, onChange: setA("depthM"), min: 0 })}
               <NumField label="Analysis horizon" unit="yr" value={horizonL} onChange={(v) => setHorizon(Math.max(1, v))} min={1} />
+              <NumField label="Reservoir temperature" unit="°C" value={dryIn.tempC} onChange={(v) => setDryIn((q) => ({ ...q, tempC: Math.min(Math.max(v, 5), 250) }))} />
+              <NumField label="Brine salinity (NaCl)" unit="mass frac" value={dryIn.salinity} onChange={(v) => setDryIn((q) => ({ ...q, salinity: Math.min(Math.max(v, 0), 0.26) }))} step={0.01} min={0} />
+              {uf("density", { label: "Brine density", value: dryIn.brineDensityKgM3, onChange: (v) => setDryIn((q) => ({ ...q, brineDensityKgM3: Math.max(v, 500) })), min: 500 })}
+              <NumField label="Water fugacity coeff. Φw" unit="in CO₂" value={dryIn.phiW} onChange={(v) => setDryIn((q) => ({ ...q, phiW: Math.min(Math.max(v, 0.01), 1) }))} step={0.05} min={0.01} />
             </div>
             <div className="field calcfield">
               <span>Hydraulic diffusivity η <em>calculated = k / (φ·μ·c<sub>t</sub>), updates with the inputs above</em></span>
@@ -697,15 +701,7 @@ export default function Page() {
               <NumField label="Corey exponent, CO₂" value={satIn.ng} onChange={(v) => setSatIn((q) => ({ ...q, ng: Math.max(v, 1) }))} step={0.5} min={1} />
               {uf("viscosity", { label: "CO₂ viscosity", value: satIn.muCo2MPas, onChange: (v) => setSatIn((q) => ({ ...q, muCo2MPas: Math.max(v, 1e-4) })), min: 0 })}
             </div>
-            <p className="hint">Used for the CO₂ saturation map (radial Buckley–Leverett front around each injector, using the porosity, thickness and brine viscosity above).</p>
-            <h2 style={{ marginTop: 12 }}>Dry-out zone</h2>
-            <div className="grid2">
-              <NumField label="Reservoir temperature" unit="°C" value={dryIn.tempC} onChange={(v) => setDryIn((q) => ({ ...q, tempC: Math.min(Math.max(v, 5), 250) }))} />
-              <NumField label="Brine salinity (NaCl)" unit="mass frac" value={dryIn.salinity} onChange={(v) => setDryIn((q) => ({ ...q, salinity: Math.min(Math.max(v, 0), 0.26) }))} step={0.01} min={0} />
-              {uf("density", { label: "Brine density", value: dryIn.brineDensityKgM3, onChange: (v) => setDryIn((q) => ({ ...q, brineDensityKgM3: Math.max(v, 500) })), min: 500 })}
-              <NumField label="Water fugacity coeff. Φw" unit="in CO₂" value={dryIn.phiW} onChange={(v) => setDryIn((q) => ({ ...q, phiW: Math.min(Math.max(v, 0.01), 1) }))} step={0.05} min={0.01} />
-            </div>
-            <p className="hint">Gives the radius of the dry zone around each well, where the injected CO₂ has evaporated the brine (water balance at the dry front). Φw = 1 is the screening approximation; a smaller value (CO₂ carries more water) enlarges the dry zone.</p>
+            <p className="hint">Used for the CO₂ saturation map (radial Buckley–Leverett front around each injector, using the porosity, thickness and brine viscosity above). The dry-zone radius shown with it comes from the reservoir temperature, brine salinity, brine density and water fugacity coefficient in the Input section (Φw = 1 is the screening value; a smaller value means the CO₂ carries more water and the dry zone is larger).</p>
           </section>
 
           <section>
