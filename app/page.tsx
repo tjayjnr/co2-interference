@@ -3,7 +3,7 @@
 import { Fragment, useMemo, useRef, useState } from "react";
 import ChartView from "@/components/ChartView";
 import NumField from "@/components/NumField";
-import { render, type ChartSpec, type Series } from "@/lib/charts";
+import { COLORMAP_LABELS, render, type ChartSpec, type MapStyle, type Series } from "@/lib/charts";
 import { parseWellsCsv, toCsv, download, wellsToCsv, type PointIn, type WellIn } from "@/lib/csv";
 import { centroid, project as projectXY, unproject, validLatLon } from "@/lib/geo";
 import { downloadBlob, svgToPngDataUrl } from "@/lib/exportImage";
@@ -97,6 +97,9 @@ export default function Page() {
   const [view, setView] = useState<View>("sat");
   const [mode, setMode] = useState<Mode>("total");
   const [cmpWell, setCmpWell] = useState(0);
+  const DEFAULT_MAP_STYLE: MapStyle = { cmap: "sunset", reverse: false, fill: "smooth", bands: 10, contours: false, nContours: 10, contourLabels: true, streamlines: false };
+  const [mapStyle, setMapStyle] = useState<MapStyle>(DEFAULT_MAP_STYLE);
+  const setStyle = (patch: Partial<MapStyle>) => setMapStyle((m) => ({ ...m, ...patch }));
   const [csvError, setCsvError] = useState("");
   const [busy, setBusy] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
@@ -327,6 +330,7 @@ export default function Page() {
     opts: {
       grid: g, wells, points, boundary, pf: pU.f, pLabel: pU.label, pDec, df: dU.f, dLabel: dU.label,
       geo: geo.on ? { lat0: geo.lat0, lon0: geo.lon0 } : undefined,
+      style: mapStyle,
       contourLevels: [
         { level: threshold, label: `Interference threshold\n${P(threshold, 3)} ${pU.label} (detection only)`, cls: "thr" },
         ...(lim.maxBuildupMPa > 0 ? [{ level: lim.maxBuildupMPa, label: `Max allowable buildup\n${P(lim.maxBuildupMPa)} ${pU.label} (pass/fail limit)`, cls: "lim" as const }] : []),
@@ -367,7 +371,7 @@ export default function Page() {
   });
   /* eslint-disable react-hooks/exhaustive-deps */
   const specSat = useMemo(() => (gridSat ? satSpec(gridSat) : null), [gridSat, wells, points, geo, dU, tNow, aq, satModel]);
-  const specMap = useMemo(() => (grid ? mapSpec(grid) : null), [grid, wells, points, boundary, threshold, lim, pU, dU]);
+  const specMap = useMemo(() => (grid ? mapSpec(grid) : null), [grid, wells, points, boundary, threshold, lim, pU, dU, mapStyle]);
   const specSeries = useMemo(() => lineSpec(mode, seriesNow, true), [seriesNow, mode, lim, pU, tNow]);
   const specStack = useMemo(stackSpec, [fieldDrivers, pU]);
   const specCompare = useMemo(() => (wells.length ? compareSpec(cmpIdx) : null), [cases, cmpIdx, lim, pU, times]);
@@ -972,6 +976,41 @@ export default function Page() {
 
               {view === "map" && specMap && (
                 <>
+                  <div className="mapstyle">
+                    <label className="field"><span>Colour scale</span>
+                      <select aria-label="Colour scale" value={mapStyle.cmap} onChange={(e) => setStyle({ cmap: e.target.value })}>
+                        {COLORMAP_LABELS.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+                      </select>
+                    </label>
+                    <label className="field"><span>Fill</span>
+                      <select aria-label="Fill style" value={mapStyle.fill} onChange={(e) => setStyle({ fill: e.target.value as MapStyle["fill"] })}>
+                        <option value="smooth">Smooth colours</option>
+                        <option value="bands">Colour bands</option>
+                        <option value="none">No fill</option>
+                      </select>
+                    </label>
+                    {mapStyle.fill === "bands" && (
+                      <label className="field"><span>Bands</span>
+                        <select aria-label="Number of colour bands" value={mapStyle.bands} onChange={(e) => setStyle({ bands: +e.target.value })}>
+                          {[5, 6, 8, 10, 12, 15, 20].map((n) => <option key={n} value={n}>{n}</option>)}
+                        </select>
+                      </label>
+                    )}
+                    <label className="check"><input type="checkbox" aria-label="Reverse colours" checked={!!mapStyle.reverse} onChange={(e) => setStyle({ reverse: e.target.checked })} /> Reverse colours</label>
+                    <label className="check"><input type="checkbox" aria-label="Contour lines" checked={!!mapStyle.contours} onChange={(e) => setStyle({ contours: e.target.checked })} /> Contour lines</label>
+                    {mapStyle.contours && (
+                      <>
+                        <label className="field"><span>Levels</span>
+                          <select aria-label="Number of contour levels" value={mapStyle.nContours} onChange={(e) => setStyle({ nContours: +e.target.value })}>
+                            {[5, 8, 10, 15, 20].map((n) => <option key={n} value={n}>{n}</option>)}
+                          </select>
+                        </label>
+                        <label className="check"><input type="checkbox" aria-label="Contour labels" checked={!!mapStyle.contourLabels} onChange={(e) => setStyle({ contourLabels: e.target.checked })} /> Labels</label>
+                      </>
+                    )}
+                    <label className="check"><input type="checkbox" aria-label="Streamlines" checked={!!mapStyle.streamlines} onChange={(e) => setStyle({ streamlines: e.target.checked })} /> Streamlines</label>
+                    <button className="ghost" onClick={() => setMapStyle(DEFAULT_MAP_STYLE)}>Reset style</button>
+                  </div>
                   <ChartView key={`map-${runId}`} spec={specMap} title={`Pressure buildup map at t = ${tNow.toFixed(1)} yr`} filename="pressure-map" />
                   <p className="caption">
                     Buildup at {tNow.toFixed(1)} yr. <b>Pass/fail</b> is judged against the <b>max allowable buildup</b> ({P(lim.maxBuildupMPa)} {pU.label} = {aq.safetyFactor} × fracture pressure − initial pressure), shown as the solid white/black contour, which only appears near the wells if the limit is approached.

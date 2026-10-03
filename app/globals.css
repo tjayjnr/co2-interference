@@ -170,3 +170,9 @@ table.edit td.sub { font-size: 12px; color: var(--muted); font-style: italic; }
 .zrow { display: flex; gap: 8px; align-items: center; }
 .zrow .zlab { flex: 0 0 150px; font-size: 12px; color: var(--muted); }
 .zrow .calcval { flex: 1 1 auto; }
+
+.mapstyle { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: flex-end; margin: 4px 0 10px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; }
+.mapstyle .field select { width: auto; }
+.mapstyle .check { display: flex; gap: 6px; align-items: center; font-size: 13px; padding-bottom: 6px; cursor: pointer; }
+.mapstyle .check input { width: auto; }
+.mapstyle button.ghost { margin-top: 0; }

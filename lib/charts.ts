@@ -2,7 +2,8 @@
 // drawing can be shown on screen (theme "css") and exported as SVG/PNG/report figures (theme "light").
 // Every generator accepts an optional zoom `view` (data coordinates); the plot is clipped to the plot area.
 
-import { isoSegments } from "./contour";
+import { isoSegments, type Segment } from "./contour";
+import { findPeaks, streamPaths, type GridPoint } from "./streamlines";
 import { unproject } from "./geo";
 import type { Boundary, GridResult, Point, Well } from "./physics";
 
@@ -48,6 +49,7 @@ export interface MapOpts {
   geo?: { lat0: number; lon0: number }; // when set, axes are labelled with longitude / latitude
   legendTitle?: string; // default "Pressure buildup"
   palette?: "heat" | "sat"; // colour scale
+  style?: MapStyle; // colour scale, fill, contour lines and streamlines chosen by the user
   tickDec?: number; // minimum decimals on the colour-bar labels
 }
 
@@ -88,7 +90,7 @@ function ticks(lo: number, hi: number, n = 6): number[] {
   const span = hi - lo || 1;
   const raw = span / n;
   const mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? raw;
+  const step = [1, 2, 5, 10].map((m) => m * mag).find((s) => s >= raw * 0.97) ?? raw;
   const dec = Math.max(0, -Math.floor(Math.log10(step)) + 1);
   const out: number[] = [];
   for (let v = Math.ceil(lo / step - 1e-9) * step; v <= hi + step * 1e-9; v += step) out.push(+v.toFixed(Math.min(dec, 10)));
@@ -244,11 +246,50 @@ function ramp(v: number, stops: Stops): [number, number, number] {
   return [0, 1, 2].map((k) => stops[i][k] + f * (stops[i + 1][k] - stops[i][k])) as [number, number, number];
 }
 
-const heatCache = new WeakMap<GridResult, string>();
-const satCache = new WeakMap<GridResult, string>();
+const hex = (h: string): [number, number, number] => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+const fromHex = (a: string[]): Stops => a.map(hex);
 
-function heatmapDataUrl(g: GridResult, stops: Stops, cache: WeakMap<GridResult, string>): string {
-  const hit = cache.get(g);
+/** Colour scales offered for the maps (control points, interpolated linearly). */
+export const COLORMAPS: Record<string, Stops> = {
+  sunset: STOPS_HEAT,
+  jet: STOPS_SAT,
+  turbo: fromHex(["#30123b", "#4662d7", "#36aaf9", "#1ae4b6", "#72fe5e", "#c7ef34", "#faba39", "#f66b19", "#ca2a04", "#7a0403"]),
+  viridis: fromHex(["#440154", "#482878", "#3e4989", "#31688e", "#26828e", "#1f9e89", "#35b779", "#6ece58", "#b5de2b", "#fde725"]),
+  plasma: fromHex(["#0d0887", "#46039f", "#7201a8", "#9c179e", "#bd3786", "#d8576b", "#ed7953", "#fb9f3a", "#fdca26", "#f0f921"]),
+  blues: fromHex(["#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#08519c", "#08306b"]),
+  coolwarm: fromHex(["#3b4cc0", "#6788ee", "#9abbff", "#c9d7f0", "#edd1c2", "#f7a789", "#e36a53", "#b40426"]),
+  greys: fromHex(["#ffffff", "#f0f0f0", "#d9d9d9", "#bdbdbd", "#969696", "#737373", "#525252", "#252525", "#000000"]),
+};
+
+export const COLORMAP_LABELS: [string, string][] = [
+  ["sunset", "Sunset (default)"],
+  ["jet", "Jet (rainbow)"],
+  ["turbo", "Turbo"],
+  ["viridis", "Viridis"],
+  ["plasma", "Plasma"],
+  ["blues", "Blues"],
+  ["coolwarm", "Cool–warm (diverging)"],
+  ["greys", "Greyscale"],
+];
+
+export interface MapStyle {
+  cmap?: string; // key of COLORMAPS
+  reverse?: boolean;
+  fill?: "smooth" | "bands" | "none";
+  bands?: number; // target number of colour classes when fill = "bands"
+  contours?: boolean;
+  nContours?: number; // target number of contour levels
+  contourLabels?: boolean;
+  streamlines?: boolean;
+}
+
+const imgCache = new WeakMap<GridResult, Map<string, string>>();
+
+/** Heat-map image; `bounds` (ascending, same units as the grid values) turn it into discrete colour classes. */
+function heatmapDataUrl(g: GridResult, stops: Stops, key: string, bounds?: number[]): string {
+  let m = imgCache.get(g);
+  if (!m) { m = new Map(); imgCache.set(g, m); }
+  const hit = m.get(key);
   if (hit) return hit;
   const cv = document.createElement("canvas");
   cv.width = g.nx;
@@ -260,14 +301,31 @@ function heatmapDataUrl(g: GridResult, stops: Stops, cache: WeakMap<GridResult, 
       const v = g.values[j * g.nx + i];
       const o = ((g.ny - 1 - j) * g.nx + i) * 4;
       if (Number.isNaN(v)) { img.data.set([200, 200, 200, 90], o); continue; }
-      const [r, gg, b] = ramp(g.max > 0 ? v / g.max : 0, stops);
+      let u = g.max > 0 ? v / g.max : 0;
+      if (bounds && bounds.length > 1) {
+        let k = 0;
+        while (k < bounds.length - 2 && v >= bounds[k + 1]) k++;
+        u = (k + 0.5) / (bounds.length - 1);
+      }
+      const [r, gg, b] = ramp(u, stops);
       img.data.set([r, gg, b, 255], o);
     }
   }
   ctx.putImageData(img, 0, 0);
   const url = cv.toDataURL("image/png");
-  cache.set(g, url);
+  m.set(key, url);
   return url;
+}
+
+/** 0, nice steps ..., top: class boundaries for banded fills. */
+function niceBounds(top: number, n: number): number[] {
+  const ts = ticks(0, top, n);
+  const out = ts.filter((v) => v < top * 0.9999);
+  if (out[0] !== 0) out.unshift(0);
+  const step = ts.length > 1 ? ts[1] - ts[0] : top;
+  if (out.length > 1 && top - out[out.length - 1] < 0.25 * step) out.pop(); // last class absorbs a sliver at the top
+  out.push(top);
+  return out;
 }
 
 export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Rendered {
@@ -288,12 +346,69 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   const gy = (j: number) => py(g.y0 + ((j + 0.5) / g.ny) * (g.y1 - g.y0));
   const fmtD = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
   const plot = { l: L, t: T, w: S, h: S };
-  const stops = o.palette === "sat" ? STOPS_SAT : STOPS_HEAT;
-  const png = heatmapDataUrl(g, stops, o.palette === "sat" ? satCache : heatCache);
+
+  const st = o.style ?? {};
+  const cmapName = st.cmap && COLORMAPS[st.cmap] ? st.cmap : o.palette === "sat" ? "jet" : "sunset";
+  const stops = st.reverse ? [...COLORMAPS[cmapName]].reverse() : COLORMAPS[cmapName];
+  const fill = st.fill ?? "smooth";
+  const top = g.max / o.pf; // top of the scale in display units
+  const bounds = fill === "bands" ? niceBounds(top, st.bands ?? 10).map((v) => v * o.pf) : undefined;
+  const png = fill === "none" ? "" : heatmapDataUrl(g, stops, `${cmapName}|${st.reverse ? 1 : 0}|${fill}|${bounds ? bounds.join(",") : ""}`, bounds);
   const id = `clip${++uid}`;
   let s = tb.svg + clipDef(id, plot) + `<g clip-path="url(#${id})">`;
   const ix = px(g.x0), iy = py(g.y1);
-  s += `<image x="${f1(ix)}" y="${f1(iy)}" width="${f1(px(g.x1) - ix)}" height="${f1(py(g.y0) - iy)}" preserveAspectRatio="none" href="${png}" xlink:href="${png}"/>`;
+  if (fill === "none") s += `<rect x="${f1(ix)}" y="${f1(iy)}" width="${f1(px(g.x1) - ix)}" height="${f1(py(g.y0) - iy)}" style="fill:#f8f9fa"/>`;
+  else s += `<image x="${f1(ix)}" y="${f1(iy)}" width="${f1(px(g.x1) - ix)}" height="${f1(py(g.y0) - iy)}" preserveAspectRatio="none" href="${png}" xlink:href="${png}"/>`;
+
+  // contour lines at nice levels, optionally labelled
+  let contourStep = 0;
+  if (st.contours) {
+    const lv = ticks(0, top, st.nContours ?? 10).filter((v) => v > 0 && v < top * 0.9999);
+    contourStep = lv.length > 1 ? lv[1] - lv[0] : lv[0] ?? 0;
+    const dec = Math.max(0, Math.ceil(-Math.log10(contourStep || 1) - 1e-9));
+    for (const v of lv) {
+      const segs = isoSegments(g.values, g.nx, g.ny, v * o.pf);
+      if (!segs.length) continue;
+      const lines = segs.map((q) => `<line x1="${f1(gx(q[0]))}" y1="${f1(gy(q[1]))}" x2="${f1(gx(q[2]))}" y2="${f1(gy(q[3]))}"/>`).join("");
+      s += `<g style="stroke:#fff;stroke-width:2.6;stroke-opacity:0.55">${lines}</g><g style="stroke:#161616;stroke-width:1;stroke-opacity:0.9">${lines}</g>`;
+      if (st.contourLabels) {
+        let best: Segment | null = null;
+        let bestX = -Infinity;
+        for (const q of segs) {
+          const mx = (gx(q[0]) + gx(q[2])) / 2, my = (gy(q[1]) + gy(q[3])) / 2;
+          if (mx > L + 26 && mx < L + S - 26 && my > T + 10 && my < T + S - 10 && mx > bestX) { bestX = mx; best = q; }
+        }
+        if (best) {
+          const mx = (gx(best[0]) + gx(best[2])) / 2, my = (gy(best[1]) + gy(best[3])) / 2;
+          s += `<text x="${f1(mx)}" y="${f1(my + 3.5)}" text-anchor="middle" style="${FONT};font-size:10px;font-weight:700;fill:#111;stroke:#fff;stroke-width:3;paint-order:stroke">${v.toFixed(dec)}</text>`;
+        }
+      }
+    }
+  }
+
+  // streamlines of the flow (down the pressure gradient, away from the injectors) with direction arrows
+  if (st.streamlines) {
+    // seed rings around the pressure maxima (the injecting wells; a shut-in well that no longer peaks gets none)
+    const seeds: GridPoint[] = [];
+    for (const pk of findPeaks(g.values, g.nx, g.ny)) {
+      for (let k = 0; k < 16; k++) {
+        const a = (k / 16) * 2 * Math.PI + 0.1;
+        seeds.push({ i: pk.i + 2.5 * Math.cos(a), j: pk.j + 2.5 * Math.sin(a) });
+      }
+    }
+    for (const path of streamPaths(g.values, g.nx, g.ny, seeds)) {
+      if (path.length < 6) continue;
+      const pts = path.map((q) => [gx(q.i), gy(q.j)]);
+      const dd = "M" + pts.map((q) => `${f1(q[0])},${f1(q[1])}`).join(" L");
+      s += `<path d="${dd}" fill="none" style="stroke:#fff;stroke-width:2.6;stroke-opacity:0.5"/><path d="${dd}" fill="none" style="stroke:#161616;stroke-width:1;stroke-opacity:0.85"/>`;
+      const k = Math.floor(path.length * 0.45);
+      const [x1, y1] = pts[k], [x2, y2] = pts[Math.min(k + 2, pts.length - 1)];
+      const ang = Math.atan2(y2 - y1, x2 - x1), sz = 5;
+      const tri = [[x1 + Math.cos(ang) * sz, y1 + Math.sin(ang) * sz], [x1 + Math.cos(ang + 2.5) * sz, y1 + Math.sin(ang + 2.5) * sz], [x1 + Math.cos(ang - 2.5) * sz, y1 + Math.sin(ang - 2.5) * sz]];
+      s += `<polygon points="${tri.map((q) => `${f1(q[0])},${f1(q[1])}`).join(" ")}" style="fill:#161616;stroke:#fff;stroke-width:0.8"/>`;
+    }
+  }
+
   for (const c of o.contourLevels) {
     const segs = isoSegments(g.values, g.nx, g.ny, c.level);
     const lines = segs.map((q) => `<line x1="${f1(gx(q[0]))}" y1="${f1(gy(q[1]))}" x2="${f1(gx(q[2]))}" y2="${f1(gy(q[3]))}"/>`).join("");
@@ -342,23 +457,39 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   // legend panel
   const lx = L + S + 28;
   let ly = T + 4;
-  s += `<defs><linearGradient id="cb${id}" x1="0" y1="1" x2="0" y2="0">${stops.map((c, i) => `<stop offset="${(i / (stops.length - 1)) * 100}%" stop-color="rgb(${c.map(Math.round).join(",")})"/>`).join("")}</linearGradient></defs>`;
   s += `<text x="${lx}" y="${ly + 10}" style="${FONT};font-size:12px;font-weight:700;fill:${p.text}">${esc(o.legendTitle ?? "Pressure buildup")}${o.pLabel ? ` (${esc(o.pLabel)})` : ""}</text>`;
   ly += 18;
   const cbH = 300;
-  const top = g.max / o.pf;
-  s += `<rect x="${lx}" y="${ly}" width="16" height="${cbH}" fill="url(#cb${id})" style="stroke:${p.frame}"/>`;
-  const cbTicks = ticks(0, top, 10).filter((v) => v <= top * 1.0001);
-  const stepV = cbTicks.length > 1 ? cbTicks[1] - cbTicks[0] : 1;
-  const tickDec = Math.max(o.tickDec ?? o.pDec, Math.ceil(-Math.log10(stepV) - 1e-9), 0);
-  for (const v of cbTicks) {
-    const yy = ly + cbH * (1 - v / top);
-    s += `<line x1="${lx + 16}" x2="${lx + 21}" y1="${f1(yy)}" y2="${f1(yy)}" style="stroke:${p.frame}"/>`;
-    s += `<text x="${lx + 25}" y="${f1(yy + 4)}" style="${FONT};font-size:13px;fill:${p.text}">${v.toFixed(tickDec)}</text>`;
+  if (fill !== "none") {
+    s += `<defs><linearGradient id="cb${id}" x1="0" y1="1" x2="0" y2="0">${stops.map((c, i) => `<stop offset="${(i / (stops.length - 1)) * 100}%" stop-color="rgb(${c.map(Math.round).join(",")})"/>`).join("")}</linearGradient></defs>`;
+    let barTicks: number[];
+    if (bounds) {
+      // discrete classes
+      const n = bounds.length - 1;
+      for (let k = 0; k < n; k++) {
+        const y0 = ly + cbH * (1 - bounds[k + 1] / g.max), y1 = ly + cbH * (1 - bounds[k] / g.max);
+        const [r, gg, bb] = ramp((k + 0.5) / n, stops);
+        s += `<rect x="${lx}" y="${f1(y0)}" width="16" height="${f1(y1 - y0 + 0.5)}" style="fill:rgb(${Math.round(r)},${Math.round(gg)},${Math.round(bb)})"/>`;
+      }
+      s += `<rect x="${lx}" y="${ly}" width="16" height="${cbH}" fill="none" style="stroke:${p.frame}"/>`;
+      barTicks = bounds.map((v) => v / o.pf);
+    } else {
+      s += `<rect x="${lx}" y="${ly}" width="16" height="${cbH}" fill="url(#cb${id})" style="stroke:${p.frame}"/>`;
+      barTicks = ticks(0, top, 10).filter((v) => v <= top * 1.0001);
+    }
+    const stepV = barTicks.length > 1 ? Math.min(...barTicks.slice(1).map((v, i) => v - barTicks[i]).filter((x) => x > 0)) : 1;
+    const tickDec = Math.max(o.tickDec ?? o.pDec, Math.ceil(-Math.log10(stepV) - 1e-9), 0);
+    for (const v of barTicks) {
+      const yy = ly + cbH * (1 - v / top);
+      s += `<line x1="${lx + 16}" x2="${lx + 21}" y1="${f1(yy)}" y2="${f1(yy)}" style="stroke:${p.frame}"/>`;
+      s += `<text x="${lx + 25}" y="${f1(yy + 4)}" style="${FONT};font-size:13px;fill:${p.text}">${v.toFixed(tickDec)}</text>`;
+    }
+    const lastY = ly + cbH * (1 - barTicks[barTicks.length - 1] / top);
+    if (lastY - ly > 14) s += `<text x="${lx + 25}" y="${ly + 4}" style="${FONT};font-size:11px;font-weight:700;fill:${p.text}">max ${top.toFixed(Math.max(tickDec, 2))}</text>`;
+    ly += cbH + 28;
+  } else {
+    ly += 6;
   }
-  const lastY = ly + cbH * (1 - cbTicks[cbTicks.length - 1] / top);
-  if (lastY - ly > 14) s += `<text x="${lx + 25}" y="${ly + 4}" style="${FONT};font-size:11px;font-weight:700;fill:${p.text}">max ${top.toFixed(Math.max(tickDec, 2))}</text>`;
-  ly += cbH + 28;
   const row = (icon: string, text: string) => {
     const lines = text.split("\n");
     const out = `${icon}${lines.map((ln, k) => `<text x="${lx + 30}" y="${ly + 4 + k * 14}" style="${FONT};font-size:11px;fill:${p.text}">${esc(ln)}</text>`).join("")}`;
@@ -366,6 +497,12 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
     return out;
   };
   if (o.points.length) s += row(`<rect x="${lx + 4}" y="${ly - 5}" width="10" height="10" style="fill:#1c7ed6;stroke:#888;stroke-width:1"/>`, "Monitoring point");
+  if (st.contours && contourStep > 0) {
+    s += row(`<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#161616;stroke-width:1"/>`, `Contour lines\nevery ${+contourStep.toFixed(4)} ${o.pLabel}`.trim());
+  }
+  if (st.streamlines) {
+    s += row(`<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#161616;stroke-width:1"/><polygon points="${lx + 22},${ly} ${lx + 15},${ly - 3.5} ${lx + 15},${ly + 3.5}" style="fill:#161616"/>`, "Streamlines\n(flow direction)");
+  }
   for (const c of o.contourLevels) {
     s += row(
       c.cls === "thr"

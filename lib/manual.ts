@@ -184,6 +184,16 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   b.push({ t: "h2", text: "6.3 Pressure map tab" });
   fig("pressure-map", "Figure 7. Pressure buildup map with the interference-threshold and allowable-buildup contours.");
   p("The map shows the total pressure buildup caused by all wells at the evaluation time, with a labelled colour scale. The dashed teal contour is the interference threshold (detection only). The solid white-and-black contour is the max allowable buildup (the pass/fail limit); it appears only near wells that approach the limit. Each well is drawn as a thin vertical line with its name on top, as on the saturation map. Use Map padding to enlarge or shrink the area drawn around the wells.");
+  p("Above the pressure map, the style bar controls how the map is coloured and annotated. The choices apply to the picture, to the PNG and SVG exports and to the report figure.");
+  table("Table 5a. Map style options (pressure map).", ["Option", "What it does"], [
+    ["Colour scale", "Sunset (default), Jet, Turbo, Viridis, Plasma, Blues, Cool–warm (diverging) or Greyscale. The colour bar and its numbers follow the choice."],
+    ["Fill", "Smooth colours, Colour bands (the pressure is grouped into the chosen number of classes with a stepped colour bar) or No fill (white map, useful with contour lines)."],
+    ["Reverse colours", "Flips the colour scale so that high pressure takes the colour of low pressure and vice versa."],
+    ["Contour lines", "Draws iso-pressure lines at round values (5, 8, 10, 15 or 20 levels) with the value written on each line; Labels turns the numbers off."],
+    ["Streamlines", "Draws the flow paths of the brine (down the pressure gradient, away from the injectors), with an arrow showing the direction. They bend around the wells and are pushed away from a sealing boundary."],
+    ["Reset style", "Returns to the default colours."],
+  ]);
+  fig("mapstyle", "Figure 7a. The pressure map with the Viridis scale, colour bands, contour lines and streamlines.");
 
   b.push({ t: "h2", text: "6.4 Time series tab" });
   fig("time-series", "Figure 8. Time series of pressure at every well and monitoring point, with the field maximum and average.");

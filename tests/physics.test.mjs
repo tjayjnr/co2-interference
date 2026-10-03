@@ -334,3 +334,29 @@ test("three-zone model: lower wellbore pressure than brine-equivalent, same far 
   assert.ok(wellContribution(A, 500, 0, 300, a3, none) < 0.05 * wellContribution(A, 500, 0, 19.99, a3, none));   // recovers after shut-in
   assert.ok(wellContribution(A, 500, 0, 12, a3, none) < wellContribution(A, 500, 0, 9.999, a3, none));          // rate reduction lowers pressure
 });
+
+import { streamPaths } from "../lib/streamlines.ts";
+
+test("streamlines run down the pressure gradient, away from a source, and stay inside the grid", () => {
+  const n = 81, c = 40, v = new Float64Array(n * n);
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) v[j * n + i] = -Math.log(Math.hypot(i - c, j - c) + 1);   // peak at the centre
+  const seeds = Array.from({ length: 8 }, (_, k) => ({ i: c + 3 * Math.cos((k / 8) * 2 * Math.PI), j: c + 3 * Math.sin((k / 8) * 2 * Math.PI) }));
+  const paths = streamPaths(v, n, n, seeds);
+  assert.equal(paths.length, 8);
+  for (const p of paths) {
+    assert.ok(p.length > 40);
+    let prev = 0;
+    for (const q of p) {
+      const r = Math.hypot(q.i - c, q.j - c);
+      assert.ok(r >= prev - 0.51, "radius must not decrease");      // flows outward
+      prev = Math.max(prev, r);
+      assert.ok(q.i >= 0 && q.i <= n - 1 && q.j >= 0 && q.j <= n - 1);
+    }
+    const first = p[0], last = p[p.length - 1];                      // nearly straight radial lines
+    const a0 = Math.atan2(first.j - c, first.i - c), a1 = Math.atan2(last.j - c, last.i - c);
+    assert.ok(Math.abs(Math.atan2(Math.sin(a1 - a0), Math.cos(a1 - a0))) < 0.15);
+  }
+  // no flow where the field is undefined (outside the aquifer)
+  const hole = v.slice(); for (let j = 0; j < n; j++) for (let i = 60; i < n; i++) hole[j * n + i] = NaN;
+  assert.ok(streamPaths(hole, n, n, [{ i: 70, j: 40 }])[0].length === 1);
+});
