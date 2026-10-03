@@ -8,7 +8,7 @@ import { parseWellsCsv, toCsv, download, wellsToCsv, type PointIn, type WellIn }
 import { centroid, project as projectXY, unproject, validLatLon } from "@/lib/geo";
 import { downloadBlob, svgToPngDataUrl } from "@/lib/exportImage";
 import {
-  arrivalTime, buildupGrid, consts, hawkinsSkin, interferenceMatrix, limits, injectedMt, skinBuildup, timeGrid, totalBuildup, wellboreBuildup, wellContribution,
+  arrivalTime, buildupGrid, consts, hawkinsSkin, interferenceMatrix, limits, injectedMt, skinBuildup, timeGrid, totalBuildup, wellboreBuildup, wellBuildupGrid, wellContribution,
   type Aquifer, type Boundary, type Point, type Well,
 } from "@/lib/physics";
 import { buildBlocks, renderDocx, renderPdf, type FigureData, type ReportData } from "@/lib/report";
@@ -97,7 +97,7 @@ export default function Page() {
   const [view, setView] = useState<View>("sat");
   const [mode, setMode] = useState<Mode>("total");
   const [cmpWell, setCmpWell] = useState(0);
-  const DEFAULT_MAP_STYLE: MapStyle = { cmap: "sunset", reverse: false, fill: "smooth", bands: 10, contours: false, nContours: 10, contourLabels: true, contourReach: 0.2, streamlines: false };
+  const DEFAULT_MAP_STYLE: MapStyle = { cmap: "sunset", reverse: false, fill: "smooth", bands: 10, contours: false, nContours: 10, contourLabels: true, contourSource: "wells", contourReach: 0.35, streamlines: false };
   const [mapStyle, setMapStyle] = useState<MapStyle>(DEFAULT_MAP_STYLE);
   const setStyle = (patch: Partial<MapStyle>) => setMapStyle((m) => ({ ...m, ...patch }));
   const [csvError, setCsvError] = useState("");
@@ -331,6 +331,7 @@ export default function Page() {
       grid: g, wells, points, boundary, pf: pU.f, pLabel: pU.label, pDec, df: dU.f, dLabel: dU.label,
       geo: geo.on ? { lat0: geo.lat0, lon0: geo.lon0 } : undefined,
       style: mapStyle,
+      wellGrids: mapStyle.contours && (mapStyle.contourSource ?? "wells") === "wells" ? wells.map((w) => wellBuildupGrid(w, tNow, aq, boundary, extent, Math.max(g.nx, 150), Math.max(g.ny, 150))) : undefined,
       contourLevels: [
         { level: threshold, label: `Interference threshold\n${P(threshold, 3)} ${pU.label} (detection only)`, cls: "thr" },
         ...(lim.maxBuildupMPa > 0 ? [{ level: lim.maxBuildupMPa, label: `Max allowable buildup\n${P(lim.maxBuildupMPa)} ${pU.label} (pass/fail limit)`, cls: "lim" as const }] : []),
@@ -371,7 +372,7 @@ export default function Page() {
   });
   /* eslint-disable react-hooks/exhaustive-deps */
   const specSat = useMemo(() => (gridSat ? satSpec(gridSat) : null), [gridSat, wells, points, geo, dU, tNow, aq, satModel]);
-  const specMap = useMemo(() => (grid ? mapSpec(grid) : null), [grid, wells, points, boundary, threshold, lim, pU, dU, mapStyle]);
+  const specMap = useMemo(() => (grid ? mapSpec(grid) : null), [grid, wells, points, boundary, threshold, lim, pU, dU, mapStyle, tNow, aq, extent]);
   const specSeries = useMemo(() => lineSpec(mode, seriesNow, true), [seriesNow, mode, lim, pU, tNow]);
   const specStack = useMemo(stackSpec, [fieldDrivers, pU]);
   const specCompare = useMemo(() => (wells.length ? compareSpec(cmpIdx) : null), [cases, cmpIdx, lim, pU, times]);
@@ -1005,8 +1006,14 @@ export default function Page() {
                             {[5, 8, 10, 15, 20, 30, 40].map((n) => <option key={n} value={n}>{n}</option>)}
                           </select>
                         </label>
+                        <label className="field"><span>Contours of</span>
+                          <select aria-label="Contour source" value={mapStyle.contourSource ?? "wells"} onChange={(e) => setStyle({ contourSource: e.target.value as "wells" | "total" })}>
+                            <option value="wells">Each well separately</option>
+                            <option value="total">Total field</option>
+                          </select>
+                        </label>
                         <label className="field"><span>Contour reach</span>
-                          <select aria-label="Contour reach" value={String(mapStyle.contourReach ?? 0.2)} onChange={(e) => setStyle({ contourReach: +e.target.value })}>
+                          <select aria-label="Contour reach" value={String(mapStyle.contourReach ?? 0.35)} onChange={(e) => setStyle({ contourReach: +e.target.value })}>
                             <option value="0.1">Close to the wells</option>
                             <option value="0.2">Around the wells</option>
                             <option value="0.35">Wide</option>

@@ -366,6 +366,36 @@ export interface GridResult {
   max: number;
 }
 
+/** Grid of the pressure change (MPa) caused by one well alone (no skin: that only acts at the wellbore). */
+export function wellBuildupGrid(
+  w: Well,
+  tYr: number,
+  a: Aquifer,
+  b: Boundary,
+  ext: { x0: number; y0: number; x1: number; y1: number },
+  nx = 90,
+  ny = 90,
+): GridResult {
+  const c = consts(a);
+  const values = new Float64Array(nx * ny);
+  let max = 0;
+  for (let j = 0; j < ny; j++) {
+    const y = ext.y0 + ((j + 0.5) / ny) * (ext.y1 - ext.y0);
+    for (let i = 0; i < nx; i++) {
+      const x = ext.x0 + ((i + 0.5) / nx) * (ext.x1 - ext.x0);
+      let v = wellContribution(w, x, y, tYr, a, b, c);
+      if (b.type !== "none") {
+        const coord = b.axis === "x" ? x : y;
+        const wcoord = b.axis === "x" ? w.x : w.y;
+        if ((coord - b.positionM) * (wcoord - b.positionM) < 0) v = NaN; // other side of the boundary
+      }
+      values[j * nx + i] = v;
+      if (v > max) max = v;
+    }
+  }
+  return { nx, ny, ...ext, values, max };
+}
+
 export function buildupGrid(
   wells: Well[],
   tYr: number,

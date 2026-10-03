@@ -360,3 +360,23 @@ test("streamlines run down the pressure gradient, away from a source, and stay i
   const hole = v.slice(); for (let j = 0; j < n; j++) for (let i = 60; i < n; i++) hole[j * n + i] = NaN;
   assert.ok(streamPaths(hole, n, n, [{ i: 70, j: 40 }])[0].length === 1);
 });
+
+import { wellBuildupGrid, buildupGrid } from "../lib/physics.ts";
+
+test("per-well grids add up to the total grid (and honour the boundary)", () => {
+  const wells = [{ ...W("a", 0, 0, 1, 0, 20), skin: 0 }, { ...W("b", 3000, 1000, 0.7, 3, 20), skin: 0, changes: [{ yr: 10, rateMtpa: 0.3 }] }];
+  const ext = { x0: -6000, x1: 9000, y0: -6000, y1: 7000 };
+  for (const b of [none, { type: "noflow", axis: "x", positionM: 6000 }]) {
+    const total = buildupGrid(wells, 12, aq, b, ext, 30, 30);
+    const parts = wells.map((w) => wellBuildupGrid(w, 12, aq, b, ext, 30, 30));
+    for (let k = 0; k < total.values.length; k++) {
+      if (Number.isNaN(total.values[k])) continue;   // other side of the boundary
+      close(parts[0].values[k] + parts[1].values[k], total.values[k], 1e-9);
+    }
+    const g = parts[0];
+    let best = -1, bi = 0;
+    g.values.forEach((v, k) => { if (!Number.isNaN(v) && v > best) { best = v; bi = k; } });
+    const x = ext.x0 + (((bi % 30) + 0.5) / 30) * (ext.x1 - ext.x0);
+    assert.ok(Math.abs(x - 0) < 600);   // each well's own field peaks at that well
+  }
+});

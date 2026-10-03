@@ -50,6 +50,7 @@ export interface MapOpts {
   legendTitle?: string; // default "Pressure buildup"
   palette?: "heat" | "sat"; // colour scale
   style?: MapStyle; // colour scale, fill, contour lines and streamlines chosen by the user
+  wellGrids?: GridResult[]; // pressure change of each well alone (same grid as `grid`), for per-well contours
   tickDec?: number; // minimum decimals on the colour-bar labels
 }
 
@@ -280,6 +281,7 @@ export interface MapStyle {
   contours?: boolean;
   nContours?: number; // target number of contour levels
   contourLabels?: boolean;
+  contourSource?: "wells" | "total"; // contours of each well's own pressure change (default) or of the total field
   contourReach?: number; // contours only within this fraction of the map half-width around each well (>= 1: whole map)
   streamlines?: boolean;
 }
@@ -365,24 +367,35 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
     const [r, gg, bb] = ramp(u, stops);
     return `rgb(${Math.round(r)},${Math.round(gg)},${Math.round(bb)})`;
   };
-  // contour lines: only within reach of the wells, at round values spanning the pressure range found there
+  // contour lines. "Each well": the pressure change caused by that well alone, drawn around that well, so the
+  // rings show how the pressure of every well propagates. "Total field": iso-lines of the summed field.
+  // Lines stay within reach of the well(s) and use common round levels spanning the pressures found there.
   let contourStep = 0;
   let contourLevels: number[] = [];
   let contourNear = false;
+  let contourPerWell = false;
   if (st.contours) {
-    const reach = st.contourReach ?? 0.2;
+    const perWell = (st.contourSource ?? "wells") === "wells" && !!o.wellGrids && o.wellGrids.length === o.wells.length && o.wells.length > 0;
+    contourPerWell = perWell;
+    const sources: { grid: GridResult; centres: { x: number; y: number }[]; wi: number }[] = perWell
+      ? (o.wellGrids as GridResult[]).map((wg, wi) => ({ grid: wg, centres: [o.wells[wi]], wi }))
+      : [{ grid: g, centres: o.wells, wi: -1 }];
+    const reach = st.contourReach ?? 0.35;
     const whole = reach >= 1 || o.wells.length === 0;
     contourNear = !whole;
     const reachM = reach * 0.5 * (g.x1 - g.x0);
-    const near = (x: number, y: number) => whole || o.wells.some((w) => Math.hypot(x - w.x, y - w.y) <= reachM);
+    const nearM = (cs: { x: number; y: number }[], x: number, y: number) => whole || cs.some((w) => Math.hypot(x - w.x, y - w.y) <= reachM);
     let vmin = Infinity, vmax = -Infinity;
-    for (let j = 0; j < g.ny; j++) {
-      for (let i = 0; i < g.nx; i++) {
-        const v = g.values[j * g.nx + i];
-        if (Number.isNaN(v)) continue;
-        if (near(g.x0 + ((i + 0.5) / g.nx) * (g.x1 - g.x0), g.y0 + ((j + 0.5) / g.ny) * (g.y1 - g.y0))) {
-          if (v < vmin) vmin = v;
-          if (v > vmax) vmax = v;
+    for (const src of sources) {
+      const gg = src.grid;
+      for (let j = 0; j < gg.ny; j++) {
+        for (let i = 0; i < gg.nx; i++) {
+          const v = gg.values[j * gg.nx + i];
+          if (Number.isNaN(v)) continue;
+          if (nearM(src.centres, gg.x0 + ((i + 0.5) / gg.nx) * (gg.x1 - gg.x0), gg.y0 + ((j + 0.5) / gg.ny) * (gg.y1 - gg.y0))) {
+            if (v < vmin) vmin = v;
+            if (v > vmax) vmax = v;
+          }
         }
       }
     }
@@ -392,32 +405,43 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
     }
     const dec = Math.max(0, Math.ceil(-Math.log10(contourStep || 1) - 1e-9));
     const rpx = (reachM / (d.x1 - d.x0)) * S;
-    const cid = `cc${id}`;
-    if (!whole) s += `<defs><clipPath id="${cid}">${o.wells.map((w) => `<circle cx="${f1(px(w.x))}" cy="${f1(py(w.y))}" r="${f1(rpx)}"/>`).join("")}</clipPath></defs>`;
-    s += whole ? "<g>" : `<g clip-path="url(#${cid})">`;
-    for (const v of contourLevels) {
-      const segs = isoSegments(g.values, g.nx, g.ny, v * o.pf);
-      if (!segs.length) continue;
-      const lines = segs.map((q) => `<line x1="${f1(gx(q[0]))}" y1="${f1(gy(q[1]))}" x2="${f1(gx(q[2]))}" y2="${f1(gy(q[3]))}"/>`).join("");
-      // no fill: a classic contour plot with every line coloured by its value; otherwise dark lines over the fill
-      s += fill === "none"
-        ? `<g style="stroke:${rgbAt(g.max > 0 ? (v * o.pf) / g.max : 0)};stroke-width:2.2;stroke-linecap:round">${lines}</g>`
-        : `<g style="stroke:#fff;stroke-width:2.6;stroke-opacity:0.55">${lines}</g><g style="stroke:#161616;stroke-width:1;stroke-opacity:0.9">${lines}</g>`;
-      if (st.contourLabels) {
-        let best: Segment | null = null;
-        let bestX = -Infinity;
-        for (const q of segs) {
-          const mx = (gx(q[0]) + gx(q[2])) / 2, my = (gy(q[1]) + gy(q[3])) / 2;
-          const inside = whole || o.wells.some((w) => Math.hypot(mx - px(w.x), my - py(w.y)) <= rpx * 0.92);
-          if (inside && mx > L + 26 && mx < L + S - 26 && my > T + 10 && my < T + S - 10 && mx > bestX) { bestX = mx; best = q; }
+    for (const src of sources) {
+      const gg = src.grid;
+      const cid = `cc${id}_${src.wi}`;
+      if (!whole) s += `<defs><clipPath id="${cid}">${src.centres.map((w) => `<circle cx="${f1(px(w.x))}" cy="${f1(py(w.y))}" r="${f1(rpx)}"/>`).join("")}</clipPath></defs>`;
+      s += whole ? "<g>" : `<g clip-path="url(#${cid})">`;
+      const ggx = (i: number) => px(gg.x0 + ((i + 0.5) / gg.nx) * (gg.x1 - gg.x0));
+      const ggy = (j: number) => py(gg.y0 + ((j + 0.5) / gg.ny) * (gg.y1 - gg.y0));
+      contourLevels.forEach((v, li) => {
+        const segs = isoSegments(gg.values, gg.nx, gg.ny, v * o.pf);
+        if (!segs.length) return;
+        const lines = segs.map((q) => `<line x1="${f1(ggx(q[0]))}" y1="${f1(ggy(q[1]))}" x2="${f1(ggx(q[2]))}" y2="${f1(ggy(q[3]))}"/>`).join("");
+        // no fill: a classic contour plot with every line coloured by its value; otherwise dark lines over the fill
+        s += fill === "none"
+          ? `<g style="stroke:${rgbAt(g.max > 0 ? (v * o.pf) / g.max : 0)};stroke-width:2.2;stroke-linecap:round">${lines}</g>`
+          : `<g style="stroke:#fff;stroke-width:2.6;stroke-opacity:0.55">${lines}</g><g style="stroke:#161616;stroke-width:1;stroke-opacity:0.9">${lines}</g>`;
+        if (st.contourLabels) {
+          // each well gets its labels at its own angles (shifting with the level) so labels of different wells do not collide
+          const c0 = src.centres[0];
+          const cxp = px(c0.x), cyp = py(c0.y);
+          const target = perWell ? src.wi * 2.4 + 0.5 + li * 0.45 : 0;
+          let best: Segment | null = null;
+          let bestScore = Infinity;
+          for (const q of segs) {
+            const mx = (ggx(q[0]) + ggx(q[2])) / 2, my = (ggy(q[1]) + ggy(q[3])) / 2;
+            const inside = whole || src.centres.some((w) => Math.hypot(mx - px(w.x), my - py(w.y)) <= rpx * 0.92);
+            if (!(inside && mx > L + 26 && mx < L + S - 26 && my > T + 10 && my < T + S - 10)) continue;
+            const score = perWell ? Math.abs(Math.atan2(Math.sin(Math.atan2(my - cyp, mx - cxp) - target), Math.cos(Math.atan2(my - cyp, mx - cxp) - target))) : -mx;
+            if (score < bestScore) { bestScore = score; best = q; }
+          }
+          if (best) {
+            const mx = (ggx(best[0]) + ggx(best[2])) / 2, my = (ggy(best[1]) + ggy(best[3])) / 2;
+            s += `<text x="${f1(mx)}" y="${f1(my + 3.5)}" text-anchor="middle" style="${FONT};font-size:10px;font-weight:700;fill:#111;stroke:#fff;stroke-width:3;paint-order:stroke">${v.toFixed(dec)}</text>`;
+          }
         }
-        if (best) {
-          const mx = (gx(best[0]) + gx(best[2])) / 2, my = (gy(best[1]) + gy(best[3])) / 2;
-          s += `<text x="${f1(mx)}" y="${f1(my + 3.5)}" text-anchor="middle" style="${FONT};font-size:10px;font-weight:700;fill:#111;stroke:#fff;stroke-width:3;paint-order:stroke">${v.toFixed(dec)}</text>`;
-        }
-      }
+      });
+      s += "</g>";
     }
-    s += "</g>";
   }
 
   // streamlines of the flow (down the pressure gradient, away from the injectors) with direction arrows
@@ -538,7 +562,7 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   };
   if (o.points.length) s += row(`<rect x="${lx + 4}" y="${ly - 5}" width="10" height="10" style="fill:#1c7ed6;stroke:#888;stroke-width:1"/>`, "Monitoring point");
   if (st.contours && contourStep > 0) {
-    s += row(`<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:${fill === "none" ? rgbAt(0.75) : "#161616"};stroke-width:${fill === "none" ? 2.2 : 1}"/>`, `Contour lines${contourNear ? " (near the wells)" : ""}\nevery ${+contourStep.toFixed(4)} ${o.pLabel}`.trim());
+    s += row(`<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:${fill === "none" ? rgbAt(0.75) : "#161616"};stroke-width:${fill === "none" ? 2.2 : 1}"/>`, `Contour lines${contourPerWell ? " of each well" : ""}${contourNear ? " (near the wells)" : ""}\nevery ${+contourStep.toFixed(4)} ${o.pLabel}`.trim());
   }
   if (st.streamlines) {
     s += row(`<line x1="${lx}" x2="${lx + 22}" y1="${ly}" y2="${ly}" style="stroke:#161616;stroke-width:1"/><polygon points="${lx + 22},${ly} ${lx + 15},${ly - 3.5} ${lx + 15},${ly + 3.5}" style="fill:#161616"/>`, "Streamlines\n(flow direction)");

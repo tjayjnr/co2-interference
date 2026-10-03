@@ -189,12 +189,12 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Colour scale", "Sunset (default), Jet, Turbo, Viridis, Plasma, Blues, Cool–warm (diverging) or Greyscale. The colour bar and its numbers follow the choice."],
     ["Fill", "Smooth colours, Colour bands (the pressure is grouped into the chosen number of classes with a stepped colour bar) or No fill (white map). No fill together with Contour lines gives a classic contour plot in which every line is coloured by its pressure value and the colour bar is marked at the contour levels."],
     ["Reverse colours", "Flips the colour scale so that high pressure takes the colour of low pressure and vice versa."],
-    ["Contour lines", "Draws iso-pressure lines at round values (5, 8, 10, 15, 20, 30 or 40 levels) with the value written on each line, only within the chosen Contour reach of the wells (Close to the wells, Around the wells, Wide, Half the map or Whole map). The levels span the pressures found inside that reach, and the colour bar is marked and labelled at the same levels, so the legend and the lines always agree. Labels turns the numbers off."],
+    ["Contour lines", "Draws iso-pressure lines at round values (5, 8, 10, 15, 20, 30 or 40 levels) with the value written on each line. Contours of: Each well separately (default) draws, around every well, the lines of the pressure change caused by that well alone, so you see how the pressure of each well propagates; Total field draws the lines of the summed field. The lines stay within the chosen Contour reach of the well (Close to the wells, Around the wells, Wide, Half the map or Whole map). The levels are common to all wells and span the pressures found inside the reach, and the colour bar is marked and labelled at the same levels, so the legend and the lines always agree. Labels turns the numbers off."],
     ["Streamlines", "Draws the flow paths of the brine (down the pressure gradient, away from the injectors), with an arrow showing the direction. They bend around the wells and are pushed away from a sealing boundary."],
     ["Reset style", "Returns to the default colours."],
   ]);
   fig("mapstyle", "Figure 7a. The pressure map with the Viridis scale, colour bands, contour lines and streamlines.");
-  fig("mapcontour", "Figure 7b. A contour plot (No fill, Jet scale, 15 levels, whole map): each line is coloured by its pressure value.");
+  fig("mapcontour", "Figure 7b. A contour plot (No fill, Jet scale, 15 levels): the lines around each well show how the pressure of that well alone propagates, coloured by pressure value.");
 
   b.push({ t: "h2", text: "6.4 Time series tab" });
   fig("time-series", "Figure 8. Time series of pressure at every well and monitoring point, with the field maximum and average.");
