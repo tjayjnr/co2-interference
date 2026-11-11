@@ -26,6 +26,8 @@ export interface LineOpts {
   markerLabel?: string;
   yMin?: number;
   height?: number;
+  /** Fit the y axis to the curves (with a small margin); the hline is kept in range only when it is close to them. */
+  fit?: boolean;
 }
 
 export interface StackOpts {
@@ -174,10 +176,22 @@ export function lineChart(o: LineOpts, t: Theme, title?: string, view?: View): R
   const top = M.t + tb.h;
   const xs = o.series.flatMap((s) => s.x);
   const ys = o.series.flatMap((s) => s.y).concat(o.hline ? [o.hline.y] : []);
-  const domain: View = {
+  const data = o.series.flatMap((s) => s.y).filter(Number.isFinite);
+  let hlineShown = !!o.hline;
+  let domain: View = {
     x0: 0, x1: Math.max(...xs, 1e-9),
     y0: yMin, y1: yMin + (Math.max(...ys, yMin + 1e-9) - yMin) * 1.06,
   };
+  if (o.fit && data.length) {
+    const lo = Math.min(...data), hi = Math.max(...data);
+    const pad = Math.max((hi - lo) * 0.08, Math.abs(hi) * 1e-5, 1e-9);
+    let y0 = lo - pad, y1 = hi + pad;
+    if (o.hline) {
+      hlineShown = o.hline.y >= y0 - (hi - lo) * 0.5 && o.hline.y <= y1 + (hi - lo) * 0.5;
+      if (hlineShown) { y0 = Math.min(y0, o.hline.y - pad); y1 = Math.max(y1, o.hline.y + pad); }
+    }
+    domain = { x0: 0, x1: Math.max(...xs, 1e-9), y0, y1 };
+  }
   const d = view ?? domain;
   const ax = axes({ d, xLabel: o.xLabel, yLabel: o.yLabel, chartH, top }, t);
   const id = `clip${++uid}`;
@@ -198,7 +212,7 @@ export function lineChart(o: LineOpts, t: Theme, title?: string, view?: View): R
     if (ly > top && ly < chartH - M.b) s += `<text x="${W - M.r - 4}" y="${f1(ly)}" text-anchor="end" style="${FONT};font-size:11px;fill:${p.bad}">${esc(o.hline.label)}</text>`;
   }
   const items: LegendItem[] = o.series.map((se) => ({ name: se.name, color: se.color, dash: se.dash, kind: "line" }));
-  if (o.hline) items.push({ name: o.hline.label, color: p.bad, dash: "6 4", kind: "line" });
+  if (o.hline) items.push({ name: hlineShown ? o.hline.label : `${o.hline.label} (above the chart)`, color: p.bad, dash: "6 4", kind: "line" });
   if (o.markerX !== undefined) items.push({ name: o.markerLabel ?? "Evaluation time", color: p.muted, dash: "2 3", kind: "line" });
   const lg = legendBlock(items, M.l, chartH + 6, W - M.r, t);
   const height = chartH + 6 + lg.height;
@@ -491,13 +505,51 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
     s += `<rect x="${f1(px(q.x) - 5)}" y="${f1(py(q.y) - 5)}" width="10" height="10" style="fill:#1c7ed6;stroke:#fff;stroke-width:1.5"/>${label(px(q.x), py(q.y), q.name)}`;
   }
   // Wells on every map: a thin vertical line starting at the well and pointing up, with the name centred on top of it.
+  // So that every well stays visible when wells are close (for example a square grid), a line is shortened when another
+  // well sits just above it, and a name that would cover another well's line or name moves beside or below its line.
   {
-    const lineH = 40;
-    for (const w of o.wells) {
-      const cx = px(w.x), cy = py(w.y);
-      s += `<line x1="${f1(cx)}" x2="${f1(cx)}" y1="${f1(cy)}" y2="${f1(cy - lineH)}" style="stroke:#fff;stroke-width:4.5;stroke-linecap:butt"/>`;
-      s += `<line x1="${f1(cx)}" x2="${f1(cx)}" y1="${f1(cy)}" y2="${f1(cy - lineH)}" style="stroke:#000;stroke-width:2.2;stroke-linecap:butt"/>`;
-      s += `<text x="${f1(cx)}" y="${f1(cy - lineH - 6)}" text-anchor="middle" style="${FONT};font-size:12px;font-weight:700;fill:#fff;stroke:#000;stroke-width:3;paint-order:stroke">${esc(w.name)}</text>`;
+    type Box = { x0: number; x1: number; y0: number; y1: number };
+    const pts = o.wells.map((w) => ({ cx: px(w.x), cy: py(w.y), name: w.name, tw: w.name.length * 7 + 6 }));
+    const lineH = pts.map((a, i) => {
+      let h = 40;
+      pts.forEach((b, j) => {
+        const dx = Math.abs(b.cx - a.cx), dy = a.cy - b.cy;
+        if (j !== i && dx < 34 && dy > 0) h = Math.min(h, dy * 0.45);
+      });
+      return Math.max(h, 10);
+    });
+    const boxes: Box[] = pts.map((a, i) => ({ x0: a.cx - 5, x1: a.cx + 5, y0: a.cy - lineH[i] - 1, y1: a.cy + 5 }));
+    const overlaps = (b: Box, skip: number) => boxes.some((q, k) => k !== skip && b.x0 < q.x1 && b.x1 > q.x0 && b.y0 < q.y1 && b.y1 > q.y0);
+    // a name that fits nowhere is shortened to its number (Well 12 -> 12); one that still does not fit is left out
+    // (zoom in on the map to see it)
+    const short = (n: string) => (/(\d+)\s*$/.exec(n)?.[1] ?? n.slice(0, 3));
+    const place = (a: (typeof pts)[0], i: number, text: string) => {
+      const tw = text.length * 7 + 6;
+      const top = a.cy - lineH[i];
+      const cands: { x: number; y: number; anchor: "middle" | "start" | "end" }[] = [
+        { x: a.cx, y: top - 6, anchor: "middle" }, // centred on top of the line
+        { x: a.cx + 7, y: top + 5, anchor: "start" }, // beside the top of the line
+        { x: a.cx - 7, y: top + 5, anchor: "end" },
+        { x: a.cx + 7, y: a.cy + 15, anchor: "start" }, // below the well
+        { x: a.cx - 7, y: a.cy + 15, anchor: "end" },
+        { x: a.cx, y: a.cy + 18, anchor: "middle" },
+      ];
+      const boxOf = (c: (typeof cands)[0]): Box => {
+        const x0 = c.anchor === "middle" ? c.x - tw / 2 : c.anchor === "start" ? c.x : c.x - tw;
+        return { x0, x1: x0 + tw, y0: c.y - 12, y1: c.y + 3 };
+      };
+      const c = cands.find((cd) => !overlaps(boxOf(cd), i));
+      if (c) boxes.push(boxOf(c));
+      return c ? { ...c, text } : null;
+    };
+    const labels = pts.map((a, i) => place(a, i, a.name) ?? place(a, i, short(a.name)));
+    pts.forEach((a, i) => {
+      s += `<line x1="${f1(a.cx)}" x2="${f1(a.cx)}" y1="${f1(a.cy)}" y2="${f1(a.cy - lineH[i])}" style="stroke:#fff;stroke-width:4.5;stroke-linecap:butt"/>`;
+      s += `<line x1="${f1(a.cx)}" x2="${f1(a.cx)}" y1="${f1(a.cy)}" y2="${f1(a.cy - lineH[i])}" style="stroke:#000;stroke-width:2.2;stroke-linecap:butt"/>`;
+    });
+    for (const c of labels) {
+      if (!c) continue;
+      s += `<text x="${f1(c.x)}" y="${f1(c.y)}" text-anchor="${c.anchor}" style="${FONT};font-size:12px;font-weight:700;fill:#fff;stroke:#000;stroke-width:3;paint-order:stroke">${esc(c.text)}</text>`;
     }
   }
   s += "</g>";

@@ -1,17 +1,26 @@
 // CO2 saturation around the injectors: radial Buckley-Leverett (Welge) solution for CO2 displacing brine.
 //
+// The injected reservoir volume V(t) of each well comes from the pressure model (surface volume x Bg at its BHP).
 // For a constant volumetric injection rate q into a homogeneous layer, the saturation Sg obeys
 //   r(Sg, t)^2 = q t / (pi phi h) * dfg/dSg,
 // with a shock (the plume front) at the Welge tangent point Sf, where dfg/dSg = fg(Sf) / Sf.
 // Fractional flow uses Corey relative permeabilities. Gravity override, dissolution, capillarity and
-// residual trapping are ignored; overlapping plumes are added and capped at the maximum saturation.
+// residual trapping are ignored. Where plumes overlap the map shows the highest saturation of any single well, so every
+// well keeps its own profile (highest next to the well, falling outward) instead of a capped sum.
 
-import type { Aquifer, GridResult, Well } from "./physics.ts";
-import { injectedMt } from "./physics.ts";
+import type { GridResult, Well } from "./physics.ts";
+
+/** Geometry used to place the plume: porosity, net thickness (m) and wellbore radius (m). */
+export interface SatGeom {
+  porosity: number;
+  thicknessM: number;
+  rwM: number;
+}
 
 export interface SatParams {
   swr: number; // irreducible brine saturation
-  krgMax: number; // CO2 relative permeability at maximum CO2 saturation
+  krgMax: number; // CO2 relative permeability at maximum CO2 saturation (end point krg0)
+  krwMax?: number; // brine end-point relative permeability krw0 (default 1)
   nw: number; // Corey exponent, brine
   ng: number; // Corey exponent, CO2
   muCo2MPas: number; // CO2 viscosity, mPa.s
@@ -30,7 +39,7 @@ export function makeSatModel(p: SatParams, muBrineMPas: number): SatModel {
   const n = 2000;
   const fg = (sg: number) => {
     const sn = Math.min(Math.max(sg / smax, 0), 1);
-    const krw = (1 - sn) ** p.nw;
+    const krw = (p.krwMax ?? 1) * (1 - sn) ** p.nw;
     const krg = p.krgMax * sn ** p.ng;
     if (krg <= 0) return 0;
     return 1 / (1 + (krw * p.muCo2MPas) / (krg * muBrineMPas));
@@ -69,38 +78,35 @@ export function satProfile(m: SatModel, x: number): number {
   return m.s[lo] + f * (m.s[hi] - m.s[lo]);
 }
 
-/** Reservoir volume (m3) of CO2 injected by a well up to time t. */
-export const injectedVolume = (w: Well, tYr: number, a: Aquifer) => (injectedMt(w, tYr) * 1e9) / a.co2DensityKgM3;
-
-/** Radius (m) of the plume front of one well (depends on the cumulative volume injected, not on the rate history). */
-export function plumeRadius(w: Well, tYr: number, a: Aquifer, m: SatModel): number {
-  const v = injectedVolume(w, tYr, a);
-  if (v <= 0) return 0;
-  return Math.sqrt((v * m.xiFront) / (Math.PI * a.porosity * a.thicknessM));
+/** Radius (m) of the plume front for an injected reservoir volume v (m3). */
+export function plumeRadius(v: number, g: SatGeom, m: SatModel): number {
+  if (!(v > 0)) return 0;
+  return Math.sqrt((v * m.xiFront) / (Math.PI * g.porosity * g.thicknessM));
 }
 
-export function satFromWell(w: Well, px: number, py: number, tYr: number, a: Aquifer, m: SatModel): number {
-  const v = injectedVolume(w, tYr, a);
-  if (v <= 0) return 0;
-  const r = Math.max(Math.hypot(px - w.x, py - w.y), a.wellboreRadiusM);
-  return satProfile(m, (Math.PI * a.porosity * a.thicknessM * r * r) / v);
+/** Saturation at (px, py) from one well that has injected reservoir volume v (m3). */
+export function satFromWell(w: Well, px: number, py: number, v: number, g: SatGeom, m: SatModel): number {
+  if (!(v > 0)) return 0;
+  const r = Math.max(Math.hypot(px - w.x, py - w.y), g.rwM);
+  return satProfile(m, (Math.PI * g.porosity * g.thicknessM * r * r) / v);
 }
 
-export function totalSaturation(wells: Well[], px: number, py: number, tYr: number, a: Aquifer, m: SatModel): number {
+/** Saturation at a point: the highest of the plumes of all wells there (vols[i] = reservoir volume of wells[i]). */
+export function totalSaturation(wells: Well[], vols: number[], px: number, py: number, g: SatGeom, m: SatModel): number {
   let s = 0;
-  for (const w of wells) s += satFromWell(w, px, py, tYr, a, m);
+  wells.forEach((w, i) => { s = Math.max(s, satFromWell(w, px, py, vols[i], g, m)); });
   return Math.min(s, m.smax);
 }
 
 export function satGrid(
-  wells: Well[], tYr: number, a: Aquifer, m: SatModel,
+  wells: Well[], vols: number[], g: SatGeom, m: SatModel,
   ext: { x0: number; y0: number; x1: number; y1: number }, nx = 300, ny = 300,
 ): GridResult {
   const values = new Float64Array(nx * ny);
   for (let j = 0; j < ny; j++) {
     const y = ext.y0 + ((j + 0.5) / ny) * (ext.y1 - ext.y0);
     for (let i = 0; i < nx; i++) {
-      values[j * nx + i] = totalSaturation(wells, ext.x0 + ((i + 0.5) / nx) * (ext.x1 - ext.x0), y, tYr, a, m);
+      values[j * nx + i] = totalSaturation(wells, vols, ext.x0 + ((i + 0.5) / nx) * (ext.x1 - ext.x0), y, g, m);
     }
   }
   return { nx, ny, ...ext, values, max: m.smax }; // colour scale is always 0 .. maximum saturation

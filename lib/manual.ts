@@ -21,132 +21,135 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   b.push({ t: "title", title: "User Manual: CO₂ Injection Pressure Interference and Saturation Analyzer", subtitle: `Web application at ${SITE_URL}`, date });
 
   h1("1. Introduction");
-  p("The CO₂ Injection Pressure Interference and Saturation Analyzer is a web application for screening-level analysis of several CO₂ injection wells operating in the same saline aquifer. For a set of wells, rates and aquifer properties it calculates how far the injected CO₂ spreads, how much the formation pressure rises at each well and at monitoring locations, how strongly the wells interfere with one another, and whether the pressure stays below a limit derived from the fracture gradient.");
+  p("The CO₂ Injection Pressure Interference and Saturation Analyzer is a web application for screening-level analysis of several injection wells operating in the same saline aquifer. For a set of wells, rates and reservoir properties it calculates the bottom-hole pressure of every well with an injection-BHP model (two-phase CO₂–brine, single-phase CO₂ or single-phase water), how far the injected CO₂ spreads, how much the formation pressure rises at each well and at monitoring locations, how strongly the wells interfere with one another, and whether the bottom-hole pressure stays below a pressure limit (a maximum allowable BHP or a fraction of the fracture pressure). At the top of the Input section you choose which calculation of the program to run: Single well (the program's single-well calculation) or Multiwell interference (the program's multiwell section, in which every well's BHP includes the pressure from the other wells).");
   p("The application runs in a web browser; nothing needs to be installed and the inputs are not sent to a server. Open the address above on a computer (a QR code that opens the same address can be printed on posters or slides). A large screen is recommended because the inputs are on the left and the results on the right.");
   b.push({ t: "h2", text: "1.1 What the application calculates" });
   bullets(
-    "CO₂ saturation and plume extent around each injector (radial Buckley–Leverett front).",
-    "Pressure buildup in the aquifer, from the Theis solution superposed over all wells, with a choice of aquifer boundary condition (infinite, constant-pressure or sealing).",
-    "The effect of well skin, which can be typed in per well or calculated from a damaged zone.",
+    "The bottom-hole pressure (BHP) of each well from the injection-BHP model: two-phase CO₂–brine with three zones (dry CO₂, CO₂ + brine, brine) and Peng–Robinson CO₂ properties, single-phase CO₂ or single-phase water, including the pressure falloff after shut-in.",
+    "Pressure buildup in the aquifer, from the pressure profiles of all wells added together, with a choice of aquifer boundary condition (infinite, constant-pressure or sealing).",
+    "CO₂ fronts (dry zone and gas front), zone 2 saturation and a saturation map around each injector (two-phase model).",
+    "The effect of well skin, typed in per well.",
     "Well-to-well interference: how much of each well's buildup is caused by the other wells, and when a pressure effect arrives at each target.",
     "A pass/fail check of every well against the maximum allowable buildup, and a check of monitoring points against an interference threshold.",
     "A side-by-side comparison of the three boundary conditions.",
     "Charts, tables, a results CSV and a publication-style report in PDF or Word format.",
   );
   b.push({ t: "h2", text: "1.2 What it is not" });
-  p("The model is analytical and intended for screening and for ranking well layouts. It assumes a homogeneous, confined aquifer and brine-equivalent flow (Section 10). Results should be confirmed with numerical reservoir simulation before engineering decisions are made.");
+  p("The model is analytical and intended for screening and for ranking well layouts. It assumes a homogeneous, confined aquifer with one permeability and porosity for all zones (Section 10). Results should be confirmed with numerical reservoir simulation before engineering decisions are made.");
 
   h1("2. Quick start");
-  p("The page opens with a worked example (four injectors and one monitoring point), so you can try the application immediately.");
+  p("The page opens with a worked example (four wells 1000 ft apart in a straight line and one monitoring point), so you can try the application immediately.");
   b.push({ t: "bullets", items: [
-    "Step 1. Check the values in the Input panel on the left. Change anything you like; each number has its own unit selector beside it.",
-    "Step 2. Check the injection wells table: location, injection rate in Mt of CO₂ per year, start and end year of injection, and skin (leave blank to calculate it).",
-    "Step 3. Press ▶ RUN analysis (green-blue button at the top of the left panel, or the link in the “No results yet” message). Nothing is calculated until you do this.",
-    "Step 4. Read the status card: with the example data and the default three-zone pressure model the peak buildup is about 8.57 MPa against an allowable 8.70 MPa, so it reports “Within limit”. (With the single-phase option in the Pressure model section the peak is about 10.05 MPa and the status is “Limit exceeded”.)",
-    "Step 5. Click through the result tabs: CO₂ saturation, Pressure map, Time series, Interference matrix, Limit check and Compare boundaries.",
-    "Step 6. Change an input and press RUN again. A yellow banner reminds you whenever the displayed results are older than the inputs.",
-    "Step 7. Export what you need: chart images (PNG or SVG), the results CSV, or the full report (PDF or Word).",
+    "Step 1. Choose the Well system at the top of the Input panel: Single well or Multiwell interference.",
+    "Step 2. Check the values in the Input panel. Change anything you like; each number has its own unit selector beside it.",
+    "Step 3. Single well: enter the rate, skin and number of injection years. Multiwell: set the Number of wells and how the distances are given (constant spacing in a line or grid, adjacent distances, a pairwise distance matrix or x/y coordinates), then each well's rate, start and end year, radius, skin, evaporation choice and own maximum BHP in the table.",
+    "Step 4. Press ▶ RUN analysis (button at the top of the left panel, or the link in the “No results yet” message). Nothing is calculated until you do this.",
+    "Step 5. Read the status cards: with the example data (two-phase model, 30 years) the peak BHP is 3582.45 psia at Well 2 and Well 3 against an allowable BHP of 4680 psia (0.9 × 5200 psia), so the status is PASS.",
+    "Step 6. Click through the result tabs. Multiwell: Multiwell results (the program's own tables, figures and files), CO₂ saturation, Pressure map, Time series, Well BHP, Interference matrix, Limit check and Compare boundaries. Single well: Program results first.",
+    "Step 7. Change an input and press RUN again. A yellow banner reminds you whenever the displayed results are older than the inputs.",
+    "Step 8. Export what you need: the program's files, chart images (PNG or SVG), the results CSV, or the full report (PDF or Word).",
   ] });
 
   h1("3. The screen at a glance");
   fig("overview", "Figure 1. The main screen after pressing RUN. The numbered areas are described in Table 1.");
   table("Table 1. Areas of the main screen.", ["No.", "Area", "What it does"], [
     ["1", "RUN analysis", "Starts the calculation with the current inputs. Also shows whether results are up to date."],
-    ["2", "Input panel", "All inputs: aquifer, pressure limit, CO₂ saturation, skin, boundary, wells, monitoring points and report details."],
+    ["2", "Input panel", "One Input section with all inputs, in groups: well system, pressure model and boundary, reservoir and fluids, the injection well (single well) or the number of wells and distances (multiwell), the pressure limit, shut-in observation, monitoring points and report details."],
     ["3", "Export buttons", "Results CSV, Report (PDF) and Report (Word); the User manual link."],
-    ["4", "Status cards", "Peak buildup, allowable buildup and the pass/fail status against the max allowable buildup."],
-    ["5", "Result tabs", "CO₂ saturation, Pressure map, Time series, Interference matrix, Limit check, Compare boundaries."],
+    ["4", "Status cards", "Peak BHP, allowable BHP and the program's pressure status (PASS, FAIL or NOT ASSESSED)."],
+    ["5", "Result tabs", "Multiwell results or Program results, CO₂ saturation (two-phase model), Pressure map, Time series, Well BHP and Interference matrix (multiwell), Limit check, Compare boundaries."],
     ["6", "Chart toolbar", "Zoom in/out, Reset zoom, Export PNG and Export SVG for the chart below it."],
   ]);
 
   h1("4. Entering the inputs");
   b.push({ t: "h2", text: "4.1 Units" });
-  p("Every input that has a unit carries its own unit selector directly beside the value, for example Permeability 150 [mD ▾]. Pick another unit and the number is converted automatically; the calculation is unaffected. The small selector beside the Input heading switches all quantities at once between SI units and Field (US oilfield) units. Pressures in the results can also be switched with the Pressure unit selector above the charts.");
-  p("Time is always in years. CSV import and export always use metres and Mt/yr (or longitude and latitude in degrees) so that files stay unambiguous.");
+  p("Every input that has a unit carries its own unit selector directly beside the value, for example Permeability 50 [mD ▾]. Pick another unit and the number is converted automatically; the calculation is unaffected. The small selector beside the Input heading switches all quantities at once between Field (US oilfield) units, the default, and SI units. Pressures in the results can also be switched with the Pressure unit selector above the charts.");
+  p("Time is always in years. CSV import and export always use metres (or longitude and latitude in degrees) and the model's surface rate (Mscf/day of CO₂, or STB/day of water) so that files stay unambiguous.");
   fig("input", "Figure 2. The Input section with a unit selector beside every value.");
+  fig("system", "Figure 2a. The Well system choice at the top of the Input section: Single well or Multiwell interference.");
 
-  b.push({ t: "h2", text: "4.2 Aquifer and fluid parameters" });
-  table("Table 2. Input parameters. Typical ranges are only a guide; use site data wherever available.", ["Parameter", "Meaning", "Typical range"], [
-    ["Permeability", "Horizontal permeability of the injection formation.", "10 to 1000 mD"],
-    ["Thickness", "Net thickness of the injection interval.", "10 to 200 m"],
-    ["Porosity", "Pore volume fraction.", "0.10 to 0.30"],
-    ["Total compressibility", "Combined rock and brine compressibility; controls how fast pressure spreads.", "2×10⁻⁴ to 10⁻³ 1/MPa"],
-    ["Brine viscosity", "Viscosity of the formation brine at reservoir conditions.", "0.3 to 1 mPa·s"],
-    ["CO₂ density", "Density of CO₂ at reservoir pressure and temperature; converts injected mass into reservoir volume.", "400 to 800 kg/m³"],
-    ["Wellbore radius", "Radius at which each well's own pressure is evaluated.", "0.07 to 0.15 m"],
-    ["Depth", "Mid-depth of the injection interval; sets the initial and fracture pressures.", "800 to 4000 m"],
-    ["Hydraulic diffusivity (calculated)", "Shown read-only under the inputs. With the three-zone pressure model it is shown for each zone (dry CO₂, CO₂ + brine, brine) as η × m / c*, and with the single-phase model as k / (φ μ ct). It updates as soon as you change any input; only its display unit can be chosen.", "brine 0.1 to 10 m²/s"],
-    ["Analysis horizon", "Length of the time series, in years. The evaluation-time slider runs from 0 to this value.", "20 to 100 yr"],
-    ["Reservoir temperature", "Used for the dry-zone calculation (water content of CO₂).", "40 to 120 °C"],
-    ["Brine salinity (NaCl)", "NaCl mass fraction of the brine; lowers the water activity.", "0 to 0.26"],
-    ["Brine density", "Density of the formation brine at reservoir conditions.", "1000 to 1200 kg/m³"],
-    ["Water fugacity coeff. Φw", "Fugacity coefficient of water in the CO₂-rich phase. 1 is the screening approximation; smaller values mean the CO₂ carries more water and the dry zone is larger.", "0.2 to 1"],
+  b.push({ t: "h2", text: "4.2 Reservoir parameters" });
+  table("Table 2. Reservoir inputs (defaults are those of the reference model). Use site data wherever available.", ["Parameter", "Meaning", "Default"], [
+    ["Permeability (every zone)", "Permeability of the injection formation; the same in all zones.", "50 mD"],
+    ["Reservoir thickness", "Net thickness of the injection interval.", "20 ft"],
+    ["Porosity (every zone)", "Pore volume fraction; the same in all zones.", "0.20"],
+    ["Well radius", "Radius at which each well's own pressure is evaluated.", "0.55 ft"],
+    ["Initial absolute pressure", "Initial reservoir pressure (absolute, psia in field units).", "3500 psia"],
+    ["Reservoir temperature", "Constant temperature; used for the Peng–Robinson CO₂ properties and the water vapour pressure. Not used by the water model.", "200 °F"],
   ]);
 
-  b.push({ t: "h2", text: "4.2.1 Pressure model" });
-  p("The Pressure model section chooses how the pressure around each well is calculated. The default is the Three-zone CO₂–brine model, which recognises that injected CO₂ creates three regions: a dry CO₂ zone next to the well, a CO₂–brine two-phase zone and the undisturbed brine. Each region has its own mobility (how easily it flows) and diffusivity (how fast pressure spreads), and the pressure solution is matched at the two fronts. Choose Single-phase, brine-equivalent (Theis) to treat the whole aquifer as brine, as in the earlier versions of the application.");
-  table("Table 2a. How the three-zone model is set up.", ["Item", "Setting"], [
-    ["Reference", "Brine: mobility k/μw and the compressibility entered above."],
-    ["Zone 1 (dry CO₂)", "Mobility ratio m1 = krg,max μw/μg; compressibility = rock + CO₂."],
-    ["Zone 2 (CO₂ + brine)", "Evaluated at the average CO₂ saturation behind the front (1/β, shown under the plume table); mobility from the relative-permeability curves; compressibility from the saturation-weighted brine and CO₂."],
-    ["Zone 3 (brine)", "Mobility ratio 1, compressibility = the total compressibility entered above."],
-    ["Rock and CO₂ compressibility", "Two extra inputs (default 4×10⁻⁵ and 0.02 1/MPa). The brine compressibility is the total minus the rock value."],
-    ["Fronts", "Dry front and gas front radii from the dry-out and saturation inputs; both grow with the square root of time."],
-    ["Rate changes", "Each rate period uses the kernel with its own rate; a shut-in uses the rate it stops."],
-  ], "In practice the model lowers the pressure next to each well (CO₂ is more mobile than brine) and leaves the pressure far from the wells close to the brine-equivalent value.");
+  b.push({ t: "h2", text: "4.2.1 Pressure model and fluid inputs" });
+  p("The Pressure model section chooses the injection-BHP model used for every well. Only the inputs used by the chosen model are shown.");
+  table("Table 2a. The three pressure models.", ["Model", "What it represents"], [
+    ["Two-phase CO₂–brine (default)", "Three zones around each well: dry CO₂ next to the well (if evaporation is included), CO₂ + brine, and brine. The gas front follows from the Corey relative permeabilities (both exponents 3, or both 2), the dry front from the evaporation of the residual brine, and the zone 2 saturation from the CO₂ mass balance. CO₂ density, compressibility and Bg come from the Peng–Robinson equation of state for pure CO₂ at each well's bottom-hole pressure, converged to 10⁻⁴ psi."],
+    ["Single-phase CO₂", "A CO₂-filled reservoir with relative permeability 1. Bg is fixed at 0.0005690187 rb/scf; CO₂ density and compressibility are fixed at the initial pressure."],
+    ["Single-phase water", "A water-filled reservoir with relative permeability 1 and Bw = 1.0 rb/STB. Rates are in STB/day."],
+  ]);
+  table("Table 2b. Fluid and rock-fluid inputs.", ["Input", "Used by", "Default"], [
+    ["Include evaporation?", "Two-phase. No sets the dry zone to zero (r_d = r_w).", "Yes"],
+    ["Water viscosity", "Two-phase, water", "0.30 cP"],
+    ["Gas viscosity", "Two-phase, CO₂", "0.0432 cP"],
+    ["Brine density (water density at initial pressure)", "Two-phase, water", "63.9 lb/ft³"],
+    ["Salt mass fraction", "Two-phase (water activity of the brine)", "0.034"],
+    ["Rock compressibility", "All models", "4.2×10⁻⁶ 1/psi"],
+    ["Water compressibility", "Two-phase, water", "3.5×10⁻⁶ 1/psi"],
+    ["Irreducible water saturation Swr", "Two-phase. The maximum CO₂ saturation is 1 − Swr.", "0.55"],
+    ["Gas end-point rel. perm. krg0", "Two-phase", "0.65"],
+    ["Water end-point rel. perm. krw0", "Two-phase", "1.0"],
+    ["Zone 1 gas rel. perm. krg1", "Two-phase (dry-CO₂ zone)", "0.65"],
+    ["Gas and water Corey exponents", "Two-phase. Both 3 (cubic front) or both 2 (quadratic front); other pairs are rejected.", "3 and 3"],
+      ], "If an input is outside its allowed range (for example porosity not between 0 and 1, or mismatched Corey exponents) a red message appears under the RUN button and the calculation stops with the same message.");
+
+  b.push({ t: "h2", text: "4.2.2 Post-shut-in observation" });
+  p("As in the program, the Input section asks: Include pressure observation after injection stops? Choose Yes and enter the Observation duration (years) and the Observation years to report (for example 0, 0.5, 1, 5, 10; leave blank for every whole year and the end of the period), or choose No. Observation starts when the last well stops (the latest End year; single well: after its injection years); the pressure then falls by zero-flow radial diffusion of each well's final pressure profile with the zone radii, mobilities and storage frozen at shut-in, and in the multiwell calculation the wells' falloffs are added at every well. Year 0 is the instant injection stops, with the flowing skin drop removed. The results run from year 0 to the last End year plus the observation duration; the evaluation-time slider covers the same period.");
+
   b.push({ t: "h2", text: "4.3 Pressure limit" });
-  p("The allowable buildup is calculated as: safety factor × fracture pressure − initial pressure, where the initial pressure is the hydrostatic gradient times the depth, and the fracture pressure is the fracture gradient times the depth. The panel shows the initial pressure, the fracture pressure and the resulting maximum buildup under the inputs.");
-  table("Table 3. Pressure-limit inputs.", ["Input", "Meaning", "Typical value"], [
-    ["Hydrostatic gradient", "Initial formation-pressure gradient.", "0.0098 to 0.0115 MPa/m"],
-    ["Fracture gradient", "Gradient of the pressure at which the caprock or formation would fracture.", "0.015 to 0.020 MPa/m"],
-    ["Safety factor", "Fraction of the fracture pressure that you allow to be reached.", "0.8 to 0.95"],
-    ["Interference threshold", "A small pressure rise used only to detect where and when a well's influence arrives. It is not a pass/fail limit.", "0.01 to 0.1 MPa"],
+  p("The group asks, as the program does: Will the required pressure exceed a limit? Choose the pressure assessment: Not assessed (no limit; every well is reported NOT ASSESSED), Maximum allowable BHP (an absolute pressure), or Fraction of fracture pressure (an absolute fracture pressure and an allowable fraction, 0.9 by default; this is your choice, not a regulatory rule). In the multiwell table a well can also have its own Max BHP, which replaces the shared limit for that well. The check compares the required BHP with the allowable BHP at every computed time: FAIL means the required BHP exceeds it at a computed time. Rates are not reduced automatically, and this is an operating-pressure check, not a prediction of mechanical well integrity.");
+  table("Table 4. Pressure-limit inputs.", ["Input", "Meaning", "Default"], [
+    ["Pressure assessment", "Not assessed, Maximum allowable BHP, or Fraction of fracture pressure.", "Fraction of fracture pressure"],
+    ["Maximum allowable BHP", "Absolute bottom-hole pressure that must not be exceeded.", "4680 psia"],
+    ["Fracture pressure, Allowable fraction", "Allowable BHP = fraction × fracture pressure (absolute).", "5200 psia, 0.9 (4680 psia)"],
+    ["Interference threshold", "Detection level for the map contour, the arrival times and the monitoring points; not a pass/fail limit.", "1 psi"],
   ]);
-  p("Important: wells pass or fail against the max allowable buildup only. The interference threshold is used for the dashed map contour, the arrival-time table and the monitoring-point check.");
 
-  b.push({ t: "h2", text: "4.4 CO₂ saturation inputs" });
-  table("Table 4. Relative-permeability inputs used for the CO₂ saturation map.", ["Input", "Meaning", "Default"], [
-    ["Residual brine Swr", "Brine saturation that cannot be displaced. The maximum CO₂ saturation is 1 − Swr.", "0.2"],
-    ["Max CO₂ rel. perm. krg", "Relative permeability to CO₂ at maximum CO₂ saturation.", "0.4"],
-    ["Corey exponent, brine", "Shape of the brine relative-permeability curve.", "4"],
-    ["Corey exponent, CO₂", "Shape of the CO₂ relative-permeability curve.", "2"],
-    ["CO₂ viscosity", "Viscosity of CO₂ at reservoir conditions.", "0.06 mPa·s"],
-  ], "The defaults are illustrative; replace them with values for your formation (for example from core measurements). The temperature, salinity, brine density and Φw listed in Table 2 also feed the dry-zone radius shown with the saturation results.");
+  b.push({ t: "h2", text: "4.4 Interference threshold" });
+  p("The interference threshold (in the Pressure limit group) is the smallest pressure change you regard as detectable. It defines the dashed contour on the pressure map, the arrival times on the Interference matrix tab and the monitoring-point check on the Limit check tab. It is not a pass/fail limit.");
 
   b.push({ t: "h2", text: "4.5 Well skin" });
-  p("Skin describes extra pressure loss (positive skin, formation damage) or gain (negative skin, stimulation) near a well. Skin is set per well in the Skin column of the wells table:");
-  bullets(
-    "If you have a measured skin value, type it in the well's Skin cell.",
-    "If you leave the cell empty, the application calculates the skin of that well with the Hawkins formula, s = (k/ks − 1) ln(rs/rw), from the damaged-zone permeability ks and radius rs in the Well skin section. The calculated value is displayed in grey inside the empty cell.",
-    "You can mix both approaches: some wells with typed skin, the others calculated.",
-  );
-  p("Skin raises the pressure at the injector itself while it injects; it does not change the pressure felt at other wells.");
-  fig("skinbound", "Figure 3. The Well skin and Boundary condition sections.");
+  p("Skin describes extra pressure loss (positive skin, formation damage) or gain (negative skin, stimulation) near a well. Type each well's skin factor in the Skin column of the wells table; a blank cell means zero skin. The skin pressure drop, 141.2·μ·q·B·s/(k·h), is added at the injector itself while it injects; it does not change the pressure felt at other wells.");
+  fig("skinbound", "Figure 3. The Pressure model and boundary group and the Pressure limit group of the Input section.");
 
   b.push({ t: "h2", text: "4.6 Boundary condition" });
-  p("Choose how the aquifer behaves at a straight outer boundary:");
+  p("The boundary is set in the first group of the Input section, together with the pressure model. Choose how the aquifer behaves at a straight outer boundary:");
   bullets(
-    "None (infinite): the aquifer extends indefinitely; pressure spreads without meeting an edge.",
+    "Infinite: the aquifer extends indefinitely; pressure spreads without meeting an edge.",
     "Sealing fault (no-flow): a barrier that reflects the pressure; buildup is higher than in the infinite case.",
     "Constant pressure: an open edge that holds the pressure; buildup is lower than in the infinite case.",
   );
-  p("For the two bounded cases give the boundary as a line, x = constant or y = constant (or longitude or latitude when real-world coordinates are used), and its position. All wells and monitoring points must lie on the same side. The Compare boundaries tab always shows all three cases side by side using the line you entered here.");
+  p("For the two bounded cases give the boundary as a line, x = constant or y = constant (or longitude or latitude when real-world coordinates are used), and its position. All wells and monitoring points must lie on the same side. The Compare boundaries tab always shows all three cases side by side using the line you entered here. The program itself is infinite-acting: a boundary is applied with image wells in the maps, curves, matrix and comparison, while the Multiwell results and Program results tabs stay the program's infinite-acting outputs.");
 
   b.push({ t: "h2", text: "4.7 Injection wells" });
-  fig("wells", "Figure 4. The Injection wells section.");
-  table("Table 5. Columns of the wells table.", ["Column", "Meaning"], [
-    ["Name", "Label shown on charts, tables and reports. Type any name you like; it updates everywhere at once, without a new RUN. You can also rename a well directly in the plume table on the CO₂ saturation tab."],
-    ["x, y (or Lon, Lat)", "Well location. Choose the units with the selector in the column header."],
-    ["Rate", "CO₂ injection rate of the first period (default unit Mt/yr). Change the unit in the column header."],
-    ["Start, End", "Year injection starts and stops. After the end year the well is shut in and its pressure recovers."],
-    ["Skin", "Typed skin value, or empty to calculate it (Section 4.5)."],
-    ["＋", "Adds a rate change to the well (Section 4.7.1)."],
+  p("Single well: enter the surface injection rate, the skin factor and the number of whole injection years. The well sits at the centre of the maps (x = y = 0) and injects at a constant rate from year 0, exactly as the program's single-well calculation; the well radius is in the Reservoir and fluids group.");
+  fig("single", "Figure 3a. The Injection well group of the Single well system.");
+  p("Multiwell interference: the inputs follow the program's multiwell form. Number of wells (2 to 32) sets the rows of the table; raising it adds wells named Well k with the default rate, start year 0, radius 0.55 ft and skin 0, and lowering it removes wells from the end. Distances: Constant neighboring spacing places the wells in a Straight line or a Square grid with the given spacing between neighbours (all other separations, including grid diagonals, follow from the layout); Different distances lets you give the Adjacent distances along a line (Well 1–2, Well 2–3, …), the Full pairwise distance matrix (numeric CSV, one row per well, zero diagonal; it must describe a realizable horizontal 2-D layout) or Custom x/y coordinates typed in the table (or longitude/latitude, Section 4.8). Distances are typed in the distance unit chosen in the panel. The Well separation distances table below the well table shows the actual distances, and the x and y columns show the positions calculated from the distances. Well radius: choose Same for all wells and enter one value, or Different for each well and enter each well's radius in the Radius column of the table (it starts at the common value). Reporting times are the project years of the program's tables (blank = every whole year and the endpoint).");
+  fig("wells", "Figure 4. The Number of wells and distances group (multiwell).");
+  table("Table 5. Columns of the multiwell table.", ["Column", "Meaning"], [
+    ["Name", "Label shown on charts, tables, files and reports. It updates everywhere at once, without a new RUN."],
+    ["x, y (or Lon, Lat)", "Well location: calculated from the distances, or typed in with Custom x/y coordinates."],
+    ["Rate", "Surface injection rate: Mscf/day of CO₂ (150 means 150,000 scf/day), or STB/day of water for the water model. 0 makes a passive observation well."],
+    ["Start (yr)", "Project year in which the well starts injecting."],
+    ["End (yr)", "Project year in which the well stops injecting. The latest End year is the project endpoint of the program, after which the observation starts. A single-phase well's end is a rate change to 0 (the program's rate schedule). A two-phase well that stops before the last one follows the program's fixed-zone falloff from its End year while the others continue; this is an extension, because the program itself stops all wells together. With equal End years the results are exactly the program's."],
+    ["Radius", "Shown when Well radius is Different for each well: the radius of this well."],
+    ["Skin", "Skin factor of the well; blank means 0 (Section 4.5)."],
+    ["Evaporation", "Two-phase model: inherit (the setting of the Pressure model group), on or off for this well."],
+    ["Max BHP", "This well's own maximum allowable BHP; blank uses the shared pressure limit."],
+    ["＋", "Single-phase models: adds a rate change (Section 4.7.1)."],
     ["×", "Removes the well."],
   ]);
-  p("Use + Add well to add a well. Import CSV loads a table of wells from a file and Export saves the current table (Section 9).");
+  p("Import CSV loads a table of wells from a file (the positions are then used as Custom x/y coordinates) and Export saves the current table (Section 9).");
 
   b.push({ t: "h2", text: "4.7.1 Rate changes (variable injection rate)" });
-  p("A well can inject at more than one rate. Click ＋ at the end of a well's row to add a rate change: a new row appears below the well with the year from which the new rate applies and the new rate. Add as many changes as you need. Each rate stays in force until the next change, the last rate stays in force until the End year, and the well is then shut in. The pressure effect of every change is added by superposition in time, so a rate reduction partly offsets the earlier buildup and the pressure recovers after shut-in. Skin acts on the rate in force, and the CO₂ plume depends on the total volume injected so far.");
+  p("In the single-phase models (CO₂ or water) a well can inject at more than one rate, as the program's rate schedule allows. Click ＋ at the end of a well's row to add a rate change: the year from which the new rate applies and the new rate (0 stops the well). The changes are added by superposition in time of the constant-property line-source solution. The two-phase model accepts one constant rate per well from its start year: the program does not treat rate changes of moving fronts as reset plumes, so ＋ is not offered there.");
 
   b.push({ t: "h2", text: "4.8 Real-world coordinates (longitude and latitude)" });
   p("If your wells are known as longitude and latitude, set Location input to “Longitude / latitude (real-world)”. The x and y columns are replaced by Lon (°) and Lat (°); the same applies to the monitoring points. Enter WGS84 decimal degrees, with east and north positive.");
@@ -169,19 +172,20 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   bullets(
     "Press ▶ RUN analysis. The inputs at that moment are used for all results, tables, figures and reports.",
     "If you change any input afterwards, the status text next to the button and a yellow banner above the results say that the inputs have changed; press RUN again to refresh.",
-    "The Evaluation time slider, the Pressure unit selector, Map padding and the tabs do not require a new RUN, because they only change what is displayed.",
-    "Warnings appear above the results when something is inconsistent, for example a well that lies on the boundary, wells on both sides of the boundary, two wells at the same location, an end year that is not after the start year, or a pressure limit that is below the initial pressure.",
+    "The Evaluation time slider, the Pressure unit selector, Map area, Map padding and the tabs do not require a new RUN, because they only change what is displayed.",
+    "Warnings appear above the results when something is inconsistent, for example a well that lies on the boundary, wells on both sides of the boundary, two wells at the same location, a well whose end year is not after its start year, or a pressure limit that is below the initial pressure.",
   );
 
   h1("6. Reading the results");
   b.push({ t: "h2", text: "6.1 Status cards" });
-  p("Three cards sit above the tabs. Peak buildup is the highest wellbore pressure buildup of any well over the whole analysis horizon and names the well and the time. Allowable buildup shows the limit that is being applied. Status reports Within limit or Limit exceeded, and says by what factor all injection rates could be scaled before the worst well reaches the limit. Because the model is linear in rate, that factor is exact within the model.");
+  p("Three cards sit above the tabs. Peak BHP is the highest required bottom-hole pressure of any well at the program's computed times (injection and observation) and names the well and the year. Allowable BHP shows the limit that is being applied. Pressure status is the program's overall result: PASS, FAIL or NOT ASSESSED, and the card says by what factor all injection rates could be scaled before the worst well reaches the limit. Cumulative CO₂ injected (field) (water for the water model) is the total mass injected by all wells by the end of injection, in million tonnes (Mt) with the tonnes, pounds and surface volume below it; it is the program's standard-condition density (rho_sc_lb_scf, or water_mass_per_stb_lb) times the injected surface volume. The Multiwell results tab (Program results for a single well) lists the same for every well with the Field total. The model is close to linear in rate (the CO₂ properties depend weakly on pressure), so the factor is a close guide rather than exact.");
 
   b.push({ t: "h2", text: "6.2 CO₂ saturation tab" });
-  fig("sat", "Figure 6. CO₂ saturation map with the plume of each injector and the table of plume radii.");
-  p("The map shows the saturation of injected CO₂ (Sg) at the evaluation time, with a labelled colour scale from 0 up to the maximum saturation. Each injector creates a roughly circular plume; the well is drawn as a thin vertical line that starts at the plume centre and points upward, with its name centred on top of the line (click a name in the table below the map to rename it); the plume edge is where the colour returns to the dark-blue brine background. Plumes of neighbouring wells are added where they overlap. Below the map, a table lists for each well the mass injected so far, the plume radius (the CO₂ front), the dry-zone radius (the evaporation front next to the well, where the brine has been dried out), the saturation just behind the front and the maximum saturation at the well. Drag the Evaluation time slider to watch the plumes grow; each plume stops growing when its well is shut in.");
+  fig("sat", "Figure 6. CO₂ saturation map with the plume of each injector and the table of CO₂ zones.");
+  p("The map shows the saturation of injected CO₂ (Sg) at the evaluation time, with a labelled colour scale from 0 up to the maximum saturation. Each injector creates a roughly circular plume; the well is drawn as a thin vertical line that starts at the plume centre and points upward, with its name centred on top of the line (click a name in the table below the map to rename it); the plume edge is where the colour returns to the dark-blue brine background. Each plume is coloured from the highest saturation next to its well, falling outward to its front; where plumes of neighbouring wells overlap, the higher of their saturations is shown, so every well keeps its own plume. The tab is shown for the two-phase model only. The map places the radial Buckley–Leverett profile around each well for the reservoir volume of CO₂ it has injected (surface volume × Bg at its bottom-hole pressure). Below the map, a table lists for each well the mass injected so far, the gas front r_g and the dry front r_d from the pressure model, the zone 2 (CO₂ + brine) saturation, the saturation at the front and the maximum saturation. Drag the Evaluation time slider to watch the plumes grow; each plume stops growing when its well is shut in.");
 
   b.push({ t: "h2", text: "6.3 Pressure map tab" });
+  p("Both maps (pressure and CO₂ saturation) are fitted to the wells: Map area Around the wells shows the wells with automatic padding large enough for the largest CO₂ plume and at least most of a well spacing around them, so every well stands apart even in a square grid; Wells and monitoring points also includes the monitoring points (a note above the map names any point that lies outside it). Type a Map padding to set your own margin, and Auto padding returns to the automatic one. Each well is a vertical line pointing up from its position with its name on top; the line is shortened when another well sits just above it, and a name that would cover another well moves beside or below its line. When wells are so close that a full name does not fit, only the well number is shown (zoom in to see every name).");
   fig("pressure-map", "Figure 7. Pressure buildup map with the interference-threshold and allowable-buildup contours.");
   p("The map shows the total pressure buildup caused by all wells at the evaluation time, with a labelled colour scale. The dashed teal contour is the interference threshold (detection only). The solid white-and-black contour is the max allowable buildup (the pass/fail limit); it appears only near wells that approach the limit. Each well is drawn as a thin vertical line with its name on top, as on the saturation map. Use Map padding to enlarge or shrink the area drawn around the wells.");
   p("Above the pressure map, the style bar controls how the map is coloured and annotated. The choices apply to the picture, to the PNG and SVG exports and to the report figure.");
@@ -201,13 +205,22 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   p("The Show selector chooses what is plotted: total buildup (ΔP) at each wellbore including skin; bottomhole pressure (initial pressure plus buildup), with the maximum allowable bottomhole pressure; or interference only, which removes each well's own contribution so that only the effect of the other wells remains. Dashed lines are monitoring points. The black line is the field maximum (the highest pressure of any well at each time) and the grey dash-dot line is the field average.");
   p("Under the chart, the section “What drives the field maximum” stacks the contributions of each injector and of skin at the well that has the highest pressure at each time, and a table gives the breakdown at the moment of the field peak.");
 
+  b.push({ t: "h2", text: "6.0 Multiwell results and Program results tabs" });
+  p("Multiwell results (multiwell interference) shows the program's multiwell outputs as its own form does: the BHP of every well when the last well stops, split into its own formation response, its skin and the interference from the other wells, with its limit status and pressure margin; the peak pressure assessment of every well; the well separation distances; the readings after all wells stop; the two figures (BHP and interference of every well over time; the final contribution matrix and the radial front estimates) and every file of the program: multiwell_summary.csv, interference_contributions.csv, source_states.csv, multiwell_time_detail.csv, plume_overlap.csv, final_interference_matrix.csv, evaluation_distances_ft.csv, well_separations_ft.csv, pressure_limit_summary.csv, multiwell_inputs_used.json, multiwell_observation.csv, observation_contributions.csv and the two PNG figures. These results are infinite-acting, as the program; a boundary chosen in the Input section is applied only in the maps and curves.");
+  fig("mwresults", "Figure 5a. The Multiwell results tab: the program's endpoint table, peak pressure assessment and well separations.");
+  p("Program results (single well) shows the program's single-well outputs: the end-of-injection BHP, the post-shut-in observation table, the BHP plot, the annual results with the pressure status, the pressure assessment and the files annual_summary.csv, all_calculations.csv, first_year_detail.csv, observation_summary.csv, pressure_limit_summary.csv, inputs_used.json and bhp_vs_year.png.");
+  fig("program", "Figure 5b. The Program results tab of the Single well system.");
+
+  b.push({ t: "h2", text: "6.4a Well BHP tab" });
+  p("Choose a well in the Well selector. The chart shows its bottom-hole pressure over the whole results period, with the interference from the other wells, and the same well alone (the program for one well). Below it, the reference program is run for that well on its own, unchanged (its rate, radius, skin, evaporation choice and own maximum BHP, from its start year to its end year in whole years, and the post-shut-in observation entered in the Input section): the end-of-injection BHP, the post-shut-in observation table, the program’s BHP plot (full period and first year), its annual results table, and its files annual_summary.csv, all_calculations.csv (every intermediate value, including the zone diffusivity ratios D1, D2, D3), first_year_detail.csv, observation_summary.csv, inputs_used.json and bhp_vs_year.png.");
+
   b.push({ t: "h2", text: "6.5 Interference matrix tab" });
   fig("matrix", "Figure 9. Interference matrix and arrival-time table.");
   p("The first table has one row per injecting well and one column per receiving well. Each cell is the pressure that the row well contributes at the column well at the evaluation time; the diagonal cells are each well's own buildup including skin. The last column gives the total felt at other wells, and the last row the total at each receiver. The second table gives the first time (years) that a single source well alone raises the pressure at each target (wells and monitoring points) by the interference threshold; a dash means it does not happen during the injection period.");
 
   b.push({ t: "h2", text: "6.6 Limit check tab" });
   fig("limits", "Figure 10. Limit check for each well and the monitoring-point table.");
-  p("Each well is listed with its peak buildup, the time of the peak and how that peak splits into the well's own response, skin and interference from the other wells. The bottomhole pressure, the margin to the allowable buildup and an OK or Exceeds status follow. Below, the monitoring-point table shows the peak buildup at each monitoring point and whether, and when, it first reaches the interference threshold.");
+  p("Each well is listed with the program's pressure assessment (pressure_limit_summary.csv): its status, peak BHP and the year of the peak, in the multiwell calculation how that peak splits into the well's own formation response, skin and interference, the allowable BHP, the minimum margin and the first computed time at which the limit is exceeded. Below, the monitoring-point table shows the peak buildup at each monitoring point and whether, and when, it first reaches the interference threshold.");
 
   b.push({ t: "h2", text: "6.7 Compare boundaries tab" });
   fig("compare", "Figure 11. Wellbore buildup of one well for the three boundary conditions.");
@@ -228,23 +241,23 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   b.push({ t: "h2", text: "8.1 Results CSV" });
   p("Export results CSV saves the interference matrix at the evaluation time, the time series that is currently shown, and the peak check of every well, in the selected pressure unit.");
   b.push({ t: "h2", text: "8.2 Report (PDF and Word)" });
-  p("Report (PDF) and Report (Word) generate a publication-style document: title block, abstract, introduction, methodology with numbered equations, input tables, results with captioned figures and tables (CO₂ saturation, pressure, interference, boundary sensitivity, field-maximum drivers), a discussion written from your numbers, limitations and references. The report reflects the inputs of the last run and the units and evaluation time currently selected. The Word version can be edited; the PDF is ready to share.");
+  p("Report (PDF) and Report (Word) generate a publication-style document: title block, abstract, introduction, methodology with numbered equations of the selected pressure model, input tables, results with captioned figures and tables (bottom-hole pressure, zone properties, CO₂ zones and saturation, pressure, interference, boundary sensitivity, field-maximum drivers), a discussion written from your numbers, limitations and references. The report reflects the inputs of the last run and the units and evaluation time currently selected. The Word version can be edited; the PDF is ready to share.");
 
   h1("9. File formats");
   p("The wells table can be saved with Export and loaded again with Import CSV. Excel files should be saved as CSV first. Columns are separated by commas, semicolons or tabs, and the header row is optional.");
   table("Table 7. Wells CSV columns.", ["Mode", "Columns (in order)"], [
-    ["Local coordinates", "name, x_m, y_m, rate_Mtpa, start_yr, end_yr, skin (optional), changes (optional)"],
-    ["Longitude / latitude", "name, lon_deg, lat_deg, rate_Mtpa, start_yr, end_yr, skin (optional), changes (optional)"],
-  ], "An empty skin means “calculate it”. The optional changes column lists rate changes as year:rate pairs separated by | , for example 8:0.5|15:0.2 (the rate becomes 0.5 Mt/yr from year 8 and 0.2 Mt/yr from year 15). A header whose second column contains “lon” switches the application to longitude / latitude mode on import.");
-  p("Example (local coordinates):  INJ-1,0,0,1,0,25,   (skin left empty)   and   INJ-2,4000,1000,1,2,25,4.5");
+    ["Local coordinates", "name, x_m, y_m, rate, start_yr, end_yr, skin (optional), changes (optional)"],
+    ["Longitude / latitude", "name, lon_deg, lat_deg, rate, start_yr, end_yr, skin (optional), changes (optional)"],
+  ], "The rate is in Mscf/day of CO₂ (or STB/day of water for the water model). An empty skin means zero skin. The optional changes column lists rate changes as year:rate pairs separated by | , for example 8:100|15:50 (the rate becomes 100 Mscf/day from year 8 and 50 Mscf/day from year 15). A header whose second column contains “lon” switches the application to longitude / latitude mode on import.");
+  p("Example (local coordinates):  INJ-1,0,0,150,0,25,   (skin left empty)   and   INJ-2,4000,1000,150,2,25,4.5");
 
   h1("10. Model summary and limitations");
-  p("Pressure buildup is calculated from the Theis line-source solution for each well, added together in space and time (one term for every rate change of every well, the shut-in being a change to zero rate), with a straight boundary modelled with image wells. The wellbore pressure adds the skin term. CO₂ saturation follows from the radial Buckley–Leverett (Welge) solution with Corey relative permeabilities. The report contains the equations.");
+  p("Each well follows the injection-BHP model supplied for this application (the Python reference model in the repository, translated line by line and tested against it): two-phase CO₂–brine with three zones, single-phase CO₂ or single-phase water, with the pressure-dependent properties converged at the bottom-hole pressure. The pressure profile of every well is added to give the pressure anywhere in the aquifer, a straight boundary is modelled with image wells, and the wellbore pressure adds the skin term. After shut-in each well follows the fixed-zone falloff of the model. The report contains the equations.");
   bullets(
-    "Homogeneous, isotropic, confined aquifer of constant thickness; no leakage through the caprock.",
-    "Brine-equivalent flow for the pressure calculation: CO₂ is converted to reservoir volume with the CO₂ density and brine viscosity is used everywhere. This overstates near-well pressure but is reasonable for interference between wells.",
-    "The CO₂ saturation map neglects gravity override, dissolution, capillary pressure and residual trapping, and does not feel the aquifer boundary. The dry-zone radius is a screening estimate (water fugacity coefficient set by you, default 1) evaluated at the initial reservoir pressure.",
-    "The three-zone pressure model treats the dry and gas fronts as sharp and uses the average saturation behind the front for the two-phase zone; with rate changes each period uses its own rate for the front positions. The single-phase option ignores the CO₂ zones altogether.",
+    "Homogeneous, confined, infinite-acting aquifer of constant thickness, with one permeability and porosity for all zones, constant temperature and constant viscosities; no leakage through the caprock.",
+    "The two-phase front radii use a representative-pressure approximation (properties at the bottom-hole pressure); this is not a spatially resolved displacement/evaporation model, and the fronts are sharp. The equations have not been fitted to simulation.",
+    "The reference model is for one well at a constant rate. Adding the profiles of several wells, rate changes and image wells is an extension; it is exact for one well at constant rate and an approximation when fronts interact or properties depend strongly on pressure.",
+    "The CO₂ saturation map neglects gravity override, dissolution, capillary pressure and residual trapping, and does not feel the aquifer boundary.",
     "Skin is a constant factor applied only at the injector while it injects.",
     "Only one straight boundary can be modelled. Multiple faults, heterogeneity, brine production and geomechanical effects are not included.",
     "Results are for screening and ranking; confirm with numerical simulation before making decisions.",
@@ -255,10 +268,12 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["“No results yet”", "The analysis has not been run.", "Press ▶ RUN analysis."],
     ["Results do not change when I edit an input", "Results update only on RUN.", "Press RUN; watch for the yellow banner."],
     ["Warning: wells on both sides of the boundary", "The boundary line passes between wells or points.", "Move the boundary so that all locations are on one side."],
-    ["The allowable buildup is zero or negative", "Safety-factored fracture pressure is below the initial pressure.", "Check depth and the two gradients, and the safety factor."],
+    ["The allowable BHP is at or below the initial pressure", "The maximum BHP, or the fraction × fracture pressure, is below the initial pressure.", "Check the initial pressure and the pressure-limit inputs."],
+    ["“These pairwise distances cannot form a horizontal 2-D well layout”", "The distance matrix is not a set of distances between points on a plane.", "Check the matrix, or enter x/y coordinates instead."],
+    ["“Calculation stopped”", "An input is out of range, or an intermediate result broke a model check (for example the zone 2 saturation above 1 − Swr).", "Read the message, change the input it names, and press RUN again."],
     ["Wells import fails", "A row has fewer than six columns or a non-numeric value.", "Check the column order in Section 9; the message names the row."],
     ["Longitude / latitude error", "Latitude is outside ±90° or longitude outside ±180°.", "Correct the values; check that longitude and latitude are not swapped."],
-    ["The plume looks small", "Only injected mass inside the front is shown; there is no gravity override.", "Check porosity, thickness, CO₂ density and relative-permeability inputs."],
+    ["The plume looks small", "Only injected mass inside the front is shown; there is no gravity override. The example rates are small (150 Mscf/day).", "Check the rates, porosity, thickness and relative-permeability inputs."],
     ["A chart is too small to read", "The browser window is narrow.", "Widen the window or use the zoom controls."],
     ["Exports do nothing", "The browser blocked the download.", "Allow downloads for the site and try again."],
   ]);
@@ -271,28 +286,29 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Skin", "Dimensionless factor for near-well damage (positive) or stimulation (negative)."],
     ["Plume", "The region occupied by injected CO₂."],
     ["Sg", "CO₂ saturation: the fraction of the pore volume filled with CO₂."],
-    ["Allowable buildup", "Safety factor × fracture pressure − initial pressure; the pass/fail limit for wells."],
+    ["Allowable BHP", "Maximum allowable BHP, or the allowable fraction × the fracture pressure; the pass/fail limit for wells."],
     ["Interference threshold", "Small pressure rise used to detect where and when a well's influence arrives; not a pass/fail limit."],
     ["Image well", "A mirrored well used to represent a straight boundary."],
-    ["Shut-in", "End of injection at a well; its pressure then recovers."],
+    ["Shut-in", "End of injection at a well (its End year); its pressure then falls."],
+    ["Bg", "Gas formation volume factor: reservoir barrels per standard cubic foot of CO₂."],
+    ["Mscf/day", "Thousand standard cubic feet per day (standard conditions 14.696 psia, 60 °F)."],
   ]);
 
   h1("Appendix A. Default example data");
-  b.push({ t: "table", caption: "Table 10. Wells in the built-in example.", head: ["Well", "x (m)", "y (m)", "Rate (Mt/yr)", "Start (yr)", "End (yr)", "Skin"], rows: [
-    ["INJ-1", "0", "0", "1.0", "0", "25", "calculated"],
-    ["INJ-2", "4000", "1000", "1.0", "2", "25", "calculated"],
-    ["INJ-3", "1500", "5000", "0.8", "5", "25", "calculated"],
-    ["INJ-4", "-3500", "3000", "0.5", "8", "20", "calculated"],
-  ], note: "Monitoring point “Legacy well” at x = 8000 m, y = −3000 m. Aquifer: 150 mD, 60 m, porosity 0.2, depth 2000 m; skin from a damaged zone of 50 mD and 1.5 m radius (s = 5.42)." });
+  b.push({ t: "table", caption: "Table 10. Wells in the built-in example (multiwell interference).", head: ["Well", "x (ft)", "y (ft)", "Rate (Mscf/day)", "Start (yr)", "Radius (ft)", "Skin"], rows: [
+    ["Well 1", "0", "0", "150", "0", "0.55", "0"],
+    ["Well 2", "1000", "0", "150", "0", "0.55", "0"],
+    ["Well 3", "2000", "0", "150", "0", "0.55", "0"],
+    ["Well 4", "3000", "0", "150", "0", "0.55", "0"],
+  ], note: "Constant neighboring spacing of 1000 ft in a straight line; every well injects from year 0 to year 30; observation for 10 years after shut-in (0, 0.5, 1, 5, 10). Monitoring point “Legacy well” at x = 2500 m, y = −1500 m. Reservoir and fluids: the defaults of the reference program (Table 2, Table 2b). Pressure limit: 0.9 × a fracture pressure of 5200 psia." });
 
   b.push({
     t: "refs",
     items: [
       "Buckley, S.E., Leverett, M.C., 1942. Mechanism of fluid displacement in sands. Transactions of the AIME, 146, 107–116.",
       "Earlougher, R.C., Jr., 1977. Advances in Well Test Analysis. SPE Monograph Series, Vol. 5. Society of Petroleum Engineers, Richardson, TX.",
-      "Hawkins, M.F., Jr., 1956. A note on the skin effect. Transactions of the AIME, 207, 356–357.",
       "Matthews, C.S., Russell, D.G., 1967. Pressure Buildup and Flow Tests in Wells. SPE Monograph Series, Vol. 1. Society of Petroleum Engineers, New York.",
-      "Theis, C.V., 1935. The relation between the lowering of the piezometric surface and the rate and duration of discharge of a well using ground-water storage. Transactions of the American Geophysical Union, 16(2), 519–524.",
+      "Peng, D.-Y., Robinson, D.B., 1976. A new two-constant equation of state. Industrial & Engineering Chemistry Fundamentals, 15(1), 59–64.",
       "Welge, H.J., 1952. A simplified method for computing oil recovery by gas or water drive. Transactions of the AIME, 195, 91–98.",
     ],
   });

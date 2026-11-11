@@ -7,56 +7,157 @@ import { COLORMAP_LABELS, render, type ChartSpec, type MapStyle, type Series } f
 import { parseWellsCsv, toCsv, download, wellsToCsv, type PointIn, type WellIn } from "@/lib/csv";
 import { centroid, project as projectXY, unproject, validLatLon } from "@/lib/geo";
 import { downloadBlob, svgToPngDataUrl } from "@/lib/exportImage";
+import { injectedRateYears, limits, sourcesFor, timeGrid, type Boundary, type Point, type Well } from "@/lib/physics";
 import {
-  arrivalTime, buildupGrid, consts, hawkinsSkin, interferenceMatrix, limits, injectedMt, skinBuildup, timeGrid, totalBuildup, wellboreBuildup, wellBuildupGrid, wellContribution,
-  type Aquifer, type Boundary, type Point, type Well,
-} from "@/lib/physics";
+  BROWSER_PHASES, DEFAULT_INPUTS, DETAIL_FIELDS, calculateFirstYearDetail, calculateObservation, modelLabel, observationSchedule, outputFiles, parsePyFloat, pyFormat, pyStr,
+  isInt, pressureLimitSummary, referenceQuantities, runModel, summaryColumns, validate, withPressureLimit,
+  type Inputs as BhpInputs, type LimitInput, type Row, type RunOutput,
+} from "@/lib/bhp";
+import { renderBhpPlot } from "@/lib/bhpPlot";
+import {
+  configureWellGeometry, cumulativeRateDays, makeWell, multiwellCalculation, multiwellFiles, runMultiwell, wellSeparations,
+  type GeometryInput, type Images, type MWell, type MultiwellRun,
+} from "@/lib/multiwell";
+import { MultiwellField } from "@/lib/mwfield";
+import { renderMultiwellMatrix, renderMultiwellPressure } from "@/lib/multiwellPlot";
 import { buildBlocks, renderDocx, renderPdf, type FigureData, type ReportData } from "@/lib/report";
-import { dryRadius, type DryParams } from "@/lib/dryzone";
-import { buildZones, type ZoneSummary } from "@/lib/threezone";
-import { makeSatModel, plumeRadius, satGrid, type SatParams } from "@/lib/saturation";
-import { CAT_LABELS, PRESETS, UNITS, findUnit, type Cat } from "@/lib/units";
+import { makeSatModel, satGrid, type SatParams } from "@/lib/saturation";
+import { CAT_LABELS, CO2_T_PER_MSCF, PRESETS, PSI, UNITS, findUnit, fromCanon, toCanon, type Cat } from "@/lib/units";
 
 const COLORS = ["#2a6fdb", "#d9480f", "#2f9e44", "#9c36b5", "#c2255c", "#1098ad", "#e8890c", "#5c677d"];
+const FT = 0.3048;
+const LB_FT3 = 0.45359237 / FT ** 3; // kg/m3 per lb/ft3
 
-const DEFAULT_AQUIFER: Aquifer = {
-  permMd: 150, thicknessM: 60, porosity: 0.2, compressibilityPerMPa: 4.5e-4, viscosityMPas: 0.5,
-  co2DensityKgM3: 700, wellboreRadiusM: 0.1, depthM: 2000, hydroGradientMPaPerM: 0.0105,
-  fracGradientMPaPerM: 0.0165, safetyFactor: 0.9,
+/** Pressure model: the three options of the reference program (lib/bhp.ts). */
+type ModelKind = "two" | "co2" | "water";
+/** Well system of the program: one well (single-well section) or several (multiwell interference section). */
+type System = "single" | "multi";
+
+/** Reservoir and operating inputs, stored in canonical SI units (m, mD, MPa, deg C). */
+interface Reservoir {
+  permMd: number;
+  thicknessM: number;
+  porosity: number;
+  wellboreRadiusM: number;
+  initialMPa: number; // initial absolute pressure
+  tempC: number;
+}
+
+/** The program's pressure check (absolute pressures, MPa). */
+interface LimitIn {
+  mode: "none" | "max_bhp" | "fracture_fraction";
+  maxBhpMPa: number;
+  fractureMPa: number;
+  fraction: number;
+}
+
+/** Distances between the wells, as in the program's multiwell form (distances in metres; text lists in the display unit). */
+interface GeometryIn {
+  mode: "constant" | "different";
+  layout: "line" | "grid";
+  spacingM: number;
+  method: "adjacent" | "pairwise" | "coordinates";
+  adjacent: string;
+  matrix: string;
+}
+
+/** Fluid and rock-fluid inputs of the reference program (canonical units: cP, kg/m3, 1/MPa). */
+interface Fluids {
+  muWater: number;
+  muGas: number;
+  brineDensityKgM3: number;
+  salt: number;
+  swr: number;
+  rockComp: number;
+  waterComp: number;
+  krg0: number;
+  krw0: number;
+  krg1: number;
+  ng: number;
+  nw: number;
+  evaporation: boolean;
+}
+
+const B0 = DEFAULT_INPUTS;
+const DEFAULT_RES: Reservoir = {
+  permMd: B0.k_mD, thicknessM: B0.h_ft * FT, porosity: B0.porosity, wellboreRadiusM: B0.rw_ft * FT,
+  initialMPa: B0.initial_pressure_psia * PSI, tempC: ((B0.temperature_F - 32) * 5) / 9,
+};
+const DEFAULT_LIMIT: LimitIn = { mode: "fracture_fraction", maxBhpMPa: 4680 * PSI, fractureMPa: 5200 * PSI, fraction: 0.9 };
+const DEFAULT_GEOMETRY: GeometryIn = { mode: "constant", layout: "line", spacingM: 1000 * FT, method: "adjacent", adjacent: "", matrix: "" };
+const DEFAULT_FL: Fluids = {
+  muWater: B0.mu_water_cP, muGas: B0.mu_gas_cP, brineDensityKgM3: B0.brine_density_lb_ft3 * LB_FT3, salt: B0.salt_mass_fraction,
+  swr: B0.Swr, rockComp: B0.rock_compressibility_per_psi / PSI, waterComp: B0.water_compressibility_per_psi / PSI,
+  krg0: B0.krg_endpoint, krw0: B0.krw_endpoint, krg1: B0.krg_zone1, ng: B0.corey_n_gas, nw: B0.corey_n_water,
+  evaporation: B0.include_evaporation,
 };
 
-const DEFAULT_WELLS: WellIn[] = [
-  { id: "w1", name: "INJ-1", x: 0, y: 0, rateMtpa: 1.0, startYr: 0, endYr: 25, skin: 0, skinText: "" },
-  { id: "w2", name: "INJ-2", x: 4000, y: 1000, rateMtpa: 1.0, startYr: 2, endYr: 25, skin: 0, skinText: "" },
-  { id: "w3", name: "INJ-3", x: 1500, y: 5000, rateMtpa: 0.8, startYr: 5, endYr: 25, skin: 0, skinText: "" },
-  { id: "w4", name: "INJ-4", x: -3500, y: 3000, rateMtpa: 0.5, startYr: 8, endYr: 20, skin: 0, skinText: "" },
-];
-const DEFAULT_POINTS: PointIn[] = [{ id: "p1", name: "Legacy well", x: 8000, y: -3000 }];
+/** Reference-program inputs (field units) from the page inputs. Rates and skin are per well (multiwell: also the radius,
+ * which keeps the program's default in the shared inputs, as its multiwell form). */
+function toBhp(r: Reservoir, f: Fluids, model: ModelKind, system: System = "single"): BhpInputs {
+  return {
+    ...B0,
+    k_mD: r.permMd, h_ft: r.thicknessM / FT, rw_ft: system === "multi" ? B0.rw_ft : r.wellboreRadiusM / FT, porosity: r.porosity,
+    initial_pressure_psia: r.initialMPa / PSI, temperature_F: (r.tempC * 9) / 5 + 32,
+    mu_water_cP: f.muWater, mu_gas_cP: f.muGas, brine_density_lb_ft3: f.brineDensityKgM3 / LB_FT3, salt_mass_fraction: f.salt,
+    Swr: f.swr, rock_compressibility_per_psi: f.rockComp * PSI, water_compressibility_per_psi: f.waterComp * PSI,
+    krg_endpoint: f.krg0, krw_endpoint: f.krw0, krg_zone1: f.krg1, corey_n_gas: f.ng, corey_n_water: f.nw, skin: 0,
+    phase_mode: model === "two" ? "two" : "single", single_phase_fluid: model === "water" ? "water" : "co2",
+    include_evaporation: f.evaporation,
+  };
+}
 
-type View = "sat" | "map" | "series" | "matrix" | "limits" | "compare";
+const MODEL_HELP: Record<ModelKind, string> = {
+  two: "Original three-zone model around each well: dry CO₂ next to the well, CO₂ + brine, then brine. CO₂ properties (Bg, cg, density) come from the Peng–Robinson equation of state for pure CO₂ at each well's bottom-hole pressure. Corey exponents must both be 3 (cubic) or both 2 (quadratic). Rates are in Mscf/day of CO₂.",
+  co2: "Initially CO₂-filled, homogeneous reservoir; relative permeability = 1. Bg is fixed at 0.0005690187 rb/scf; CO₂ density and cg are fixed at their Peng–Robinson values at the initial pressure and reservoir temperature. Rates are in Mscf/day of CO₂.",
+  water: "Initially water-filled reservoir; relative permeability = 1 and Bw fixed at 1.0 rb/STB. Water viscosity and compressibility are constants. Rates are in STB/day of water.",
+};
+
+/** The program's default multiwell table: 4 wells, 150 Mscf/day, start year 0, radius 0.55 ft, skin 0 (1000 ft apart). */
+const newWellIn = (i: number, x = i * 1000 * FT, y = 0): WellIn => ({
+  id: `w${i + 1}`, name: `Well ${i + 1}`, x, y, rate: 150, startYr: 0, endYr: 30, skin: 0, skinText: "",
+  rwM: B0.rw_ft * FT, evaporation: "inherit", maxBhpMPa: null,
+});
+const DEFAULT_WELLS: WellIn[] = [0, 1, 2, 3].map((i) => newWellIn(i));
+const DEFAULT_POINTS: PointIn[] = [{ id: "p1", name: "Legacy well", x: 2500, y: -1500 }];
+
+type View = "mw" | "sat" | "map" | "series" | "bhp" | "matrix" | "limits" | "compare";
 type Mode = "total" | "interference" | "bhp";
 
 /** Everything the analysis depends on. Results are computed from the snapshot taken when RUN is pressed. */
 interface Inputs {
-  aq: Aquifer;
+  system: System;
+  res: Reservoir;
+  fl: Fluids;
+  model: ModelKind;
+  limit: LimitIn;
+  /** single well: rate (Mscf/day or STB/day), skin and whole injection years */
+  single: { rate: number; skin: number; years: number };
+  /** multiwell: project endpoint (the last end year), reporting times and the distance definition */
+  years: string;
+  reportTimes: string;
+  geometry: GeometryIn;
   boundary: Boundary;
-  wells: (Well & { lon?: number; lat?: number; skinSrc: "input" | "calc" })[];
+  wells: (Well & { lon?: number; lat?: number })[];
   points: (Point & { lon?: number; lat?: number })[];
-  horizon: number;
+  horizon: number; // last end year + observation duration (calculated)
   threshold: number;
-  sat: SatParams;
-  dry: DryParams;
-  pressure: { model: "single" | "three"; rockComp: number; co2Comp: number; zones?: ZoneSummary };
-  skin: { ksMd: number; rsM: number; s: number };
+  observe: "yes" | "no";
+  obsPeriod: string;
+  obsYears: string;
   geo: { on: boolean; lat0: number; lon0: number };
   project: string;
   author: string;
+  /** the program's well table (field units) and distance definition, as passed to configure_well_geometry */
+  mwells: MWell[];
+  geomInput: GeometryInput;
 }
 
 let seq = 100;
 const uid = (p: string) => `${p}${seq++}`;
 const num = (v: number) => String(+v.toPrecision(5));
 const roundLL = (g: { lat: number; lon: number }) => ({ lat: +g.lat.toFixed(5), lon: +g.lon.toFixed(5) });
+const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 async function fontBase64(url: string): Promise<string> {
   const buf = new Uint8Array(await (await fetch(url)).arrayBuffer());
@@ -65,38 +166,86 @@ async function fontBase64(url: string): Promise<string> {
   return btoa(bin);
 }
 
+/** `_notebook_summary_html`: a table of the program with its column labels and number formats. */
+function SummaryTable({ rows }: { rows: Row[] }) {
+  const cols = summaryColumns(rows);
+  return (
+    <div className="bhp-summary-wrap">
+      <table className="bhp-summary">
+        <thead><tr>{cols.map(([label]) => <th key={label}>{label}</th>)}</tr></thead>
+        <tbody>{rows.map((r, i) => <tr key={i}>{cols.map(([, key, fmt]) => <td key={key}>{fmt === "" || typeof r[key] !== "number" ? pyStr(r, key) : pyFormat(r[key], fmt)}</td>)}</tr>)}</tbody>
+      </table>
+    </div>
+  );
+}
+
+/** A CSV file of the program shown as a table (values printed as the Python writes them). */
+function FileTable({ columns, rows }: { columns: string[]; rows: Row[] }) {
+  return (
+    <div className="bhp-summary-wrap">
+      <table className="bhp-summary">
+        <thead><tr>{columns.map((c) => <th key={c}>{c}</th>)}</tr></thead>
+        <tbody>{rows.map((r, i) => <tr key={i}>{columns.map((c) => <td key={c}>{c in r ? pyStr(r, c) : ""}</td>)}</tr>)}</tbody>
+      </table>
+    </div>
+  );
+}
+
+/** A table of the program's multiwell form: floats with a fixed format, everything else as str(). */
+function PyTable({ cols, rows, fmt = ".6f" }: { cols: [string, string][]; rows: Row[]; fmt?: string }) {
+  return (
+    <div className="bhp-summary-wrap">
+      <table className="bhp-summary">
+        <thead><tr>{cols.map(([label]) => <th key={label}>{label}</th>)}</tr></thead>
+        <tbody>{rows.map((r, i) => <tr key={i}>{cols.map(([, key]) => {
+          const v = r[key];
+          const text = typeof v === "number" && !isInt(r, key) ? pyFormat(v, fmt) : pyStr(r, key);
+          return <td key={key} className={v === "FAIL" ? "bad-cell" : v === "PASS" ? "good-cell" : ""}>{text}</td>;
+        })}</tr>)}</tbody>
+      </table>
+    </div>
+  );
+}
+
+const MW_SUMMARY_COLS: [string, string][] = [["Year", "year"], ["Well", "well"], ["BHP (psia)", "BHP_psia"], ["Own formation (psi)", "own_formation_response_psi"], ["Skin (psi)", "own_skin_psi"], ["Interference (psi)", "interference_psi"], ["Limit status", "pressure_limit_status"], ["Pressure margin (psi)", "pressure_margin_psi"]];
+const MW_OBS_COLS: [string, string][] = [["Years after shut-in", "years_after_shut_in"], ...MW_SUMMARY_COLS.filter(([, k]) => k !== "own_skin_psi")];
+const FAILURE_COLS: [string, string][] = [["Well", "well"], ["Overall status", "overall_status"], ["Peak BHP (psia)", "peak_BHP_psia"], ["Allowed BHP (psia)", "max_allowable_BHP_psia"], ["First sampled exceedance (year)", "first_detected_failure_year"]];
+
 export default function Page() {
   // ---- live (editable) inputs ----
-  const [aqL, setAq] = useState(DEFAULT_AQUIFER);
-  const [boundaryL, setBoundary] = useState<Boundary>({ type: "none", axis: "x", positionM: 10000 });
+  const [systemL, setSystemRaw] = useState<System>("multi");
+  const [resL, setRes] = useState(DEFAULT_RES);
+  const [flL, setFl] = useState(DEFAULT_FL);
+  const [modelL, setModel] = useState<ModelKind>("two");
+  const [boundaryL, setBoundary] = useState<Boundary>({ type: "none", axis: "x", positionM: 3000 });
   const [rawWells, setWells] = useState(DEFAULT_WELLS);
+  const [geomL, setGeom] = useState<GeometryIn>(DEFAULT_GEOMETRY);
+  const [reportL, setReportL] = useState(""); // multiwell reporting times (blank = annual)
+  const [singleL, setSingle] = useState({ rate: 150, skin: 0, years: 30 });
+  // multiwell well radius: one value for all wells, or a value for each well (column of the well table)
+  const [rwModeL, setRwMode] = useState<"same" | "each">("same");
+  const [rwAllL, setRwAll] = useState(B0.rw_ft * FT);
+  const [limitL, setLimitL] = useState<LimitIn>(DEFAULT_LIMIT);
   const [coordMode, setCoordMode] = useState<"local" | "geo">("local");
   const [geoRef] = useState({ lat: 29.7604, lon: -95.3698 }); // example location, used when first switching to lon/lat
   const [boundaryDeg, setBoundaryDeg] = useState(-95.3);
-  const [dmg, setDmg] = useState({ ksMd: 50, rsM: 1.5 });
   const [pointsL, setPoints] = useState(DEFAULT_POINTS);
-  const [horizonL, setHorizon] = useState(40);
-  const [satIn, setSatIn] = useState<SatParams>({ swr: 0.2, krgMax: 0.4, nw: 4, ng: 2, muCo2MPas: 0.06 });
-  const [dryIn, setDryIn] = useState<DryParams>({ tempC: 60, salinity: 0.1, brineDensityKgM3: 1050, phiW: 1 });
-  const [pressureModel, setPressureModel] = useState<"single" | "three">("three");
-  const [rockCompIn, setRockCompIn] = useState(4e-5); // 1/MPa
-  const [co2CompIn, setCo2CompIn] = useState(0.02); // 1/MPa
-  // Values actually used by the calculation: the typed inputs limited to a physically sensible range.
-  const clampN = (v: number, lo: number, hi: number) => (Number.isFinite(v) ? Math.min(Math.max(v, lo), hi) : lo);
-  const satEff = useMemo<SatParams>(() => ({ swr: clampN(satIn.swr, 0, 0.95), krgMax: clampN(satIn.krgMax, 0.01, 1), nw: clampN(satIn.nw, 1, 20), ng: clampN(satIn.ng, 1, 20), muCo2MPas: clampN(satIn.muCo2MPas, 1e-4, 10) }), [satIn]);
-  const dryEff = useMemo<DryParams>(() => ({ tempC: clampN(dryIn.tempC, 5, 250), salinity: clampN(dryIn.salinity, 0, 0.26), brineDensityKgM3: clampN(dryIn.brineDensityKgM3, 500, 1500), phiW: clampN(dryIn.phiW, 0.01, 1) }), [dryIn]);
-  const rockEff = clampN(rockCompIn, 0, 1e-2);
-  const co2Eff = clampN(co2CompIn, 1e-6, 1);
-  const [thresholdL, setThreshold] = useState(0.1);
+  const [thresholdL, setThreshold] = useState(1 * PSI); // 1 psi
+  // post-shut-in observation, asked as in the program's form
+  const [observeL, setObserve] = useState<"yes" | "no">("yes");
+  const [obsPeriodL, setObsPeriod] = useState("10");
+  const [obsYearsL, setObsYears] = useState("0, 0.5, 1, 5, 10");
   const [project, setProject] = useState("");
   const [author, setAuthor] = useState("");
-  const [units, setUnits] = useState<Record<Cat, string>>(PRESETS.SI);
+  const [units, setUnits] = useState<Record<Cat, string>>(PRESETS.Field);
   // ---- display-only state (acts on results that were already computed) ----
-  const [tEval, setTEval] = useState(25);
-  const [padM, setPadM] = useState(8000);
-  const [view, setView] = useState<View>("sat");
-  const [mode, setMode] = useState<Mode>("total");
+  const [tEval, setTEval] = useState(30);
+  const [padM, setPadM] = useState<number | null>(null); // map padding around the wells; null = automatic
+  const [mapArea, setMapArea] = useState<"wells" | "all">("wells"); // fit the maps to the wells, or also to the monitoring points
+  const [view, setView] = useState<View>("mw");
+  const [mode, setMode] = useState<Mode>("bhp");
   const [cmpWell, setCmpWell] = useState(0);
+  const [bhpWell, setBhpWell] = useState(0);
   const DEFAULT_MAP_STYLE: MapStyle = { cmap: "sunset", reverse: false, fill: "smooth", bands: 10, contours: false, nContours: 10, contourLabels: true, contourSource: "wells", contourReach: 0.35, streamlines: false };
   const [mapStyle, setMapStyle] = useState<MapStyle>(DEFAULT_MAP_STYLE);
   const setStyle = (patch: Partial<MapStyle>) => setMapStyle((m) => ({ ...m, ...patch }));
@@ -104,9 +253,11 @@ export default function Page() {
   const [busy, setBusy] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
 
-  const setA = (k: keyof Aquifer) => (v: number) => setAq((a) => ({ ...a, [k]: v }));
-  const calcSkin = useMemo(() => hawkinsSkin(aqL.permMd, dmg.ksMd, dmg.rsM, aqL.wellboreRadiusM), [aqL.permMd, aqL.wellboreRadiusM, dmg]);
-  const isGeo = coordMode === "geo";
+  const setR = (k: keyof Reservoir) => (v: number) => setRes((a) => ({ ...a, [k]: v }));
+  const setF = (k: keyof Fluids) => (v: number) => setFl((a) => ({ ...a, [k]: v }));
+  const multiL = systemL === "multi";
+  const coordsEditable = multiL && geomL.mode === "different" && geomL.method === "coordinates";
+  const isGeo = coordMode === "geo" && coordsEditable;
   // Projection origin for lon/lat input: the centroid of all entered locations.
   const origin = useMemo(
     () => (isGeo ? centroid([...rawWells, ...pointsL].filter((o) => o.lon !== undefined && o.lat !== undefined).map((o) => ({ lat: o.lat as number, lon: o.lon as number }))) : null),
@@ -115,11 +266,13 @@ export default function Page() {
   const toXY = (o: { x: number; y: number; lon?: number; lat?: number }) =>
     isGeo && origin && o.lon !== undefined && o.lat !== undefined ? projectXY(o.lat, o.lon, origin.lat, origin.lon) : { x: o.x, y: o.y };
   /* eslint-disable react-hooks/exhaustive-deps */
-  const wellsL = useMemo(() => rawWells.map((w) => {
+  const tableWells = useMemo(() => rawWells.map((w) => {
     const t = w.skinText.trim();
-    const entered = t !== "" && Number.isFinite(Number(t));
-    return { ...w, ...toXY(w), skin: entered ? Number(t) : calcSkin, skinSrc: (entered ? "input" : "calc") as "input" | "calc" };
-  }), [rawWells, calcSkin, isGeo, origin]);
+    return {
+      ...w, ...toXY(w), skin: t !== "" && Number.isFinite(Number(t)) ? Number(t) : 0, // blank skin = 0
+      rwM: rwModeL === "same" ? rwAllL : w.rwM ?? B0.rw_ft * FT, // the same radius for all wells, or each well's own
+    };
+  }), [rawWells, isGeo, origin, rwModeL, rwAllL]);
   const pointsP = useMemo(() => pointsL.map((p) => ({ ...p, ...toXY(p) })), [pointsL, isGeo, origin]);
   /* eslint-enable react-hooks/exhaustive-deps */
   const boundaryEff: Boundary = useMemo(() => {
@@ -127,56 +280,217 @@ export default function Page() {
     const m = boundaryL.axis === "x" ? projectXY(origin.lat, boundaryDeg, origin.lat, origin.lon).x : projectXY(boundaryDeg, origin.lon, origin.lat, origin.lon).y;
     return { ...boundaryL, positionM: m };
   }, [isGeo, origin, boundaryL, boundaryDeg]);
-  const limL = useMemo(() => limits(aqL), [aqL]);
+  const limL = useMemo(() => limits({ initialMPa: resL.initialMPa, ...limitL }), [resL.initialMPa, limitL]);
   const geoBad = isGeo && [...rawWells, ...pointsL].some((o) => !validLatLon(o.lat ?? 0, o.lon ?? 0));
 
-  const zonesL = useMemo(
-    () => (pressureModel === "three" ? buildZones(aqL, { sat: satEff, dry: dryEff, rockCompPerMPa: rockEff, co2CompPerMPa: co2Eff }, limL.initialMPa) : undefined),
-    [pressureModel, aqL, satEff, dryEff, rockEff, co2Eff, limL.initialMPa],
-  );
+  // live check of the model inputs with the program's own rules
+  const bhpL = useMemo(() => toBhp(resL, flL, modelL, systemL), [resL, flL, modelL, systemL]);
+  const dUL = findUnit("distance", units.distance);
+  const pUL = findUnit("pressure", units.pressure);
+  /** A distance list typed in the display unit, as the program's ft (left as typed when it is not numeric, so the program reports it). */
+  const listToFt = (text: string) => {
+    const parts = text.replace(/;/g, ",").replace(/\n/g, ",").split(",").map((v) => v.trim()).filter(Boolean);
+    const nums = parts.map(Number);
+    return nums.some((v) => !Number.isFinite(v)) ? text : nums.map((v) => toCanon(dUL, v) / FT);
+  };
+  const matrixToFt = (text: string) => {
+    const rows = text.trim().split(/\r?\n/).filter((r) => r.trim()).map((r) => r.split(",").map((v) => Number(v.trim())));
+    return rows.flat().some((v) => !Number.isFinite(v)) ? text : rows.map((r) => r.map((v) => toCanon(dUL, v) / FT));
+  };
+  const geomInputL: GeometryInput = useMemo(() => ({
+    number: rawWells.length, mode: geomL.mode, layout: geomL.layout, spacing_ft: geomL.spacingM / FT, different_input: geomL.method,
+    adjacent_distances_ft: geomL.adjacent.trim() ? listToFt(geomL.adjacent) : null,
+    pairwise_distances_ft: geomL.matrix.trim() ? matrixToFt(geomL.matrix) : null,
+  }), [rawWells.length, geomL, dUL]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the program's well table (field units) from the page table
+  const toMWell = (w: Well, p: BhpInputs, rwDefaultM: number, model: ModelKind): MWell => {
+    const changes = (w.changes ?? []).filter((c) => c.yr > w.startYr).sort((x, y) => x.yr - y.yr);
+    return makeWell({
+      name: w.name, x_ft: w.x / FT, y_ft: w.y / FT, rate: w.rate, start_year: w.startYr, rw_ft: (w.rwM ?? rwDefaultM) / FT, skin: w.skin,
+      include_evaporation: model === "two" && w.evaporation && w.evaporation !== "inherit" ? w.evaporation === "on" : null,
+      rate_schedule: p.phase_mode === "single" && changes.length ? [{ year: w.startYr, rate: w.rate }, ...changes.map((c) => ({ year: c.yr, rate: c.rate }))] : null,
+      max_bhp_psia: w.maxBhpMPa !== null && w.maxBhpMPa !== undefined ? w.maxBhpMPa / PSI : null,
+      end_year: w.endYr, // each well's own end year (the program's endpoint is the last of them)
+    });
+  };
+  const mwellsL = useMemo(() => tableWells.map((w) => toMWell(w, bhpL, resL.wellboreRadiusM, modelL)), [tableWells, bhpL, resL.wellboreRadiusM, modelL]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the program's configure_well_geometry: the positions used for the run (and the separation preview)
+  const layoutL = useMemo(() => {
+    if (!multiL) return { wells: [] as MWell[], error: "" };
+    try {
+      return { wells: configureWellGeometry(bhpL, mwellsL, geomInputL).wells, error: "" };
+    } catch (e) {
+      return { wells: mwellsL, error: errText(e) };
+    }
+  }, [multiL, bhpL, mwellsL, geomInputL]);
+  // the project endpoint is the last end year of the wells (observation starts after the last well stops)
+  const endpointL = useMemo(() => Math.max(...rawWells.map((w) => w.endYr)), [rawWells]);
+  const yearsL = String(endpointL);
+  // the wells of the run, in page units (metres): multiwell = the configured layout, all wells inject until the endpoint
+  const wellsL: Well[] = useMemo(() => {
+    if (!multiL) {
+      const w0 = rawWells[0];
+      return [{ id: w0.id, name: w0.name, x: 0, y: 0, rate: singleL.rate, startYr: 0, endYr: singleL.years, skin: singleL.skin, rwM: resL.wellboreRadiusM, evaporation: "inherit", maxBhpMPa: null }];
+    }
+    return tableWells.map((w, i) => ({ ...w, x: (layoutL.wells[i]?.x_ft ?? w.x / FT) * FT, y: (layoutL.wells[i]?.y_ft ?? w.y / FT) * FT }));
+  }, [multiL, rawWells, singleL, resL.wellboreRadiusM, tableWells, layoutL]);
+  // observation duration (program rules): a positive number of years when observation is on
+  const obsCheck = useMemo(() => {
+    if (observeL === "no") return { period: 0, offsets: [] as number[], error: "" };
+    let period = NaN;
+    try { period = parsePyFloat(obsPeriodL); } catch { return { period: 0, offsets: [], error: "Enter a positive observation duration in years." }; }
+    if (!Number.isFinite(period) || period <= 0) return { period: 0, offsets: [], error: "Enter a positive, finite observation duration in years." };
+    try {
+      return { period, offsets: observationSchedule(period, obsYearsL.trim()).offsets.map((o) => o.v), error: "" };
+    } catch (e) {
+      return { period, offsets: [], error: errText(e) };
+    }
+  }, [observeL, obsPeriodL, obsYearsL]);
+  const limitSpec = (l: LimitIn): LimitInput => ({ mode: l.mode, max_bhp_psia: l.maxBhpMPa / PSI, fracture_pressure_psia: l.fractureMPa / PSI, fraction: l.fraction });
+  const liveError = useMemo(() => {
+    try {
+      validate({ ...bhpL, q_Mscf_day: 1, water_rate_stb_day: 1 });
+      if (obsCheck.error) return obsCheck.error;
+      if (!multiL) {
+        if (!Number.isInteger(singleL.years) || singleL.years < 1) return "Number of years must be a positive integer.";
+        if (!(singleL.rate > 0)) return `${modelL === "water" ? "water_rate_stb_day" : "q_Mscf_day"} must be greater than zero.`;
+        return "";
+      }
+      const bad = rawWells.find((w) => !(Number.isFinite(w.endYr) && w.endYr > w.startYr));
+      if (bad) return `${bad.name}: end year must be after the start year.`;
+      return layoutL.error;
+    } catch (e) {
+      return errText(e);
+    }
+  }, [bhpL, obsCheck.error, multiL, singleL, modelL, rawWells, layoutL.error]);
+  // results run from year 0 to the end of injection, plus the observation period after it
+  const horizonL = Math.max(0.1, multiL ? (Number.isFinite(endpointL) ? endpointL : 0) : singleL.years) + obsCheck.period;
+
   const inputsL: Inputs = useMemo(() => ({
-    pressure: { model: pressureModel, rockComp: rockEff, co2Comp: co2Eff, zones: zonesL },
-    aq: zonesL ? { ...aqL, zones: zonesL.consts } : aqL, boundary: boundaryEff, wells: wellsL, points: pointsP, horizon: horizonL, threshold: thresholdL, sat: satEff, dry: dryEff,
-    skin: { ksMd: dmg.ksMd, rsM: dmg.rsM, s: calcSkin }, geo: { on: isGeo, lat0: origin?.lat ?? 0, lon0: origin?.lon ?? 0 }, project, author,
-  }), [aqL, boundaryEff, wellsL, pointsP, horizonL, thresholdL, satEff, dryEff, zonesL, pressureModel, rockEff, co2Eff, dmg, calcSkin, isGeo, origin, project, author]);
+    system: systemL, res: resL, fl: flL, model: modelL, limit: limitL, single: singleL, years: yearsL, reportTimes: reportL, geometry: geomL,
+    boundary: boundaryEff, wells: wellsL, points: pointsP, horizon: horizonL, threshold: thresholdL, observe: observeL, obsPeriod: obsPeriodL, obsYears: obsYearsL,
+    geo: { on: isGeo, lat0: origin?.lat ?? 0, lon0: origin?.lon ?? 0 }, project, author,
+    mwells: mwellsL, geomInput: geomInputL,
+  }), [systemL, resL, flL, modelL, limitL, singleL, yearsL, reportL, geomL, boundaryEff, wellsL, pointsP, horizonL, thresholdL, observeL, obsPeriodL, obsYearsL, isGeo, origin, project, author, mwellsL, geomInputL]);
 
   // ---- RUN ----
   const [applied, setApplied] = useState<Inputs | null>(null);
   const [runId, setRunId] = useState(0);
-  const runNow = () => { setApplied(inputsL); setRunId((n) => n + 1); };
+  const runNow = () => { if (obsCheck.error) return; setApplied(inputsL); setRunId((n) => n + 1); };
   // Names are cosmetic (they update everywhere without a new RUN), so they are ignored when checking for stale results.
-  const sig = (i: Inputs) => JSON.stringify({ ...i, wells: i.wells.map(({ name, ...r }) => (void name, r)), points: i.points.map(({ name, ...r }) => (void name, r)) });
+  const sig = (i: Inputs) => JSON.stringify({ ...i, wells: i.wells.map(({ name, ...r }) => (void name, r)), points: i.points.map(({ name, ...r }) => (void name, r)), mwells: i.mwells.map(({ name, ...r }) => (void name, r)) });
   const stale = useMemo(() => applied !== null && sig(applied) !== sig(inputsL), [applied, inputsL]); // eslint-disable-line react-hooks/exhaustive-deps
   const cur = applied ?? inputsL; // before the first RUN nothing is displayed; this only keeps the hooks well-defined
-  const { aq, boundary, horizon, threshold, geo, sat, dry, pressure } = cur;
+  const { res, fl, model, boundary, horizon, threshold, geo } = cur;
+  const multi = cur.system === "multi";
+  const bhpIn = useMemo(() => toBhp(res, fl, model, cur.system), [res, fl, model, cur.system]);
   // Well and point names follow the editable tables immediately; everything else comes from the last run.
-  const wellNameKey = rawWells.map((w) => `${w.id}${w.name}`).join("");
-  const pointNameKey = pointsL.map((q) => `${q.id}${q.name}`).join("");
+  const wellNameKey = rawWells.map((w) => `${w.id}${w.name}`).join("");
+  const pointNameKey = pointsL.map((q) => `${q.id}${q.name}`).join("");
   /* eslint-disable react-hooks/exhaustive-deps */
-  const wells = useMemo(() => { const m = new Map(rawWells.map((w) => [w.id, w.name])); return cur.wells.map((w) => ({ ...w, name: m.get(w.id) ?? w.name })); }, [cur.wells, wellNameKey]);
+  // Nothing is calculated before the first RUN (no wells), so typing in the inputs stays fast.
+  const wells = useMemo(() => { if (!applied) return []; const m = new Map(rawWells.map((w) => [w.id, w.name])); return cur.wells.map((w) => ({ ...w, name: m.get(w.id) ?? w.name })); }, [applied, cur.wells, wellNameKey]);
   const points = useMemo(() => { const m = new Map(pointsL.map((q) => [q.id, q.name])); return cur.points.map((q) => ({ ...q, name: m.get(q.id) ?? q.name })); }, [cur.points, pointNameKey]);
   /* eslint-enable react-hooks/exhaustive-deps */
-  const lim = useMemo(() => limits(aq), [aq]);
-  const c = useMemo(() => consts(aq), [aq]);
+  const lim = useMemo(() => limits({ initialMPa: res.initialMPa, ...cur.limit }), [res.initialMPa, cur.limit]);
   const tNow = Math.min(tEval, horizon);
+  const two = model === "two";
+  const water = model === "water";
+  const rateCat: Cat = water ? "waterrate" : "gasrate";
+  const rateCatL: Cat = modelL === "water" ? "waterrate" : "gasrate";
+
+  const obsApplied = useMemo(() => {
+    if (cur.observe === "no") return { period: 0, offsets: [] as number[] };
+    try {
+      const period = parsePyFloat(cur.obsPeriod);
+      return { period, offsets: observationSchedule(period, cur.obsYears.trim()).offsets.map((o) => o.v) };
+    } catch {
+      return { period: 0, offsets: [] as number[] };
+    }
+  }, [cur.observe, cur.obsPeriod, cur.obsYears]);
+
+  /** Image wells of every source for a straight boundary: distance (ft) from each receiving well to each image. */
+  const imagesFor = (ws: Well[], b: Boundary): Images | null => {
+    if (b.type === "none") return null;
+    return ws.map((w) => sourcesFor(w, b).filter((s) => !s.real).map((s) => ({ d: ws.map((r) => Math.hypot(r.x - s.x, r.y - s.y) / FT), sign: s.sign })));
+  };
+
+  // The run of the program for the applied inputs: single well (single-well section) or multiwell interference.
+  const run = useMemo((): { program: RunOutput | null; multi: MultiwellRun | null; fieldRun: ReturnType<typeof runMultiwell> | null; error: string } => {
+    if (!applied) return { program: null, multi: null, fieldRun: null, error: "" };
+    const c = applied;
+    const p = toBhp(c.res, c.fl, c.model, c.system);
+    const spec = limitSpec(c.limit);
+    const period = c.observe === "yes" ? obsApplied.period : 0;
+    try {
+      if (c.system === "single") {
+        const w = c.wells[0];
+        const pp: BhpInputs = { ...p, q_Mscf_day: w.rate, water_rate_stb_day: w.rate, skin: w.skin, observation_period_years: period, observation_years: period > 0 ? c.obsYears.trim() : "" };
+        const { results, constants } = runModel(pp, c.single.years);
+        const observation = calculateObservation(results[results.length - 1], pp, true);
+        const firstYear = calculateFirstYearDetail(results, pp, constants);
+        const program = withPressureLimit({ label: BROWSER_PHASES[c.model][2], years: c.single.years, p: pp, results, constants, observation, firstYear }, spec);
+        const fieldRun = runMultiwell(pp, [toMWell(w, pp, c.res.wellboreRadiusM, c.model)], c.single.years, "", { detail: false, pressureLimit: spec, images: imagesFor(c.wells, c.boundary) });
+        return { program, multi: null, fieldRun, error: "" };
+      }
+      const mr = multiwellCalculation({
+        p, wells: c.mwells, geometry: c.geomInput, years: c.years, report_times: c.reportTimes,
+        observe: c.observe, period: c.obsPeriod, offsets: c.obsYears, limit: spec,
+      });
+      const r = mr.result;
+      const fieldRun = c.boundary.type === "none" ? r : runMultiwell(r.parameters, r.wells, r.years, "", { detail: false, pressureLimit: spec, images: imagesFor(c.wells, c.boundary) });
+      return { program: null, multi: mr, fieldRun, error: "" };
+    } catch (e) {
+      return { program: null, multi: null, fieldRun: null, error: errText(e) };
+    }
+  }, [applied, obsApplied]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The pressure field of the run (maps and curves), and the same wells with the other boundary conditions on demand.
+  const field = useMemo(
+    () => new MultiwellField(run.fieldRun, applied ? cur.wells : [], boundary, horizon, obsApplied.offsets, run.error || null),
+    [run, applied, cur.wells, boundary, horizon, obsApplied],
+  );
+  const fieldCache = useMemo(() => new Map<Boundary["type"], MultiwellField>(), [run, cur.wells, boundary, horizon, obsApplied]); // eslint-disable-line react-hooks/exhaustive-deps
+  const fieldFor = (type: Boundary["type"]): MultiwellField => {
+    if (type === boundary.type) return field;
+    const hit = fieldCache.get(type);
+    if (hit) return hit;
+    let f: MultiwellField;
+    const base = run.fieldRun;
+    if (!base) f = field;
+    else {
+      try {
+        const r = runMultiwell(base.parameters, base.wells, base.years, "", { detail: false, pressureLimit: base.pressure_limit, images: imagesFor(cur.wells, { ...boundary, type }) });
+        f = new MultiwellField(r, cur.wells, { ...boundary, type }, horizon, obsApplied.offsets);
+      } catch (e) {
+        f = new MultiwellField(null, cur.wells, { ...boundary, type }, horizon, [], errText(e));
+      }
+    }
+    fieldCache.set(type, f);
+    return f;
+  };
+  const fieldError = applied ? field.error : null;
 
   // ---- display units (everything above works in canonical units) ----
   const pU = findUnit("pressure", units.pressure);
   const dU = findUnit("distance", units.distance);
-  const rU = findUnit("rate", units.rate);
+  const lU = findUnit("length", units.length);
+  const rU = findUnit(rateCat, units[rateCat]);
   const P = (v: number, d = 2) => (v / pU.f).toFixed(Math.max(0, d + (pU.dec ?? 0)));
   const pDec = Math.max(0, 2 + (pU.dec ?? 0));
   const D = (v: number) => { const x = v / dU.f; return Math.abs(x) >= 100 ? x.toFixed(0) : x.toFixed(1); };
+  const L = (v: number) => num(v / lU.f);
   const toP = (a: number[]) => a.map((v) => v / pU.f);
   const setUnit = (cat: Cat) => (v: string) => setUnits((u) => ({ ...u, [cat]: v }));
+  const uv = (cat: Cat, v: number) => num(fromCanon(findUnit(cat, units[cat]), v));
   const uf = (cat: Cat, o: { label?: string; ariaLabel?: string; value: number; onChange: (v: number) => void; min?: number; step?: number }) => {
     const un = findUnit(cat, units[cat]);
     return (
       <NumField
         label={o.label} ariaLabel={o.ariaLabel}
         unitSelect={o.label ? { value: units[cat], options: UNITS[cat].map((u) => u.label), onChange: setUnit(cat) } : undefined}
-        value={+(o.value / un.f).toPrecision(6)} onChange={(v) => o.onChange(v * un.f)}
-        min={o.min !== undefined ? o.min / un.f : undefined} step={o.step !== undefined ? o.step / un.f : undefined}
+        value={+fromCanon(un, o.value).toPrecision(6)} onChange={(v) => o.onChange(toCanon(un, v))}
+        min={o.min !== undefined ? fromCanon(un, o.min) : undefined} step={o.step !== undefined ? o.step / un.f : undefined}
       />
     );
   };
@@ -189,7 +503,7 @@ export default function Page() {
 
   const warnings = useMemo(() => {
     const w: string[] = [];
-    if (lim.maxBuildupMPa <= 0) w.push("Safety-factored fracture pressure is below initial pressure: no injection headroom.");
+    if (lim.maxBuildupMPa <= 0) w.push("The allowable BHP is at or below the initial pressure: no injection headroom.");
     if (boundary.type !== "none") {
       const coord = (o: { x: number; y: number }) => (boundary.axis === "x" ? o.x : o.y);
       const side = [...wells, ...points].map((o) => Math.sign(coord(o) - boundary.positionM));
@@ -197,11 +511,11 @@ export default function Page() {
       else if (new Set(side).size > 1) w.push("Wells/points are on both sides of the boundary; they must all be inside the aquifer.");
     }
     wells.forEach((a, i) => wells.slice(i + 1).forEach((b) => {
-      if (Math.hypot(a.x - b.x, a.y - b.y) < aq.wellboreRadiusM * 2) w.push(`${a.name} and ${b.name} are at the same location.`);
+      if (Math.hypot(a.x - b.x, a.y - b.y) < res.wellboreRadiusM * 2) w.push(`${a.name} and ${b.name} are at the same location.`);
     }));
     wells.forEach((x) => { if (x.endYr <= x.startYr) w.push(`${x.name}: end year must be after start year.`); });
     return w;
-  }, [wells, points, boundary, aq.wellboreRadiusM, lim]);
+  }, [wells, points, boundary, res.wellboreRadiusM, lim]);
 
   const times = useMemo(() => timeGrid(horizon, wells), [horizon, wells]);
 
@@ -212,11 +526,11 @@ export default function Page() {
     wells.forEach((w, i) => {
       out.push({
         name: w.name, color: COLORS[i % COLORS.length], x: times,
-        y: times.map((t) => base + (m === "interference" ? totalBuildup(wells, w.x, w.y, t, aq, boundary, c, w.id) : wellboreBuildup(wells, w, t, aq, boundary, c))),
+        y: times.map((t) => base + (m === "interference" ? field.total(w.x, w.y, t, w.id) : field.wellbore(w, t))),
       });
     });
     points.forEach((p, i) => {
-      out.push({ name: p.name, color: "#495057", dash: i % 2 ? "2 4" : "6 4", x: times, y: times.map((t) => base + totalBuildup(wells, p.x, p.y, t, aq, boundary, c)) });
+      out.push({ name: p.name, color: "#495057", dash: i % 2 ? "2 4" : "6 4", x: times, y: times.map((t) => base + field.total(p.x, p.y, t)) });
     });
     if (wells.length > 1) {
       const ws = out.slice(0, wells.length);
@@ -225,7 +539,7 @@ export default function Page() {
     }
     return out;
   };
-  const seriesNow = useMemo(() => buildSeries(mode), [wells, points, times, aq, boundary, c, mode, lim.initialMPa]); // eslint-disable-line react-hooks/exhaustive-deps
+  const seriesNow = useMemo(() => buildSeries(mode), [wells, points, times, field, mode, lim.initialMPa]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // What drives the field maximum: at each time, find the well with the highest buildup
   // and split that pressure into the contribution of every injector (self included) plus skin.
@@ -233,96 +547,165 @@ export default function Page() {
     const layers = wells.map((w, i) => ({ name: w.name, color: COLORS[i % COLORS.length], x: times, y: [] as number[] }));
     const skinLayer = { name: "Skin (controlling well)", color: "#adb5bd", x: times, y: [] as number[] };
     const controlling: number[] = [];
+    if (!wells.length) return { layers: [skinLayer], controlling, kPeak: 0, peak: 0 };
     for (const t of times) {
       let best = 0, bestV = -Infinity;
       wells.forEach((w, j) => {
-        const v = wellboreBuildup(wells, w, t, aq, boundary, c);
+        const v = field.wellbore(w, t);
         if (v > bestV) { bestV = v; best = j; }
       });
       controlling.push(best);
       const wj = wells[best];
-      wells.forEach((wi, i) => layers[i].y.push(wellContribution(wi, wj.x, wj.y, t, aq, boundary, c)));
-      skinLayer.y.push(skinBuildup(wj, t, aq, c));
+      wells.forEach((wi, i) => layers[i].y.push(field.contribution(wi, wj.x, wj.y, t)));
+      skinLayer.y.push(field.skin(wj, t));
     }
     const all = [...layers, skinLayer];
     const totals = times.map((_, k) => all.reduce((s, l) => s + l.y[k], 0));
     const kPeak = totals.reduce((m, v, k) => (v > totals[m] ? k : m), 0);
     return { layers: all, controlling, kPeak, peak: totals[kPeak] };
-  }, [wells, times, aq, boundary, c]);
+  }, [wells, times, field]);
 
-  const matrix = useMemo(() => interferenceMatrix(wells, tNow, aq, boundary), [wells, tNow, aq, boundary]);
+  const matrix = useMemo(() => field.matrix(tNow), [field, tNow]);
 
   const arrivals = useMemo(
     () => wells.map((src) => [...wells, ...points].map((tg) =>
-      tg === src ? null : arrivalTime(src, tg.x, tg.y, threshold, horizon, aq, boundary))),
-    [wells, points, threshold, horizon, aq, boundary],
+      tg === src ? null : field.arrival(src, tg.x, tg.y, threshold, horizon))),
+    [wells, points, threshold, horizon, field],
   );
 
   // Peak buildup per well (total, at wellbore) over the horizon.
   const peaks = useMemo(() => wells.map((w) => {
-    const ys = times.map((t) => wellboreBuildup(wells, w, t, aq, boundary, c));
+    const ys = times.map((t) => field.wellbore(w, t));
     const iMax = ys.reduce((m, v, i) => (v > ys[m] ? i : m), 0);
-    const skinAtPeak = skinBuildup(w, times[iMax], aq, c);
-    const interference = totalBuildup(wells, w.x, w.y, times[iMax], aq, boundary, c, w.id);
+    const skinAtPeak = field.skin(w, times[iMax]);
+    const interference = field.total(w.x, w.y, times[iMax], w.id);
     return { peak: ys[iMax], t: times[iMax], self: ys[iMax] - interference - skinAtPeak, skin: skinAtPeak, interference };
-  }), [wells, times, aq, boundary, c]);
+  }), [wells, times, field]);
 
   // Monitoring points are checked against the interference threshold (detection level), not the pressure limit.
   const pointChecks = useMemo(() => points.map((pt) => {
-    const ys = times.map((t) => totalBuildup(wells, pt.x, pt.y, t, aq, boundary, c));
+    const ys = times.map((t) => field.total(pt.x, pt.y, t));
     const iMax = ys.reduce((m, v, i) => (v > ys[m] ? i : m), 0);
     const iFirst = ys.findIndex((v) => v >= threshold);
     return { name: pt.name, peak: ys[iMax], tPeak: times[iMax], first: iFirst >= 0 ? times[iFirst] : null };
-  }), [points, wells, times, aq, boundary, c, threshold]);
+  }), [points, times, field, threshold]);
 
   const worst = peaks.reduce((m, p, i) => (p.peak > peaks[m].peak ? i : m), 0);
-  const scaleToLimit = peaks.length && peaks[worst].peak > 0 ? lim.maxBuildupMPa / peaks[worst].peak : Infinity;
+  const scaleToLimit = peaks.length && peaks[worst].peak > 0 && Number.isFinite(lim.maxBuildupMPa) ? lim.maxBuildupMPa / peaks[worst].peak : Infinity;
 
-  // Same wells, three boundary conditions. Bounded cases use the boundary line set in the panel.
-  const cases = useMemo(() => {
+  // Same wells, three boundary conditions (each a run of the program with image wells; the infinite case is the program).
+  // Calculated only when the comparison is shown or the report is built.
+  type Case = { key: Boundary["type"]; label: string; color: string; dash?: string; perWell: { ys: number[]; peak: number; t: number }[] };
+  const computeCases = (): Case[] => {
     const defs: { key: Boundary["type"]; label: string; color: string; dash?: string }[] = [
       { key: "none", label: "Infinite-acting", color: "#2a6fdb" },
       { key: "constant", label: "Constant-pressure boundary", color: "#2f9e44", dash: "6 4" },
       { key: "noflow", label: "No-flow boundary", color: "#d9480f", dash: "2 4" },
     ];
     return defs.map((d) => {
-      const b: Boundary = { ...boundary, type: d.key };
+      const f = fieldFor(d.key);
       const perWell = wells.map((w) => {
-        const ys = times.map((t) => wellboreBuildup(wells, w, t, aq, b, c));
+        const ys = times.map((t) => f.wellbore(w, t));
         const k = ys.reduce((m, v, i) => (v > ys[m] ? i : m), 0);
         return { ys, peak: ys[k], t: times[k] };
       });
       return { ...d, perWell };
     });
-  }, [wells, aq, boundary, times, c]);
+  };
+  const cases = useMemo(() => (view === "compare" && applied ? computeCases() : []), [view, applied, wells, times, field]); // eslint-disable-line react-hooks/exhaustive-deps
   const cmpIdx = Math.min(cmpWell, Math.max(wells.length - 1, 0));
+  const bhpIdx = Math.min(bhpWell, Math.max(wells.length - 1, 0));
 
+  // Automatic map padding: enough to show the largest CO2 plume in full and to keep neighbouring wells well apart on the map.
+  const autoPadM = useMemo(() => {
+    if (!wells.length) return 300;
+    let maxR = 0;
+    for (const w of wells) {
+      const sm = field.summary(w, Math.min(w.endYr, horizon));
+      if (sm.s && Number.isFinite(sm.s.rg_ft)) maxR = Math.max(maxR, sm.s.rg_ft * FT);
+    }
+    let spacing = Infinity;
+    wells.forEach((a, i) => wells.slice(i + 1).forEach((b) => { spacing = Math.min(spacing, Math.hypot(a.x - b.x, a.y - b.y)); }));
+    return Math.max(1.4 * maxR, Number.isFinite(spacing) ? 0.8 * spacing : 0, 150);
+  }, [wells, field, horizon]);
+  const padEff = padM ?? autoPadM;
+  const outsidePoints = mapArea === "wells" ? points.filter((q) => {
+    const xs = wells.map((w) => w.x), ys = wells.map((w) => w.y);
+    const half = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / 2 + padEff;
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    return Math.abs(q.x - cx) > half || Math.abs(q.y - cy) > half;
+  }) : [];
   const extent = useMemo(() => {
-    const all = [...wells, ...points];
+    const all = mapArea === "all" ? [...wells, ...points] : wells.length ? wells : points;
     const xs = all.map((o) => o.x), ys = all.map((o) => o.y);
     const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    const half = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys), 1000) / 2 + padM;
+    const half = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / 2 + padEff;
     return { x0: cx - half, x1: cx + half, y0: cy - half, y1: cy + half };
-  }, [wells, points, padM]);
+  }, [wells, points, padEff, mapArea]);
 
   const grid = useMemo(
-    () => (applied && wells.length ? buildupGrid(wells, tNow, aq, boundary, extent) : null),
-    [applied, wells, tNow, aq, boundary, extent],
+    () => (applied && wells.length ? field.grid(null, tNow, extent) : null),
+    [applied, wells, tNow, field, extent],
   );
 
-  // CO2 saturation (Buckley-Leverett plume around each injector)
-  const satModel = useMemo(() => makeSatModel(sat, aq.viscosityMPas), [sat, aq.viscosityMPas]);
+  // CO2 saturation (Buckley-Leverett plume around each injector, two-phase model only)
+  const sat: SatParams = useMemo(() => ({ swr: fl.swr, krgMax: fl.krg0, krwMax: fl.krw0, nw: fl.nw, ng: fl.ng, muCo2MPas: fl.muGas }), [fl]);
+  const satModel = useMemo(() => makeSatModel(sat, fl.muWater), [sat, fl.muWater]);
+  const satGeom = useMemo(() => ({ porosity: res.porosity, thicknessM: res.thicknessM, rwM: res.wellboreRadiusM }), [res]);
+  const vols = useMemo(() => wells.map((w) => field.reservoirVolumeM3(w, tNow)), [wells, field, tNow]);
   const gridSat = useMemo(
-    () => (applied && wells.length ? satGrid(wells, tNow, aq, satModel, extent) : null),
-    [applied, wells, tNow, aq, satModel, extent],
+    () => (applied && two && wells.length ? satGrid(wells, vols, satGeom, satModel, extent) : null),
+    [applied, two, wells, vols, satGeom, satModel, extent],
   );
-  const plumes = useMemo(() => wells.map((w) => ({
-    id: w.id,
-    name: w.name,
-    massMt: injectedMt(w, tNow),
-    radius: plumeRadius(w, tNow, aq, satModel),
-    dryR: dryRadius(w, tNow, aq, dry, sat.swr, lim.initialMPa),
-  })), [wells, tNow, aq, satModel, dry, sat.swr, lim.initialMPa]);
+  const frontSg = useMemo(() => { try { return referenceQuantities(bhpIn).Sg_front ?? NaN; } catch { return NaN; } }, [bhpIn]);
+  const plumes = useMemo(() => wells.map((w) => {
+    const s = field.summary(w, tNow).s;
+    return {
+      id: w.id, name: w.name,
+      massMt: (injectedRateYears(w, tNow) * 365.25 * CO2_T_PER_MSCF) / 1e6,
+      radius: s && two ? s.rg_ft * FT : 0,
+      dryR: s && two ? s.rd_ft * FT : 0,
+      sg2: s?.Sg2 ?? NaN,
+    };
+  }), [wells, tNow, field, two]);
+
+  // The program run for one well on its own (your calculation, unchanged): rate, injection years and skin of that well,
+  // and the post-shut-in observation entered in the Input section.
+  // Single well: the run itself. Multiwell: the selected well run on its own (its rate, radius, skin, evaporation choice and
+  // own maximum BHP; injection from its start year to its end year, in whole years).
+  const code = useMemo((): { out: RunOutput | null; error: string; note: string } => {
+    if (!applied) return { out: null, error: "", note: "" };
+    if (!multi) return { out: run.program, error: run.error, note: "" };
+    const w = wells[bhpIdx];
+    if (!w) return { out: null, error: "", note: "" };
+    const years = Math.max(1, Math.round(w.endYr - w.startYr));
+    const notes: string[] = [];
+    if (Math.abs(w.endYr - w.startYr - years) > 1e-9) notes.push(`the injection period is rounded to ${years} whole years`);
+    if ((w.changes ?? []).some((ch) => ch.yr > w.startYr && ch.yr < w.endYr)) notes.push("the program uses one constant rate, the first rate of the well (its rate changes are only in the multiwell results)");
+    try {
+      const period = cur.observe === "yes" ? obsApplied.period : 0;
+      const p: BhpInputs = {
+        ...bhpIn, q_Mscf_day: w.rate, water_rate_stb_day: w.rate, skin: w.skin, rw_ft: (w.rwM ?? B0.rw_ft * FT) / FT,
+        include_evaporation: model === "two" && w.evaporation && w.evaporation !== "inherit" ? w.evaporation === "on" : bhpIn.include_evaporation,
+        observation_period_years: period, observation_years: period > 0 ? cur.obsYears.trim() : "",
+      };
+      const { results, constants } = runModel(p, years);
+      const observation = calculateObservation(results[results.length - 1], p, true);
+      const firstYear = calculateFirstYearDetail(results, p, constants);
+      const limit = w.maxBhpMPa !== null && w.maxBhpMPa !== undefined ? { mode: "max_bhp", max_bhp_psia: w.maxBhpMPa / PSI } : limitSpec(cur.limit);
+      return { out: withPressureLimit({ label: BROWSER_PHASES[model][2], years, p, results, constants, observation, firstYear }, limit), error: "", note: notes.join("; ") };
+    } catch (e) {
+      return { out: null, error: errText(e), note: notes.join("; ") };
+    }
+  }, [applied, multi, run, wells, bhpIdx, bhpIn, cur.observe, cur.obsYears, cur.limit, obsApplied, model]); // eslint-disable-line react-hooks/exhaustive-deps
+  const codePlot = useMemo(() => (code.out ? renderBhpPlot(code.out) : null), [code.out]);
+  const codeFiles = useMemo(() => (code.out ? outputFiles(code.out) : null), [code.out]);
+  const saveCodePlot = async () => {
+    if (!codePlot || !wells[bhpIdx]) return;
+    const url = await svgToPngDataUrl(codePlot.svg, codePlot.width, codePlot.height, 2);
+    downloadBlob(await (await fetch(url)).blob(), `${wells[bhpIdx].name}-bhp_vs_year.png`);
+  };
+  const textFile = (name: string, text: string) => downloadBlob(new Blob([text], { type: name.endsWith(".json") ? "application/json" : "text/csv" }), name);
 
   // ---- chart specs (display units applied) ----
   const mapSpec = (g: NonNullable<typeof grid>): ChartSpec => ({
@@ -331,7 +714,7 @@ export default function Page() {
       grid: g, wells, points, boundary, pf: pU.f, pLabel: pU.label, pDec, df: dU.f, dLabel: dU.label,
       geo: geo.on ? { lat0: geo.lat0, lon0: geo.lon0 } : undefined,
       style: mapStyle,
-      wellGrids: mapStyle.contours && (mapStyle.contourSource ?? "wells") === "wells" ? wells.map((w) => wellBuildupGrid(w, tNow, aq, boundary, extent, Math.max(g.nx, 150), Math.max(g.ny, 150))) : undefined,
+      wellGrids: mapStyle.contours && (mapStyle.contourSource ?? "wells") === "wells" ? wells.map((w) => field.grid(w, tNow, extent, Math.max(g.nx, 150), Math.max(g.ny, 150))) : undefined,
       contourLevels: [
         { level: threshold, label: `Interference threshold\n${P(threshold, 3)} ${pU.label} (detection only)`, cls: "thr" },
         ...(lim.maxBuildupMPa > 0 ? [{ level: lim.maxBuildupMPa, label: `Max allowable buildup\n${P(lim.maxBuildupMPa)} ${pU.label} (pass/fail limit)`, cls: "lim" as const }] : []),
@@ -352,9 +735,10 @@ export default function Page() {
     opts: {
       series: ser.map((s) => ({ ...s, y: toP(s.y) })), xLabel: "Time (years)",
       yLabel: m === "bhp" ? `Bottomhole pressure (${pU.label})` : `Pressure buildup, ${m === "total" ? "total" : "interference"} (${pU.label})`,
-      hline: m === "bhp" ? { y: (lim.initialMPa + lim.maxBuildupMPa) / pU.f, label: `Max allowable BHP ${P(lim.initialMPa + lim.maxBuildupMPa, 1)} ${pU.label}` }
-        : m === "total" && lim.maxBuildupMPa > 0 ? { y: lim.maxBuildupMPa / pU.f, label: "Allowable buildup" } : undefined,
+      hline: m === "bhp" ? (lim.allowableMPa !== null ? { y: lim.allowableMPa / pU.f, label: `Max allowable BHP ${P(lim.allowableMPa, 1)} ${pU.label}` } : undefined)
+        : m === "total" && lim.maxBuildupMPa > 0 && Number.isFinite(lim.maxBuildupMPa) ? { y: lim.maxBuildupMPa / pU.f, label: "Allowable buildup" } : undefined,
       yMin: m === "bhp" ? Math.floor(lim.initialMPa / pU.f) : 0,
+      fit: m === "bhp", // zoom the pressure axis to the curves (the allowable BHP is usually far above them)
       markerX: withMarker ? tNow : undefined, markerLabel: "Evaluation time",
     },
   });
@@ -362,31 +746,76 @@ export default function Page() {
     kind: "stack",
     opts: { layers: fieldDrivers.layers.map((l) => ({ ...l, y: toP(l.y) })), xLabel: "Time (years)", yLabel: `Field-maximum buildup by source (${pU.label})` },
   });
-  const compareSpec = (idx: number): ChartSpec => ({
+  const compareSpec = (idx: number, cases: Case[]): ChartSpec => ({
     kind: "line",
     opts: {
       series: cases.map((k) => ({ name: k.label, color: k.color, dash: k.dash, x: times, y: toP(k.perWell[idx].ys) })),
       xLabel: "Time (years)", yLabel: `${wells[idx].name} wellbore buildup incl. skin (${pU.label})`,
-      hline: lim.maxBuildupMPa > 0 ? { y: lim.maxBuildupMPa / pU.f, label: "Allowable buildup" } : undefined,
+      hline: lim.maxBuildupMPa > 0 && Number.isFinite(lim.maxBuildupMPa) ? { y: lim.maxBuildupMPa / pU.f, label: "Allowable buildup" } : undefined,
     },
   });
   /* eslint-disable react-hooks/exhaustive-deps */
-  const specSat = useMemo(() => (gridSat ? satSpec(gridSat) : null), [gridSat, wells, points, geo, dU, tNow, aq, satModel]);
-  const specMap = useMemo(() => (grid ? mapSpec(grid) : null), [grid, wells, points, boundary, threshold, lim, pU, dU, mapStyle, tNow, aq, extent]);
+  const specSat = useMemo(() => (gridSat ? satSpec(gridSat) : null), [gridSat, wells, points, geo, dU, tNow]);
+  const specMap = useMemo(() => (grid ? mapSpec(grid) : null), [grid, wells, points, boundary, threshold, lim, pU, dU, mapStyle, tNow, field, extent]);
   const specSeries = useMemo(() => lineSpec(mode, seriesNow, true), [seriesNow, mode, lim, pU, tNow]);
   const specStack = useMemo(stackSpec, [fieldDrivers, pU]);
-  const specCompare = useMemo(() => (wells.length ? compareSpec(cmpIdx) : null), [cases, cmpIdx, lim, pU, times]);
+  const specCompare = useMemo(() => (wells.length && cases.length ? compareSpec(cmpIdx, cases) : null), [cases, cmpIdx, lim, pU, times]);
+  // BHP of the selected well with interference, and the same well alone (exactly the program for one well)
+  const specWellBhp = useMemo(() => {
+    const w = wells[bhpIdx];
+    if (!w) return null;
+    const all = buildSeries("bhp");
+    const base = run.fieldRun;
+    let alone: MultiwellField;
+    try {
+      alone = new MultiwellField(base ? runMultiwell(base.parameters, [base.wells[bhpIdx]], base.years, "", { detail: false }) : null, [cur.wells[bhpIdx]], { ...boundary, type: "none" }, horizon, obsApplied.offsets);
+    } catch (e) {
+      alone = new MultiwellField(null, [cur.wells[bhpIdx]], { ...boundary, type: "none" }, horizon, [], errText(e));
+    }
+    const own: Series = { name: `${w.name} alone (your program, no other wells)`, color: "#111111", dash: "5 4", x: times, y: times.map((t) => lim.initialMPa + alone.wellbore(w, t)) };
+    return lineSpec("bhp", [{ ...all[bhpIdx], name: `${w.name} with interference from the other wells` }, own], true);
+  }, [wells, points, times, field, run, bhpIdx, lim, pU, tNow, horizon, boundary, obsApplied]);
   /* eslint-enable react-hooks/exhaustive-deps */
 
   const updWell = (id: string, patch: Partial<WellIn>) => setWells((ws) => ws.map((w) => (w.id === id ? { ...w, ...patch } : w)));
   const updPoint = (id: string, patch: Partial<PointIn>) => setPoints((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
 
   const addChange = (id: string) =>
-    setWells((ws) => ws.map((w) => (w.id !== id ? w : { ...w, changes: [...(w.changes ?? []), { yr: +((w.startYr + w.endYr) / 2).toFixed(2), rateMtpa: w.rateMtpa }] })));
-  const updChange = (id: string, idx: number, patch: Partial<{ yr: number; rateMtpa: number }>) =>
+    setWells((ws) => ws.map((w) => (w.id !== id ? w : { ...w, changes: [...(w.changes ?? []), { yr: +((w.startYr + w.endYr) / 2).toFixed(2), rate: w.rate }] })));
+  const updChange = (id: string, idx: number, patch: Partial<{ yr: number; rate: number }>) =>
     setWells((ws) => ws.map((w) => (w.id !== id ? w : { ...w, changes: (w.changes ?? []).map((c, i) => (i === idx ? { ...c, ...patch } : c)) })));
   const delChange = (id: string, idx: number) =>
     setWells((ws) => ws.map((w) => (w.id !== id ? w : { ...w, changes: (w.changes ?? []).filter((_, i) => i !== idx) })));
+
+  /** Set the number of wells: extra wells are added on a spiral around the first one (rate 150, years 0-25); surplus wells are removed from the end. */
+  /** Set the number of wells (2–32), as the program's resize_well_rows: surplus wells are removed from the end; a new well
+   * gets the next free name "Well k", the default rate, start year 0, radius 0.55 ft and skin 0, 1000 ft beyond the last x. */
+  const setWellCount = (n: number) => {
+    const k = Math.max(2, Math.min(32, Math.round(n)));
+    setWells((ws) => {
+      if (k <= ws.length) return ws.slice(0, k);
+      const ref = origin ?? geoRef;
+      const names = new Set(ws.map((w) => w.name.toLowerCase()));
+      const add: WellIn[] = [];
+      for (let i = ws.length; i < k; i++) {
+        let c = i + 1;
+        while (names.has(`well ${c}`)) c++;
+        names.add(`well ${c}`);
+        const x = Math.max(...[...ws, ...add].map((w) => w.x), -1000 * FT) + 1000 * FT;
+        add.push({ ...newWellIn(i, x, 0), rwM: rwAllL, endYr: ws[ws.length - 1]?.endYr ?? 30, id: uid("w"), name: `Well ${c}`, ...roundLL(unproject(x, 0, ref.lat, ref.lon)) });
+      }
+      return [...ws, ...add];
+    });
+  };
+  const setSystem = (v: System) => {
+    if (v === "single" && coordMode === "geo") switchCoord("local");
+    setSystemRaw(v);
+  };
+  const setGeomSafe = (patch: Partial<GeometryIn>) => {
+    const next = { ...geomL, ...patch };
+    if (coordMode === "geo" && !(next.mode === "different" && next.method === "coordinates")) switchCoord("local");
+    setGeom(next);
+  };
 
   const switchCoord = (next: "local" | "geo") => {
     if (next === coordMode) return;
@@ -424,17 +853,18 @@ export default function Page() {
         }
         setCoordMode("local");
       }
-      setWells(r.wells);
+      setWells(r.wells.map((w) => ({ rwM: B0.rw_ft * FT, evaporation: "inherit" as const, maxBhpMPa: null, ...w })));
+      setGeom((g) => ({ ...g, mode: "different", method: "coordinates" }));
       setCsvError("");
     } catch (e) {
-      setCsvError(e instanceof Error ? e.message : String(e));
+      setCsvError(errText(e));
     }
     if (fileRef.current) fileRef.current.value = "";
   };
 
   const exportResults = () => {
     const names = wells.map((w) => w.name);
-    const rows: (string | number)[][] = [[`# Interference matrix (${pU.label}) at t = ` + tNow + " yr; row = source well, column = receiving well"], ["source\\receiver", ...names]];
+    const rows: (string | number)[][] = [[`# Model: ${modelLabel(bhpIn)}`], [`# Interference matrix (${pU.label}) at t = ` + tNow + " yr; row = source well, column = receiving well"], ["source\\receiver", ...names]];
     matrix.forEach((r, i) => rows.push([names[i], ...r.map((v) => +(v / pU.f).toFixed(5))]));
     rows.push([], [`# Time series (${pU.label}; mode: ${mode})`], ["time_yr", ...seriesNow.map((s) => s.name)]);
     times.forEach((t, k) => rows.push([+t.toFixed(4), ...seriesNow.map((s) => +(s.y[k] / pU.f).toFixed(5))]));
@@ -452,15 +882,15 @@ export default function Page() {
         const r = render(spec, "light");
         return { png: await svgToPngDataUrl(r.svg, r.width, r.height, 2), w: r.width, h: r.height };
       };
+      const cases = computeCases();
       const figures = {
-        sat: await fig(satSpec(satGrid(wells, tNow, aq, satModel, extent))),
-        map: await fig(mapSpec(buildupGrid(wells, tNow, aq, boundary, extent))),
+        sat: two ? await fig(satSpec(satGrid(wells, vols, satGeom, satModel, extent))) : undefined,
+        map: await fig(mapSpec(field.grid(null, tNow, extent))),
         bhp: await fig(lineSpec("bhp", buildSeries("bhp"), false)),
-        compare: await fig(compareSpec(worst)),
+        compare: await fig(compareSpec(worst, cases)),
         drivers: await fig(stackSpec()),
       };
       const un = (cat: Cat) => units[cat];
-      const uv = (cat: Cat, v: number) => num(v / findUnit(cat, units[cat]).f);
       const names = wells.map((w) => w.name);
       const allTargets = [...wells, ...points];
       const kp = fieldDrivers.kPeak;
@@ -471,49 +901,49 @@ export default function Page() {
       const worstCase = (k: number) => cases[k].perWell[worst].peak;
       const exceeds = cases.filter((k) => k.perWell[worst].peak > lim.maxBuildupMPa).map((k) => k.label.toLowerCase());
       const bLine = `${boundary.axis} = ${D(boundary.positionM)} ${dU.label}`;
+      const wSum = field.summary(wells[worst], tNow);
+      const zoneNames = two ? ["1  Dry CO₂", "2  CO₂ + brine", "3  Brine"] : [water ? "Water" : "CO₂"];
       const data: ReportData = {
         project: applied.project, author: applied.author,
         date: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }),
         nWells: wells.length, nPoints: points.length, horizon, pLabel: pU.label,
+        model, modelLabel: modelLabel(bhpIn), evaporation: fl.evaporation,
         paramHead: ["Parameter", "Value", "Unit"],
         paramRows: [
-          ["Permeability, k", uv("perm", aq.permMd), un("perm")],
-          ["Net thickness, h", uv("length", aq.thicknessM), un("length")],
-          ["Porosity, φ", num(aq.porosity), "–"],
-          ["Total compressibility, c_t", uv("compress", aq.compressibilityPerMPa), un("compress")],
-          ["Brine viscosity, μ", uv("viscosity", aq.viscosityMPas), un("viscosity")],
-          ["CO₂ density, ρ", uv("density", aq.co2DensityKgM3), un("density")],
-          ["Wellbore radius, r_w", uv("length", aq.wellboreRadiusM), un("length")],
-          ["Injection depth, D", uv("length", aq.depthM), un("length")],
-          ["Hydrostatic gradient, G_h", uv("gradient", aq.hydroGradientMPaPerM), un("gradient")],
-          ["Fracture gradient, G_f", uv("gradient", aq.fracGradientMPaPerM), un("gradient")],
-          ["Safety factor, f", num(aq.safetyFactor), "× P_frac"],
+          ["Pressure model", modelLabel(bhpIn), "–"],
+          ...(two ? [["Include evaporation (dry zone)", fl.evaporation ? "Yes" : "No", "–"]] : []),
+          ["Permeability, k (every zone)", uv("perm", res.permMd), un("perm")],
+          ["Net thickness, h", uv("length", res.thicknessM), un("length")],
+          ["Porosity, φ (every zone)", num(res.porosity), "–"],
+          ["Wellbore radius, r_w", uv("length", res.wellboreRadiusM), un("length")],
+          ["Initial absolute pressure, P_i", uv("pressure", res.initialMPa), un("pressure")],
+          ...(!water ? [["Reservoir temperature, T", uv("temp", res.tempC), un("temp")]] : []),
+          ...(!water ? [["Gas (CO₂) viscosity, μ_g", uv("viscosity", fl.muGas), un("viscosity")]] : []),
+          ...(model !== "co2" ? [["Water viscosity, μ_w", uv("viscosity", fl.muWater), un("viscosity")], [water ? "Water density at initial pressure, ρ_w" : "Brine density, ρ_b", uv("density", fl.brineDensityKgM3), un("density")]] : []),
+          ["Rock compressibility, c_r", uv("compress", fl.rockComp), un("compress")],
+          ...(model !== "co2" ? [["Water compressibility, c_w", uv("compress", fl.waterComp), un("compress")]] : []),
+          ...(two ? [
+            ["Salt mass fraction, X_s", num(fl.salt), "–"],
+            ["Irreducible water saturation, S_wr", num(fl.swr), "–"],
+            ["Gas end-point relative permeability, k_rg0", num(fl.krg0), "–"],
+            ["Water end-point relative permeability, k_rw0", num(fl.krw0), "–"],
+            ["Zone 1 gas relative permeability, k_rg1", num(fl.krg1), "–"],
+            ["Corey exponents, n_g / n_w", `${num(fl.ng)} / ${num(fl.nw)}`, "–"],
+          ] : []),
+          ["Well system", multi ? "Multiwell interference" : "Single well", "–"],
+          ...(multi ? [["Last end year (observation starts after it)", num(Number(cur.years)), "yr"]] : [["Injection years", String(cur.single.years), "yr"]]),
+          ["Pressure check", cur.limit.mode === "none" ? "Not assessed" : cur.limit.mode === "max_bhp" ? "Maximum allowable BHP" : "Fraction of fracture pressure", "–"],
+          ...(cur.limit.mode === "max_bhp" ? [["Maximum allowable BHP", uv("pressure", cur.limit.maxBhpMPa), un("pressure")]] : []),
+          ...(cur.limit.mode === "fracture_fraction" ? [["Fracture pressure", uv("pressure", cur.limit.fractureMPa), un("pressure")], ["Allowable fraction of fracture pressure", num(cur.limit.fraction), "–"]] : []),
           ["Interference threshold", P(threshold, 3), pU.label],
-          ["Hydraulic diffusivity of the brine zone, η (calculated)", uv("diffusivity", c.eta), un("diffusivity")],
-          ["Analysis horizon", String(horizon), "yr"],
-          ["Pressure model", pressure.model === "three" ? "Three-zone CO₂–brine" : "Single-phase (Theis)", "–"],
-          ...(pressure.model === "three"
-            ? [["Rock compressibility, c_f", uv("compress", pressure.rockComp), un("compress")], ["CO₂ compressibility, c_g", uv("compress", pressure.co2Comp), un("compress")]]
-            : []),
-          ["Irreducible brine saturation, S_wr", num(sat.swr), "–"],
-          ["Maximum CO₂ relative permeability, k_rg,max", num(sat.krgMax), "–"],
-          ["Corey exponent, brine, n_w", num(sat.nw), "–"],
-          ["Corey exponent, CO₂, n_g", num(sat.ng), "–"],
-          ["CO₂ viscosity, μ_g", uv("viscosity", sat.muCo2MPas), un("viscosity")],
-          ["Reservoir temperature", num(dry.tempC), "°C"],
-          ["Brine salinity, X_s (NaCl mass fraction)", num(dry.salinity), "–"],
-          ["Brine density, ρ_b", uv("density", dry.brineDensityKgM3), un("density")],
-          ["Water fugacity coefficient in CO₂, Φ_w", num(dry.phiW), "–"],
-          ...(wells.some((w) => w.skinSrc === "calc")
-            ? [["Damaged-zone permeability, k_s", uv("perm", applied.skin.ksMd), un("perm")], ["Damaged-zone radius, r_s", uv("length", applied.skin.rsM), un("length")]]
-            : []),
+          ["Post-shut-in observation", cur.observe === "yes" ? `${cur.obsPeriod} yr after all wells stop` : "No", "–"],
+          ["Results period", `0 to ${num(horizon)}`, "yr"],
         ],
         wellHead: geo.on
-          ? ["Well", "Lon (°)", "Lat (°)", `x (${dU.label})`, `y (${dU.label})`, `Rate (${rU.label})`, "Start (yr)", "End (yr)", "Skin"]
-          : ["Well", `x (${dU.label})`, `y (${dU.label})`, `Rate (${rU.label})`, "Start (yr)", "End (yr)", "Skin"],
+          ? ["Well", "Lon (°)", "Lat (°)", `x (${dU.label})`, `y (${dU.label})`, `Rate (${rU.label})`, "Start (yr)", "End (yr)", `r_w (${lU.label})`, "Skin"]
+          : ["Well", `x (${dU.label})`, `y (${dU.label})`, `Rate (${rU.label})`, "Start (yr)", "End (yr)", `r_w (${lU.label})`, "Skin"],
         wellRows: wells.map((w) => {
-          const skinCell = `${w.skin.toFixed(2)} (${w.skinSrc === "input" ? "input" : "calc."})`;
-          const tail = [num(w.rateMtpa / rU.f), num(w.startYr), num(w.endYr), skinCell];
+          const tail = [num(fromCanon(rU, w.rate)), num(w.startYr), num(w.endYr), L(w.rwM ?? res.wellboreRadiusM), w.skin.toFixed(2)];
           return geo.on ? [w.name, (w.lon ?? 0).toFixed(5), (w.lat ?? 0).toFixed(5), D(w.x), D(w.y), ...tail] : [w.name, D(w.x), D(w.y), ...tail];
         }),
         pointHead: geo.on ? ["Point", "Lon (°)", "Lat (°)", `x (${dU.label})`, `y (${dU.label})`] : ["Point", `x (${dU.label})`, `y (${dU.label})`],
@@ -524,21 +954,21 @@ export default function Page() {
         coordDesc: geo.on
           ? `Well and monitoring-point locations were entered as geographic coordinates (longitude and latitude, WGS84) and converted to local Cartesian coordinates (x east, y north) with an azimuthal equidistant projection centred on the centroid of the locations (latitude ${geo.lat0.toFixed(5)}°, longitude ${geo.lon0.toFixed(5)}°).`
           : "Locations are given as local Cartesian coordinates (x east, y north).",
-        skinDesc: (() => {
-          const inN = wells.filter((w) => w.skinSrc === "input").map((w) => w.name);
-          const clN = wells.filter((w) => w.skinSrc === "calc").map((w) => w.name);
-          const calcTxt = `calculated from a damaged zone of radius ${uv("length", applied.skin.rsM)} ${un("length")} and permeability ${uv("perm", applied.skin.ksMd)} ${un("perm")}, giving s = ${applied.skin.s.toFixed(2)}`;
-          if (!inN.length) return `The skin factor of every well was ${calcTxt}.`;
-          if (!clN.length) return "Skin factors were specified for every well.";
-          return `Skin factors were specified for ${inN.join(", ")}; for ${clN.join(", ")} the skin factor was ${calcTxt}.`;
-        })(),
+        skinDesc: wells.some((w) => w.skin !== 0) ? "A skin factor was specified for each well (Table 3)." : "All wells have zero skin.",
         limits: {
-          p0: `${P(lim.initialMPa, 1)} ${pU.label}`, pfrac: `${P(lim.fractureMPa, 1)} ${pU.label}`, safety: String(aq.safetyFactor),
-          maxBuildup: `${P(lim.maxBuildupMPa)} ${pU.label}`, maxBhp: `${P(lim.initialMPa + lim.maxBuildupMPa, 1)} ${pU.label}`,
+          p0: `${P(lim.initialMPa, 1)} ${pU.label}`,
+          check: cur.limit.mode === "none"
+            ? "No pressure limit was supplied, so the wells are not assessed (status NOT ASSESSED)"
+            : cur.limit.mode === "max_bhp"
+              ? `The pressure check uses a maximum allowable bottom-hole pressure of ${P(cur.limit.maxBhpMPa, 1)} ${pU.label}`
+              : `The pressure check uses ${num(cur.limit.fraction)} of a fracture pressure of ${P(cur.limit.fractureMPa, 1)} ${pU.label}, an allowable bottom-hole pressure of ${P(lim.allowableMPa ?? NaN, 1)} ${pU.label}`,
+          assessed: lim.allowableMPa !== null,
+          maxBuildup: Number.isFinite(lim.maxBuildupMPa) ? `${P(lim.maxBuildupMPa)} ${pU.label}` : "–",
+          maxBhp: lim.allowableMPa !== null ? `${P(lim.allowableMPa, 1)} ${pU.label}` : "–",
         },
         kpi: {
           worst: wells[worst].name, peak: `${P(peaks[worst].peak)} ${pU.label}`, at: `at ${peaks[worst].t.toFixed(1)} yr`,
-          allowable: `${P(lim.maxBuildupMPa)} ${pU.label}`, exceeded: peaks[worst].peak > lim.maxBuildupMPa,
+          allowable: Number.isFinite(lim.maxBuildupMPa) ? `${P(lim.maxBuildupMPa)} ${pU.label}` : "not assessed", exceeded: overall === "FAIL",
           scale: Number.isFinite(scaleToLimit) ? scaleToLimit.toFixed(2) : "–",
           interferenceShare: peaks[worst].peak > 0 ? Math.round((peaks[worst].interference / peaks[worst].peak) * 100) : 0,
         },
@@ -558,31 +988,38 @@ export default function Page() {
         arrivalRows: arrivals.map((row, i) => [names[i], ...row.map((v) => (v === null ? "–" : v.toFixed(2)))]),
         pointCheckHead: ["Point", `Peak buildup (${pU.label})`, "Time (yr)", "Threshold reached?", "First reached (yr)"],
         pointCheckRows: pointChecks.map((pc) => [pc.name, P(pc.peak, 3), pc.tPeak.toFixed(1), pc.first !== null ? "Yes" : "No", pc.first !== null ? pc.first.toFixed(2) : "–"]),
-        threeZone: pressure.model === "three" && !!pressure.zones,
-        zoneHead: ["Zone", "Mobility ratio m", "Storage ratio c*", "Diffusivity ratio D", `Diffusivity η (${un("diffusivity")})`],
-        zoneRows: pressure.zones
-          ? ["1  Dry CO₂", "2  CO₂ + brine", "3  Brine"].map((z, i) => [z, pressure.zones!.consts.m[i].toPrecision(3), pressure.zones!.cStar[i].toPrecision(3), pressure.zones!.consts.D[i].toPrecision(3), uv("diffusivity", c.eta * pressure.zones!.consts.D[i])])
+        zoneHead: ["Zone", "Mobility Λ (mD/cP)", "Total compressibility c_t (1/psi)", "Mobility ratio m", "Storage ratio c*", "Diffusivity ratio D"],
+        zoneRows: wSum.s
+          ? zoneNames.map((z, i) => [z, ...["Lambda", "ct"].map((k) => wSum.s![`${k}${i + 1}${k === "Lambda" ? "_mD_cP" : "_per_psi"}`].toPrecision(4)), ...["m", "c", "D"].map((k) => wSum.s![k === "c" ? `c${i + 1}_star` : `${k}${i + 1}`].toPrecision(4))])
           : [],
-        zoneNote: pressure.zones
-          ? `Average CO₂ saturation behind the front ${pressure.zones.avgSat.toFixed(2)}; dry-front coefficient α_d = ${pressure.zones.consts.alphaD.toPrecision(3)}; front slope β_g = ${pressure.zones.consts.beta.toPrecision(3)}.`
+        zoneNote: wSum.s
+          ? `${wells[worst].name} at t = ${tNow.toFixed(1)} yr (${wSum.kind === "shut" ? "frozen at shut-in" : "injecting"}), from the program at its bottom-hole pressure ${P(wSum.P * PSI, 1)} ${pU.label}${two ? `; zone 2 gas saturation ${(wSum.s.Sg2 ?? NaN).toFixed(3)}, dry front ${L(wSum.s.rd_ft * FT)} ${lU.label}, gas front ${L(wSum.s.rg_ft * FT)} ${lU.label}` : ""}.`
           : "",
         scheduleHead: ["Well", "Rate changes from year", `New rate (${rU.label})`],
-        scheduleRows: wells.flatMap((w) => (w.changes ?? []).filter((ch) => ch.yr > w.startYr && ch.yr < w.endYr).sort((x, y) => x.yr - y.yr).map((ch) => [w.name, num(ch.yr), num(ch.rateMtpa / rU.f)])),
-        satHead: ["Well", "CO₂ injected (Mt)", `Plume radius (${dU.label})`, `Dry-zone radius (${dU.label})`, "S_g behind front", "Max S_g"],
-        satRows: plumes.map((q) => [q.name, q.massMt.toFixed(2), D(q.radius), D(q.dryR), satModel.sf.toFixed(2), satModel.smax.toFixed(2)]),
+        scheduleRows: wells.flatMap((w) => (w.changes ?? []).filter((ch) => ch.yr > w.startYr && ch.yr < w.endYr).sort((x, y) => x.yr - y.yr).map((ch) => [w.name, num(ch.yr), num(fromCanon(rU, ch.rate))])),
+        satHead: ["Well", "CO₂ injected (Mt)", `Gas front r_g (${dU.label})`, `Dry front r_d (${dU.label})`, "Zone 2 S_g", "Front S_g", "Max S_g"],
+        satRows: plumes.map((q) => [q.name, q.massMt.toFixed(4), D(q.radius), D(q.dryR), Number.isFinite(q.sg2) ? q.sg2.toFixed(3) : "–", frontSg.toFixed(3), satModel.smax.toFixed(2)]),
         satSentence: (() => {
           const rs = plumes.map((q) => q.radius);
           const big = plumes.reduce((m, q) => (q.radius > m.radius ? q : m), plumes[0]);
-          return `At t = ${tNow.toFixed(1)} yr the CO₂ plume fronts lie between ${D(Math.min(...rs))} and ${D(Math.max(...rs))} ${dU.label} from the injectors (largest: ${big.name}). The dry (evaporation) zone next to the wells extends to ${D(Math.min(...plumes.map((q) => q.dryR)))}–${D(Math.max(...plumes.map((q) => q.dryR)))} ${dU.label}. Behind the front the CO₂ saturation is ${satModel.sf.toFixed(2)} and it rises to the maximum of ${satModel.smax.toFixed(2)} at the wells. Saturation was calculated per well with the radial Buckley–Leverett solution and added where plumes overlap (capped at the maximum); gravity override, dissolution, capillarity and residual trapping are not included, so the plume extent is an estimate of the piston-like front.`;
+          return `At t = ${tNow.toFixed(1)} yr the CO₂ gas fronts lie between ${D(Math.min(...rs))} and ${D(Math.max(...rs))} ${dU.label} from the injectors (largest: ${big.name}). ${fl.evaporation ? `The dry (evaporation) zone next to the wells extends to ${D(Math.min(...plumes.map((q) => q.dryR)))}–${D(Math.max(...plumes.map((q) => q.dryR)))} ${dU.label}.` : "Evaporation was switched off, so there is no dry zone."} The front radii and the zone 2 saturation come from the pressure model (cumulative reservoir volume of CO₂ at each well's bottom-hole pressure); the map shows the radial Buckley–Leverett saturation profile of each well for the same volumes, highest next to the well and falling outward; where plumes overlap the higher of the two saturations is shown. Gravity override, dissolution, capillarity and residual trapping are not included.`;
         })(),
+        bhpHead: ["Well", `BHP at end of injection (${pU.label})`, "End (yr)", `BHP at horizon (${pU.label})`, ...(two ? [`r_g at shut-in (${dU.label})`, "Zone 2 S_g"] : []), `${fluidName} injected (t)`],
+        injectedTotal: `${massText(injected.totalLb)} (${intStr(tonnes(injected.totalLb))} tonnes, ${intStr(injected.totalLb)} lb; ${intStr(volOf(injected.totalVol))} ${volUnit})`,
+        bhpRows: wells.map((w) => {
+          const end = Math.min(w.endYr, horizon);
+          const s = field.summary(w, end).s;
+          const inj = injected.rows[wells.indexOf(w)];
+          return [w.name, P(lim.initialMPa + field.wellbore(w, end), 1), num(end), P(lim.initialMPa + field.wellbore(w, horizon), 1), ...(two ? [s ? D(s.rg_ft * FT) : "–", s?.Sg2 !== undefined ? s.Sg2.toFixed(3) : "–"] : []), inj ? intStr(tonnes(inj.massLb)) : "–"];
+        }).concat(injected.rows.length > 1 ? [["Field", "", num(injected.end), "", ...(two ? ["", ""] : []), intStr(tonnes(injected.totalLb))]] : []),
         compareHead: ["Well", ...cases.map((k) => k.label)],
         compareRows: [
           ...wells.map((w, i) => [w.name, ...cases.map((k) => P(k.perWell[i].peak))]),
-          ["Allowable", ...cases.map(() => P(lim.maxBuildupMPa))],
+          ["Allowable", ...cases.map(() => (Number.isFinite(lim.maxBuildupMPa) ? P(lim.maxBuildupMPa) : "–"))],
         ],
         compareSentence:
-          `For the controlling well (${wells[worst].name}) the peak wellbore buildup is ${P(worstCase(0))} ${pU.label} for the infinite-acting aquifer, ${P(worstCase(1))} ${pU.label} for a constant-pressure boundary and ${P(worstCase(2))} ${pU.label} for a no-flow boundary (boundary line ${bLine}), against an allowable buildup of ${P(lim.maxBuildupMPa)} ${pU.label}. ` +
-          (exceeds.length ? `The allowable buildup is exceeded for the ${exceeds.join(" and ")} case${exceeds.length > 1 ? "s" : ""}.` : "The allowable buildup is not exceeded in any of the three cases."),
+          `For the controlling well (${wells[worst].name}) the peak wellbore buildup is ${P(worstCase(0))} ${pU.label} for the infinite-acting aquifer, ${P(worstCase(1))} ${pU.label} for a constant-pressure boundary and ${P(worstCase(2))} ${pU.label} for a no-flow boundary (boundary line ${bLine})${Number.isFinite(lim.maxBuildupMPa) ? `, against an allowable buildup of ${P(lim.maxBuildupMPa)} ${pU.label}` : ""}. ` +
+          (!Number.isFinite(lim.maxBuildupMPa) ? "No pressure limit was supplied." : exceeds.length ? `The allowable buildup is exceeded for the ${exceeds.join(" and ")} case${exceeds.length > 1 ? "s" : ""}.` : "The allowable buildup is not exceeded in any of the three cases."),
         driverHead: ["Source", `Buildup (${pU.label})`, "Share (%)"],
         driverRows: fieldDrivers.layers.map((l, i) => [i === ownIdx ? `${l.name} (own injection)` : l.name, P(l.y[kp], 3), String(shares[i])]),
         driverSentence:
@@ -600,28 +1037,97 @@ export default function Page() {
         downloadBlob(await renderDocx(blocks, title), "co2-interference-report.docx");
       }
     } catch (e) {
-      alert(`Could not build the report: ${e instanceof Error ? e.message : String(e)}`);
+      alert(`Could not build the report: ${errText(e)}`);
     } finally {
       setBusy("");
     }
   };
 
+  // the program's pressure-limit summary (pressure_limit_summary.csv) and the multiwell outputs
+  // Cumulative injected mass at the end of injection, as the program calculates it (Minj = standard-condition density x
+  // injected surface volume: rho_sc_lb_scf x scf for CO2, water_mass_per_stb_lb x STB for water), per well and for the field.
+  const injected = useMemo(() => {
+    const rows: { name: string; end: number; volume: number; massLb: number }[] = [];
+    if (run.multi) {
+      const r = run.multi.result;
+      r.wells.forEach((w, i) => {
+        const end = w.end_year ?? r.years;
+        const days = cumulativeRateDays(w, end); // rate x days (Mscf or STB)
+        const c = r.references[i];
+        rows.push(water
+          ? { name: wells[i]?.name ?? w.name, end, volume: days, massLb: days * c.water_mass_per_stb_lb }
+          : { name: wells[i]?.name ?? w.name, end, volume: days * 1000.0, massLb: days * 1000.0 * c.rho_sc_lb_scf });
+      });
+    } else if (run.program) {
+      const last = run.program.results[run.program.results.length - 1];
+      rows.push({ name: wells[0]?.name ?? "Well 1", end: last.year, volume: water ? last.Vwater_stb : last.Vsc_scf, massLb: last.Minj_lb });
+    }
+    const totalLb = rows.reduce((a, r) => a + r.massLb, 0), totalVol = rows.reduce((a, r) => a + r.volume, 0);
+    return { rows, totalLb, totalVol, end: Math.max(0, ...rows.map((r) => r.end)) };
+  }, [run, wells, water]);
+  const KG_PER_LB = 0.45359237;
+  const fluidName = water ? "water" : "CO₂";
+  const volUnit = water ? "STB" : "MMscf";
+  const volOf = (v: number) => (water ? v : v / 1e6);
+  const intStr = (v: number) => Math.round(v).toLocaleString("en-US");
+  const tonnes = (lb: number) => (lb * KG_PER_LB) / 1000;
+  const massText = (lb: number) => (tonnes(lb) >= 1e5 ? `${(tonnes(lb) / 1e6).toFixed(3)} Mt` : `${intStr(tonnes(lb))} t`);
+  const InjectedTable = () => (
+    <div className="bhp-summary-wrap">
+      <table className="bhp-summary">
+        <thead><tr><th>Well</th><th>End of injection (yr)</th><th>Injected surface volume ({volUnit})</th><th>Injected mass (lb)</th><th>Injected mass (tonnes)</th></tr></thead>
+        <tbody>
+          {injected.rows.map((r) => (
+            <tr key={r.name}><td>{r.name}</td><td>{+r.end.toFixed(4)}</td><td>{intStr(volOf(r.volume))}</td><td>{intStr(r.massLb)}</td><td>{intStr(tonnes(r.massLb))}</td></tr>
+          ))}
+          {injected.rows.length > 1 && (
+            <tr className="total"><td><b>Field</b></td><td>{+injected.end.toFixed(4)}</td><td><b>{intStr(volOf(injected.totalVol))}</b></td><td><b>{intStr(injected.totalLb)}</b></td><td><b>{intStr(tonnes(injected.totalLb))}</b></td></tr>
+          )}
+        </tbody>
+      </table>
+    </div>
+  );
+
+  const limitRows: Row[] = multi ? run.multi?.limitSummary ?? [] : run.program ? pressureLimitSummary(run.program) : [];
+  const worstRow = limitRows.reduce<Row | null>((m, r) => (!m || r.peak_BHP_psia > m.peak_BHP_psia ? r : m), null);
+  const overall = limitRows.some((r) => r.overall_status === "FAIL") ? "FAIL" : limitRows.some((r) => r.overall_status === "PASS") ? "PASS" : "NOT ASSESSED";
+  const nameOf = (programName: string) => (multi ? programName : wells[0]?.name ?? programName);
+  const mwRun = run.multi;
+  const mwFiles = useMemo(() => (mwRun ? multiwellFiles(mwRun.result, mwRun.observation) : null), [mwRun]);
+  const mwPlots = useMemo(() => (mwRun ? [renderMultiwellPressure(mwRun.result, mwRun.observation), renderMultiwellMatrix(mwRun.result)] : null), [mwRun]);
+  const savePlot = async (p: { svg: string; width: number; height: number }, name: string) => {
+    const url = await svgToPngDataUrl(p.svg, p.width, p.height, 2);
+    downloadBlob(await (await fetch(url)).blob(), name);
+  };
+  /** own formation / skin / interference of a well at the time of its peak (the program's multiwell rows) */
+  const peakSplit = (r: Row): Row | null => {
+    if (!mwRun) return null;
+    const all = [...mwRun.result.detail, ...(mwRun.observation?.detail ?? [])];
+    return all.find((x) => x.well === r.well && x.year === r.peak_project_year && x.BHP_psia === r.peak_BHP_psia) ?? null;
+  };
+
   const targets = [...wells, ...points];
   const maxOff = Math.max(1e-9, ...matrix.flatMap((r, i) => r.filter((_, j) => j !== i)));
   const fx = Math.max(0, 1 + (pU.dec ?? 0));
+  const satTab: [View, string][] = two ? [["sat", "CO₂ saturation"]] : [];
+  const tabs: [View, string][] = multi
+    ? [["mw", "Multiwell results"], ...satTab, ["map", "Pressure map"], ["series", "Time series"], ["bhp", "Well BHP"], ["matrix", "Interference matrix"], ["limits", "Limit check"], ["compare", "Compare boundaries"]]
+    : [["bhp", "Program results"], ...satTab, ["map", "Pressure map"], ["series", "Time series"], ["limits", "Limit check"], ["compare", "Compare boundaries"]];
+  const viewEff: View = view === "sat" && !two ? "map" : !multi && (view === "mw" || view === "matrix") ? "bhp" : view;
+  const showF = (n: keyof BhpInputs) => (modelL === "two" ? true : modelL === "co2" ? ["mu_gas_cP", "rock_compressibility_per_psi", "temperature_F"].includes(n) : ["mu_water_cP", "brine_density_lb_ft3", "rock_compressibility_per_psi", "water_compressibility_per_psi"].includes(n));
 
   return (
     <main className="app">
       <header className="top">
         <div>
           <h1>CO₂ Injection Pressure Interference</h1>
-          <p className="sub">Multi-well Theis superposition for a confined saline aquifer · screening-level, brine-equivalent</p>
+          <p className="sub">Bottom-hole pressure of each well from the CO₂–brine injection program (two-phase three-zone, single-phase CO₂ or water), with the interference between wells · screening-level</p>
         </div>
         <div className="hdrbtns">
           <a className="toplink" href="/manual" target="_blank" rel="noopener noreferrer">User manual</a>
-          <button className="ghost" onClick={exportResults} disabled={!applied}>Export results CSV</button>
-          <button onClick={() => exportReport("pdf")} disabled={!applied || !!busy}>Report (PDF)</button>
-          <button onClick={() => exportReport("docx")} disabled={!applied || !!busy}>Report (Word)</button>
+          <button className="ghost" onClick={exportResults} disabled={!applied || !!fieldError}>Export results CSV</button>
+          <button onClick={() => exportReport("pdf")} disabled={!applied || !!busy || !!fieldError}>Report (PDF)</button>
+          <button onClick={() => exportReport("docx")} disabled={!applied || !!busy || !!fieldError}>Report (Word)</button>
         </div>
       </header>
       {busy && <p className="hint">{busy}</p>}
@@ -632,246 +1138,377 @@ export default function Page() {
             <button className="run" onClick={() => runNow()}>▶ RUN analysis</button>
             <span className="hint"> {applied ? (stale ? "Inputs changed — press RUN to update." : "Results are up to date.") : "Set your inputs, then press RUN."}</span>
           </div>
+          {liveError && <p className="err">Input problem: {liveError}</p>}
 
-          <section>
+          <section className="inputs">
             <div className="row-head">
               <h2>Input</h2>
               <select className="preset" aria-label="Unit preset" title="Unit preset" value={presetName}
                 onChange={(e) => { if (e.target.value !== "Custom") setUnits(PRESETS[e.target.value as "SI" | "Field"]); }}>
-                <option value="SI">SI units</option>
                 <option value="Field">Field units</option>
+                <option value="SI">SI units</option>
                 {presetName === "Custom" && <option value="Custom">Custom units</option>}
               </select>
             </div>
-            <div className="grid2">
-              {uf("perm", { label: "Permeability", value: aqL.permMd, onChange: setA("permMd"), min: 0 })}
-              {uf("length", { label: "Thickness", value: aqL.thicknessM, onChange: setA("thicknessM"), min: 0 })}
-              <NumField label="Porosity" unit="frac" value={aqL.porosity} onChange={setA("porosity")} step={0.01} min={0} />
-              {uf("compress", { label: "Total compress.", value: aqL.compressibilityPerMPa, onChange: setA("compressibilityPerMPa"), min: 0 })}
-              {uf("viscosity", { label: "Brine viscosity", value: aqL.viscosityMPas, onChange: setA("viscosityMPas"), min: 0 })}
-              {uf("density", { label: "CO₂ density", value: aqL.co2DensityKgM3, onChange: setA("co2DensityKgM3"), min: 1 })}
-              {uf("length", { label: "Wellbore radius", value: aqL.wellboreRadiusM, onChange: setA("wellboreRadiusM"), min: 0.01 })}
-              {uf("length", { label: "Depth", value: aqL.depthM, onChange: setA("depthM"), min: 0 })}
-              <NumField label="Analysis horizon" unit="yr" value={horizonL} onChange={(v) => setHorizon(Math.max(1, v))} min={1} />
-              <NumField label="Reservoir temperature" unit="°C" value={dryIn.tempC} onChange={(v) => setDryIn((q) => ({ ...q, tempC: v }))} />
-              <NumField label="Brine salinity (NaCl)" unit="mass frac" value={dryIn.salinity} onChange={(v) => setDryIn((q) => ({ ...q, salinity: v }))} step={0.01} min={0} />
-              {uf("density", { label: "Brine density", value: dryIn.brineDensityKgM3, onChange: (v) => setDryIn((q) => ({ ...q, brineDensityKgM3: v })), min: 500 })}
-              <NumField label="Water fugacity coeff. Φw" unit="in CO₂" value={dryIn.phiW} onChange={(v) => setDryIn((q) => ({ ...q, phiW: v }))} step={0.05} min={0.01} />
-            </div>
-            <div className="field calcfield">
-              <span>
-                {pressureModel === "three" && zonesL ? <>Hydraulic diffusivity of each zone, η<sub>n</sub></> : <>Hydraulic diffusivity η</>}{" "}
-                <em>{pressureModel === "three" && zonesL ? "calculated = η · m_n / c*_n for the dry, two-phase and brine zones; updates with the inputs" : "calculated = k / (φ·μ·c_t); updates with the inputs"}</em>
-              </span>
-              <span className="unitrow">
-                <span className="zonevals">
-                  {(pressureModel === "three" && zonesL
-                    ? [["Zone 1 · dry CO₂", zonesL.consts.D[0]], ["Zone 2 · CO₂ + brine", zonesL.consts.D[1]], ["Zone 3 · brine", zonesL.consts.D[2]]]
-                    : [["Aquifer (brine-equivalent)", 1]]
-                  ).map(([lab, d]) => (
-                    <span className="zrow" key={lab as string}>
-                      <span className="zlab">{lab as string}</span>
-                      <output className="calcval" aria-label={`Calculated hydraulic diffusivity, ${lab}`}>{num((consts(aqL).eta * (d as number)) / findUnit("diffusivity", units.diffusivity).f)}</output>
-                    </span>
-                  ))}
-                </span>
-                <select className="unitsel" aria-label="Diffusivity unit" value={units.diffusivity} onChange={(e) => setUnit("diffusivity")(e.target.value)}>
-                  {UNITS.diffusivity.map((u) => <option key={u.label} value={u.label}>{u.label}</option>)}
-                </select>
-              </span>
-            </div>
-          </section>
 
-          <section>
-            <h2>Pressure model</h2>
-            <label className="field"><span>Pressure response of each well</span>
-              <select value={pressureModel} onChange={(e) => setPressureModel(e.target.value as "single" | "three")}>
-                <option value="three">Three-zone CO₂–brine (dry, two-phase, brine)</option>
-                <option value="single">Single-phase, brine-equivalent (Theis)</option>
-              </select>
-            </label>
-            {pressureModel === "three" && (
+            <div className="group" data-group="system">
+              <h3>Well system</h3>
+              <div className="sysbtns" role="radiogroup" aria-label="Well system">
+                <label className={`sysbtn ${systemL === "single" ? "on" : ""}`}>
+                  <input type="radio" name="system" checked={systemL === "single"} onChange={() => setSystem("single")} />
+                  <b>Single well</b><small>one well, the program&apos;s single-well calculation</small>
+                </label>
+                <label className={`sysbtn ${systemL === "multi" ? "on" : ""}`}>
+                  <input type="radio" name="system" checked={systemL === "multi"} onChange={() => setSystem("multi")} />
+                  <b>Multiwell interference</b><small>several wells, each well&apos;s BHP with the pressure from the others</small>
+                </label>
+              </div>
+            </div>
+
+            <div className="group" data-group="model">
+              <h3>Pressure model and boundary</h3>
+              <label className="field"><span>Phase / fluid</span>
+                <select aria-label="Phase / fluid" value={modelL} onChange={(e) => setModel(e.target.value as ModelKind)}>
+                  <option value="two">Two-phase CO₂–brine (three-zone model)</option>
+                  <option value="co2">Single-phase CO₂</option>
+                  <option value="water">Single-phase water</option>
+                </select>
+              </label>
+              {modelL === "two" && (
+                <label className="field" style={{ marginTop: 8 }}><span>Include evaporation?</span>
+                  <select value={flL.evaporation ? "yes" : "no"} onChange={(e) => setFl((f) => ({ ...f, evaporation: e.target.value === "yes" }))}>
+                    <option value="yes">Yes (dry zone next to the well)</option>
+                    <option value="no">No (r_d = r_w, no dry zone)</option>
+                  </select>
+                </label>
+              )}
+              <p className="hint">{MODEL_HELP[modelL]}</p>
               <div className="grid2" style={{ marginTop: 8 }}>
-                {uf("compress", { label: "Rock compressibility", value: rockCompIn, onChange: (v) => setRockCompIn(v), min: 0 })}
-                {uf("compress", { label: "CO₂ compressibility", value: co2CompIn, onChange: (v) => setCo2CompIn(v), min: 0 })}
+                <label className="field"><span>Boundary</span>
+                  <select aria-label="Boundary type" value={boundaryL.type} onChange={(e) => setBoundary({ ...boundaryL, type: e.target.value as Boundary["type"] })}>
+                    <option value="none">Infinite</option>
+                    <option value="noflow">Sealing fault (no-flow)</option>
+                    <option value="constant">Constant pressure</option>
+                  </select>
+                </label>
+                <label className="field"><span>Boundary line</span>
+                  <select aria-label="Boundary line" value={boundaryL.axis} disabled={boundaryL.type === "none"} onChange={(e) => setBoundary({ ...boundaryL, axis: e.target.value as "x" | "y" })}>
+                    <option value="x">{isGeo ? "longitude = const (N–S line)" : "x = const"}</option>
+                    <option value="y">{isGeo ? "latitude = const (E–W line)" : "y = const"}</option>
+                  </select>
+                </label>
+                {isGeo
+                  ? <NumField label={boundaryL.axis === "x" ? "Boundary longitude" : "Boundary latitude"} unit="°" value={boundaryDeg} onChange={setBoundaryDeg} />
+                  : uf("distance", { label: "Boundary position", value: boundaryL.positionM, onChange: (v) => setBoundary({ ...boundaryL, positionM: v }) })}
+              </div>
+              <p className="hint">Infinite: the aquifer has no edge (your program). For a sealing fault or a constant-pressure edge, give the straight boundary line: the maps, curves and matrix then add image wells; the program results stay infinite-acting. The Compare boundaries tab runs all three conditions side by side.</p>
+            </div>
+
+            <div className="group" data-group="reservoir">
+              <h3>Reservoir and fluids</h3>
+              <div className="grid2">
+                {uf("perm", { label: "Permeability (every zone)", value: resL.permMd, onChange: setR("permMd"), min: 0 })}
+                {uf("length", { label: "Reservoir thickness", value: resL.thicknessM, onChange: setR("thicknessM"), min: 0 })}
+                <NumField label="Porosity (every zone)" unit="frac" value={resL.porosity} onChange={setR("porosity")} step={0.01} min={0} />
+                {!multiL && uf("length", { label: "Well radius", value: resL.wellboreRadiusM, onChange: setR("wellboreRadiusM"), min: 0.01 })}
+                {uf("pressure", { label: "Initial absolute pressure", value: resL.initialMPa, onChange: setR("initialMPa"), min: 0 })}
+                {modelL !== "water" && uf("temp", { label: "Reservoir temperature", value: resL.tempC, onChange: setR("tempC") })}
+              </div>
+              <div className="grid2" style={{ marginTop: 8 }}>
+                {showF("mu_water_cP") && uf("viscosity", { label: "Water viscosity", value: flL.muWater, onChange: setF("muWater"), min: 0 })}
+                {showF("mu_gas_cP") && uf("viscosity", { label: "Gas viscosity", value: flL.muGas, onChange: setF("muGas"), min: 0 })}
+                {showF("brine_density_lb_ft3") && uf("density", { label: modelL === "water" ? "Water density at initial pressure" : "Brine density", value: flL.brineDensityKgM3, onChange: setF("brineDensityKgM3"), min: 0 })}
+                {modelL === "two" && <NumField label="Salt mass fraction" unit="frac" value={flL.salt} onChange={setF("salt")} step={0.01} min={0} />}
+                {showF("rock_compressibility_per_psi") && uf("compress", { label: "Rock compressibility", value: flL.rockComp, onChange: setF("rockComp"), min: 0 })}
+                {showF("water_compressibility_per_psi") && uf("compress", { label: "Water compressibility", value: flL.waterComp, onChange: setF("waterComp"), min: 0 })}
+                {modelL === "two" && (
+                  <>
+                    <NumField label="Irreducible water saturation Swr" unit="frac" value={flL.swr} onChange={setF("swr")} step={0.05} min={0} />
+                    <NumField label="Gas end-point rel. perm. krg0" value={flL.krg0} onChange={setF("krg0")} step={0.05} min={0} />
+                    <NumField label="Water end-point rel. perm. krw0" value={flL.krw0} onChange={setF("krw0")} step={0.05} min={0} />
+                    <NumField label="Zone 1 gas rel. perm. krg1" value={flL.krg1} onChange={setF("krg1")} step={0.05} min={0} />
+                    <NumField label="Gas Corey exponent ng" unit="3 or 2" value={flL.ng} onChange={setF("ng")} step={1} min={2} />
+                    <NumField label="Water Corey exponent nw" unit="= ng" value={flL.nw} onChange={setF("nw")} step={1} min={2} />
+                  </>
+                )}
+              </div>
+              <p className="hint">The zone diffusivities are calculated by the program (D = m / c* for each zone, from the zone mobilities and compressibilities); they are reported in all_calculations.csv and source_states.csv.{modelL === "two" ? " The relative-permeability inputs also give the CO₂ saturation map." : ""}{multiL ? " The well radius is entered for each well in the table below." : ""}</p>
+            </div>
+
+            {!multiL && (
+              <div className="group" data-group="wells">
+                <h3>Injection well</h3>
+                <div className="grid2">
+                  {uf(rateCatL, { label: modelL === "water" ? "Surface water injection rate" : "Surface injection rate", value: singleL.rate, onChange: (v) => setSingle((s) => ({ ...s, rate: v })), min: 0 })}
+                  <NumField label="Skin factor" value={singleL.skin} onChange={(v) => setSingle((s) => ({ ...s, skin: v }))} step={0.5} />
+                  <NumField label="Number of injection years" unit="whole years" value={singleL.years} onChange={(v) => setSingle((s) => ({ ...s, years: v }))} step={1} min={1} />
+                </div>
+                <p className="hint">The program&apos;s single-well calculation: one well at the centre of the maps (x = y = 0) injecting at a constant rate from year 0 for the given number of whole years. Rate in {modelL === "water" ? "STB/day of water (Bw = 1.0 rb/STB)" : "Mscf/day of CO₂ (150 means 150,000 scf/day)"}. Monitoring points are placed relative to the well.</p>
               </div>
             )}
-            <p className="hint">
-              {pressureModel === "three"
-                ? "Replaces the single-phase kernel by a piecewise solution for the dry-CO₂ zone, the CO₂–brine zone and the brine zone (brine is the reference; the two-phase zone uses the average saturation behind the front, 1/β). Uses the saturation and dry-out inputs below. It mainly lowers the near-well pressure; the far field stays close to the brine-equivalent result."
-                : "Treats the whole aquifer as brine (CO₂ converted to reservoir volume). Overstates the pressure next to the wells."}
-            </p>
-          </section>
 
-          <section>
-            <h2>Pressure limit</h2>
-            <div className="grid2">
-              {uf("gradient", { label: "Hydrostatic grad.", value: aqL.hydroGradientMPaPerM, onChange: setA("hydroGradientMPaPerM") })}
-              {uf("gradient", { label: "Fracture grad.", value: aqL.fracGradientMPaPerM, onChange: setA("fracGradientMPaPerM") })}
-              <NumField label="Safety factor" unit="× Pfrac" value={aqL.safetyFactor} onChange={setA("safetyFactor")} step={0.05} />
-              {uf("pressure", { label: "Interference threshold", value: thresholdL, onChange: setThreshold })}
-            </div>
-            <p className="hint">
-              P₀ {(limL.initialMPa / pU.f).toFixed(fx)} {pU.label} · P<sub>frac</sub> {(limL.fractureMPa / pU.f).toFixed(fx)} {pU.label} · max buildup <b>{(limL.maxBuildupMPa / pU.f).toFixed(pDec)} {pU.label}</b>
-            </p>
-          </section>
-
-          <section>
-            <h2>CO₂ saturation</h2>
-            <div className="grid2">
-              <NumField label="Residual brine Swr" unit="frac" value={satIn.swr} onChange={(v) => setSatIn((q) => ({ ...q, swr: v }))} step={0.05} min={0} />
-              <NumField label="Max CO₂ rel. perm. krg" value={satIn.krgMax} onChange={(v) => setSatIn((q) => ({ ...q, krgMax: v }))} step={0.05} min={0} />
-              <NumField label="Corey exponent, brine" value={satIn.nw} onChange={(v) => setSatIn((q) => ({ ...q, nw: v }))} step={0.5} min={1} />
-              <NumField label="Corey exponent, CO₂" value={satIn.ng} onChange={(v) => setSatIn((q) => ({ ...q, ng: v }))} step={0.5} min={1} />
-              {uf("viscosity", { label: "CO₂ viscosity", value: satIn.muCo2MPas, onChange: (v) => setSatIn((q) => ({ ...q, muCo2MPas: v })), min: 0 })}
-            </div>
-            <p className="hint">Used for the CO₂ saturation map (radial Buckley–Leverett front around each injector, using the porosity, thickness and brine viscosity above). The dry-zone radius shown with it comes from the reservoir temperature, brine salinity, brine density and water fugacity coefficient in the Input section (Φw = 1 is the screening value; a smaller value means the CO₂ carries more water and the dry zone is larger).</p>
-          </section>
-
-          <section>
-            <h2>Well skin</h2>
-            <p className="hint" style={{ marginTop: 0 }}>
-              Skin is set per well in the table below. If you have a measured skin, type it in that well&apos;s Skin cell. If you leave the cell blank, the app calculates it from the damaged zone described here.
-            </p>
-            <div className="grid2">
-              {uf("perm", { label: "Damaged-zone perm. ks", value: dmg.ksMd, onChange: (v) => setDmg((d) => ({ ...d, ksMd: v })), min: 0.001 })}
-              {uf("length", { label: "Damaged-zone radius rs", value: dmg.rsM, onChange: (v) => setDmg((d) => ({ ...d, rsM: v })), min: 0 })}
-            </div>
-            <p className="hint">
-              Calculated skin: s = (k/ks − 1)·ln(rs/rw) = <b>{calcSkin.toFixed(2)}</b> (ks &lt; k is damage, ks &gt; k is stimulation).
-            </p>
-          </section>
-
-          <section>
-            <h2>Boundary condition</h2>
-            <div className="grid2">
-              <label className="field"><span>Type</span>
-                <select value={boundaryL.type} onChange={(e) => setBoundary({ ...boundaryL, type: e.target.value as Boundary["type"] })}>
-                  <option value="none">None (infinite)</option>
-                  <option value="noflow">Sealing fault (no-flow)</option>
-                  <option value="constant">Constant pressure</option>
-                </select>
-              </label>
-              <label className="field"><span>Line</span>
-                <select value={boundaryL.axis} disabled={boundaryL.type === "none"} onChange={(e) => setBoundary({ ...boundaryL, axis: e.target.value as "x" | "y" })}>
-                  <option value="x">{isGeo ? "longitude = const (N–S line)" : "x = const"}</option>
-                  <option value="y">{isGeo ? "latitude = const (E–W line)" : "y = const"}</option>
-                </select>
-              </label>
-              {isGeo
-                ? <NumField label={boundaryL.axis === "x" ? "Longitude" : "Latitude"} unit="°" value={boundaryDeg} onChange={setBoundaryDeg} />
-                : uf("distance", { label: "Position", value: boundaryL.positionM, onChange: (v) => setBoundary({ ...boundaryL, positionM: v }) })}
-            </div>
-            <p className="hint">The Compare boundaries tab runs all three conditions side by side using this line.</p>
-          </section>
-
-          <section>
-            <div className="row-head">
-              <h2>Injection wells</h2>
-              <div className="btns">
-                <button className="ghost" onClick={() => fileRef.current?.click()}>Import CSV</button>
-                <button className="ghost" onClick={() => download("wells.csv", wellsToCsv(rawWells, isGeo))}>Export</button>
+            {multiL && (
+              <div className="group" data-group="wells">
+                <div className="row-head">
+                  <h3>Number of wells and distances</h3>
+                  <div className="btns">
+                    <button className="ghost" onClick={() => fileRef.current?.click()}>Import CSV</button>
+                    <button className="ghost" onClick={() => download("wells.csv", wellsToCsv(rawWells, isGeo))}>Export</button>
+                  </div>
+                </div>
+                <div className="grid2">
+                  <NumField label="Number of wells" unit="2–32" value={rawWells.length} onChange={setWellCount} step={1} min={2} />
+                  <label className="field"><span>Distances</span>
+                    <select aria-label="Distances" value={geomL.mode} onChange={(e) => setGeomSafe({ mode: e.target.value as GeometryIn["mode"] })}>
+                      <option value="constant">Constant neighboring spacing</option>
+                      <option value="different">Different distances</option>
+                    </select>
+                  </label>
+                  {geomL.mode === "constant" ? (
+                    <>
+                      <label className="field"><span>Layout</span>
+                        <select aria-label="Layout" value={geomL.layout} onChange={(e) => setGeom((g) => ({ ...g, layout: e.target.value as GeometryIn["layout"] }))}>
+                          <option value="line">Straight line</option>
+                          <option value="grid">Square grid</option>
+                        </select>
+                      </label>
+                      {uf("distance", { label: "Neighboring spacing", value: geomL.spacingM, onChange: (v) => setGeom((g) => ({ ...g, spacingM: v })), min: 0 })}
+                    </>
+                  ) : (
+                    <label className="field"><span>Different-distance input</span>
+                      <select aria-label="Different-distance input" value={geomL.method} onChange={(e) => setGeomSafe({ method: e.target.value as GeometryIn["method"] })}>
+                        <option value="adjacent">Adjacent distances along a line</option>
+                        <option value="pairwise">Full pairwise distance matrix</option>
+                        <option value="coordinates">Custom x/y coordinates</option>
+                      </select>
+                    </label>
+                  )}
+                  <label className="field"><span>Well radius</span>
+                    <select aria-label="Well radius" value={rwModeL} onChange={(e) => {
+                      const next = e.target.value as "same" | "each";
+                      // switching to one value per well starts every well at the common value
+                      if (next === "each" && rwModeL === "same") setWells((ws) => ws.map((w) => ({ ...w, rwM: rwAllL })));
+                      setRwMode(next);
+                    }}>
+                      <option value="same">Same for all wells</option>
+                      <option value="each">Different for each well</option>
+                    </select>
+                  </label>
+                  {rwModeL === "same"
+                    ? uf("length", { label: "Well radius (all wells)", value: rwAllL, onChange: setRwAll, min: 0 })
+                    : <p className="hint" style={{ alignSelf: "end", margin: 0 }}>Enter the radius of each well in the Radius column of the table.</p>}
+                  {geomL.mode === "different" && geomL.method === "coordinates" && (
+                    <label className="field coordsel"><span>Location input</span>
+                      <select value={coordMode} onChange={(e) => switchCoord(e.target.value as "local" | "geo")}>
+                        <option value="local">Local x, y</option>
+                        <option value="geo">Longitude / latitude (real-world)</option>
+                      </select>
+                    </label>
+                  )}
+                </div>
+                {geomL.mode === "different" && geomL.method === "adjacent" && (
+                  <label className="field" style={{ marginTop: 8 }}><span>Adjacent distances ({dUL.label}): Well 1–2, Well 2–3, …</span>
+                    <input aria-label="Adjacent distances" placeholder={rawWells.length > 1 ? `e.g. ${Array.from({ length: rawWells.length - 1 }, (_, i) => [1000, 1500, 800][i % 3]).join(", ")}` : ""} value={geomL.adjacent} onChange={(e) => setGeom((g) => ({ ...g, adjacent: e.target.value }))} />
+                  </label>
+                )}
+                {geomL.mode === "different" && geomL.method === "pairwise" && (
+                  <label className="field" style={{ marginTop: 8 }}><span>Pairwise distances ({dUL.label}; numeric CSV, one row per well, zero diagonal)</span>
+                    <textarea aria-label="Pairwise distances" rows={Math.min(8, rawWells.length + 1)} className="mono" placeholder={"0, 1000, 1500\n1000, 0, 1200\n1500, 1200, 0"} value={geomL.matrix} onChange={(e) => setGeom((g) => ({ ...g, matrix: e.target.value }))} />
+                  </label>
+                )}
+                {isGeo && (
+                  <p className="hint">
+                    Enter WGS84 decimal degrees (east and north positive). Calculations use a local projection centred on the centroid of your locations
+                    {origin ? ` (${origin.lat.toFixed(4)}°, ${origin.lon.toFixed(4)}°)` : ""}, and the pressure map is labelled in longitude and latitude.
+                  </p>
+                )}
+                <input ref={fileRef} type="file" accept=".csv,.txt,.tsv" hidden onChange={(e) => onImport(e.target.files?.[0])} />
+                {csvError && <p className="err">{csvError}</p>}
+                {geoBad && <p className="err">Latitude must be within ±90° and longitude within ±180°.</p>}
+                <h3 className="sub-h">Individual well inputs</h3>
+                <div className="tablewrap">
+                  <table className="edit">
+                    <thead><tr>
+                      <th>Name</th>
+                      {coordsEditable ? (isGeo ? <><th>Lon (°)</th><th>Lat (°)</th></> : <><th>x {unitHead("distance")}</th><th>y {unitHead("distance")}</th></>) : <><th>x ({dUL.label})</th><th>y ({dUL.label})</th></>}
+                      <th>Rate {unitHead(rateCatL)}</th><th>Start (yr)</th><th>End (yr)</th>{rwModeL === "each" && <th>Radius {unitHead("length")}</th>}<th>Skin</th>
+                      {modelL === "two" && <th>Evaporation</th>}
+                      <th>Max BHP {unitHead("pressure")}</th><th />
+                    </tr></thead>
+                    <tbody>
+                      {rawWells.map((w, wi) => (
+                        <Fragment key={w.id}>
+                        <tr>
+                          <td><input value={w.name} aria-label="Well name" onChange={(e) => updWell(w.id, { name: e.target.value })} /></td>
+                          {coordsEditable ? (isGeo ? (
+                            <>
+                              <td><NumField className="geoin" ariaLabel={`${w.name} longitude`} value={w.lon ?? 0} onChange={(v) => updWell(w.id, { lon: v })} /></td>
+                              <td><NumField className="geoin" ariaLabel={`${w.name} latitude`} value={w.lat ?? 0} onChange={(v) => updWell(w.id, { lat: v })} /></td>
+                            </>
+                          ) : (
+                            <>
+                              <td>{uf("distance", { ariaLabel: `${w.name} x`, value: w.x, onChange: (v) => updWell(w.id, { x: v }) })}</td>
+                              <td>{uf("distance", { ariaLabel: `${w.name} y`, value: w.y, onChange: (v) => updWell(w.id, { y: v }) })}</td>
+                            </>
+                          )) : (
+                            <>
+                              <td className="calc" title="Calculated from the distances">{wellsL[wi] ? D(wellsL[wi].x) : "–"}</td>
+                              <td className="calc" title="Calculated from the distances">{wellsL[wi] ? D(wellsL[wi].y) : "–"}</td>
+                            </>
+                          )}
+                          <td>{uf(rateCatL, { ariaLabel: `${w.name} rate`, value: w.rate, onChange: (v) => updWell(w.id, { rate: v }), min: 0 })}</td>
+                          <td><NumField ariaLabel={`${w.name} start year`} value={w.startYr} onChange={(v) => updWell(w.id, { startYr: v })} min={0} /></td>
+                          <td><NumField ariaLabel={`${w.name} end year`} value={w.endYr} onChange={(v) => updWell(w.id, { endYr: v })} min={0} /></td>
+                          {rwModeL === "each" && <td>{uf("length", { ariaLabel: `${w.name} radius`, value: w.rwM ?? B0.rw_ft * FT, onChange: (v) => updWell(w.id, { rwM: v }), min: 0 })}</td>}
+                          <td><input type="number" step="any" className="skininput" aria-label={`${w.name} skin`} value={w.skinText} placeholder="0" title="Skin factor of this well (blank = 0)" onChange={(e) => updWell(w.id, { skinText: e.target.value })} /></td>
+                          {modelL === "two" && (
+                            <td>
+                              <select aria-label={`${w.name} evaporation`} value={w.evaporation ?? "inherit"} onChange={(e) => updWell(w.id, { evaporation: e.target.value as "inherit" | "on" | "off" })}>
+                                <option value="inherit">inherit</option>
+                                <option value="on">on</option>
+                                <option value="off">off</option>
+                              </select>
+                            </td>
+                          )}
+                          <td>
+                            <input type="number" step="any" className="skininput" aria-label={`${w.name} maximum BHP`} placeholder="shared"
+                              title="This well's own maximum allowable BHP (absolute); blank = the shared pressure limit"
+                              value={w.maxBhpMPa === null || w.maxBhpMPa === undefined ? "" : +fromCanon(pUL, w.maxBhpMPa).toPrecision(6)}
+                              onChange={(e) => updWell(w.id, { maxBhpMPa: e.target.value.trim() === "" || !Number.isFinite(Number(e.target.value)) ? null : toCanon(pUL, Number(e.target.value)) })} />
+                          </td>
+                          <td className="actions">
+                            {modelL !== "two" && <button className="x" aria-label={`Add a rate change for ${w.name}`} title="Add a rate change (single-phase: a new rate from a later year; rate 0 stops the well)" onClick={() => addChange(w.id)}>＋</button>}
+                            <button className="x" aria-label={`Remove ${w.name}`} disabled={rawWells.length <= 2} onClick={() => setWells((ws) => (ws.length > 2 ? ws.filter((q) => q.id !== w.id) : ws))}>×</button>
+                          </td>
+                        </tr>
+                        {modelL !== "two" && (w.changes ?? []).map((ch, ci) => (
+                          <tr key={`${w.id}-c${ci}`} className="subrow">
+                            <td className="sub">↳ rate change</td>
+                            <td colSpan={2} className="sub">new rate from year →</td>
+                            <td>{uf(rateCatL, { ariaLabel: `${w.name} new rate ${ci + 1}`, value: ch.rate, onChange: (v) => updChange(w.id, ci, { rate: v }), min: 0 })}</td>
+                            <td><NumField ariaLabel={`${w.name} rate change year ${ci + 1}`} value={ch.yr} onChange={(v) => updChange(w.id, ci, { yr: v })} min={0} /></td>
+                            <td colSpan={rwModeL === "each" ? 3 : 2} />
+                            <td />
+                            <td><button className="x" aria-label={`Remove rate change ${ci + 1} of ${w.name}`} onClick={() => delChange(w.id, ci)}>×</button></td>
+                          </tr>
+                        ))}
+                        </Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <label className="field" style={{ marginTop: 8 }}><span>Reporting times (project years; blank = annual)</span>
+                  <input aria-label="Reporting times" placeholder="e.g. 0.5, 1, 5, 10, 30" value={reportL} onChange={(e) => setReportL(e.target.value)} />
+                </label>
+                {!layoutL.error && layoutL.wells.length > 1 && (
+                  <details className="seps" open={layoutL.wells.length <= 6}>
+                    <summary>Well separation distances ({dUL.label})</summary>
+                    <div className="tablewrap">
+                      <table className="matrix compact">
+                        <thead><tr><th />{layoutL.wells.map((w, i) => <th key={i}>{w.name}</th>)}</tr></thead>
+                        <tbody>
+                          {wellSeparations(layoutL.wells).map((row, i) => (
+                            <tr key={i}><th>{layoutL.wells[i].name}</th>{row.map((v, j) => <td key={j}>{(fromCanon(dUL, v * FT)).toFixed(1)}</td>)}</tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                )}
+                <p className="hint">
+                  As in the program&apos;s multiwell form: constant spacing applies to neighbouring wells (all separations, including grid diagonals, follow from the layout); adjacent distances place the wells along a straight line; a pairwise matrix must describe a realizable horizontal 2-D layout; custom coordinates are entered in the table.
+                  Each well has its own rate ({modelL === "water" ? "STB/day of water" : "Mscf/day of CO₂"}; 0 = observation well), start year and skin, and a radius (Well radius: the same value for all wells, or Different for each well to give each its own in the table){modelL === "two" ? ", and its evaporation choice (inherit = the setting above)" : ""}. Max BHP: this well&apos;s own allowable BHP; blank uses the shared pressure limit.
+                  {modelL === "two" ? " Two-phase wells inject one constant rate from their start year (the program does not accept rate changes for moving fronts)." : " ＋ adds a rate change (a new rate from a later year; rate 0 stops the well)."} Start and End: the years each well starts and stops injecting.{modelL === "two" ? " A two-phase well that stops before the last one follows the program's fixed-zone falloff from its end year while the others continue (the program itself stops all wells together; with equal end years the results are exactly the program's)." : " A single-phase well's end year is a rate change to 0, as in the program's rate schedule."}
+                  CSV import: name, x_m, y_m <i>or</i> lon_deg, lat_deg, rate, start_yr, end_yr, skin (optional), changes (optional, e.g. 8:100|15:50).
+                </p>
               </div>
-            </div>
-            <label className="field coordsel"><span>Location input</span>
-              <select value={coordMode} onChange={(e) => switchCoord(e.target.value as "local" | "geo")}>
-                <option value="local">Local x, y</option>
-                <option value="geo">Longitude / latitude (real-world)</option>
-              </select>
-            </label>
-            {isGeo && (
+            )}
+
+            <div className="group" data-group="limit">
+              <h3>Will the required pressure exceed a limit?</h3>
+              <div className="grid2">
+                <label className="field"><span>Pressure assessment</span>
+                  <select aria-label="Pressure assessment" value={limitL.mode} onChange={(e) => setLimitL((l) => ({ ...l, mode: e.target.value as LimitIn["mode"] }))}>
+                    <option value="none">Not assessed — no limit supplied</option>
+                    <option value="max_bhp">Maximum allowable BHP</option>
+                    <option value="fracture_fraction">Fraction of fracture pressure</option>
+                  </select>
+                </label>
+                {limitL.mode === "max_bhp" && uf("pressure", { label: "Maximum allowable BHP (absolute)", value: limitL.maxBhpMPa, onChange: (v) => setLimitL((l) => ({ ...l, maxBhpMPa: v })), min: 0 })}
+                {limitL.mode === "fracture_fraction" && (
+                  <>
+                    {uf("pressure", { label: "Fracture pressure (absolute)", value: limitL.fractureMPa, onChange: (v) => setLimitL((l) => ({ ...l, fractureMPa: v })), min: 0 })}
+                    <NumField label="Allowable fraction" unit="0–1" value={limitL.fraction} onChange={(v) => setLimitL((l) => ({ ...l, fraction: v }))} step={0.05} min={0} />
+                  </>
+                )}
+                {uf("pressure", { label: "Interference threshold", value: thresholdL, onChange: setThreshold })}
+              </div>
               <p className="hint">
-                Enter WGS84 decimal degrees (east and north positive). Calculations use a local projection centred on the centroid of your locations
-                {origin ? ` (${origin.lat.toFixed(4)}°, ${origin.lon.toFixed(4)}°)` : ""}, and the pressure map is labelled in longitude and latitude.
-                The coordinates shown are an example — replace them with your own.
+                {limL.allowableMPa !== null
+                  ? <>Allowable BHP <b>{(limL.allowableMPa / pUL.f).toFixed(fx)} {units.pressure}</b> (initial pressure {(limL.initialMPa / pUL.f).toFixed(fx)} {units.pressure}, so the allowable buildup is {(limL.maxBuildupMPa / pUL.f).toFixed(pDec)} {units.pressure}). </>
+                  : <>No limit: every well is reported as NOT ASSESSED. </>}
+                FAIL means the required BHP exceeds the selected limit at a computed time. Rates are not automatically reduced. This is an operating-pressure check, not a prediction of mechanical well integrity. The fraction is your choice (0.9 by default), not a regulatory rule. The interference threshold is not a limit: it only sets the detection contour and the arrival times.
               </p>
-            )}
-            <input ref={fileRef} type="file" accept=".csv,.txt,.tsv" hidden onChange={(e) => onImport(e.target.files?.[0])} />
-            {csvError && <p className="err">{csvError}</p>}
-            {geoBad && <p className="err">Latitude must be within ±90° and longitude within ±180°.</p>}
-            <div className="tablewrap">
-              <table className="edit">
-                <thead><tr><th>Name</th>{isGeo ? <><th>Lon (°)</th><th>Lat (°)</th></> : <><th>x {unitHead("distance")}</th><th>y {unitHead("distance")}</th></>}<th>Rate {unitHead("rate")}</th><th>Start</th><th>End</th><th>Skin</th><th /></tr></thead>
-                <tbody>
-                  {rawWells.map((w) => (
-                    <Fragment key={w.id}>
-                    <tr>
-                      <td><input value={w.name} aria-label="Well name" onChange={(e) => updWell(w.id, { name: e.target.value })} /></td>
-                      {isGeo ? (
-                        <>
-                          <td><NumField className="geoin" ariaLabel={`${w.name} longitude`} value={w.lon ?? 0} onChange={(v) => updWell(w.id, { lon: v })} /></td>
-                          <td><NumField className="geoin" ariaLabel={`${w.name} latitude`} value={w.lat ?? 0} onChange={(v) => updWell(w.id, { lat: v })} /></td>
-                        </>
-                      ) : (
-                        <>
-                          <td>{uf("distance", { ariaLabel: `${w.name} x`, value: w.x, onChange: (v) => updWell(w.id, { x: v }) })}</td>
-                          <td>{uf("distance", { ariaLabel: `${w.name} y`, value: w.y, onChange: (v) => updWell(w.id, { y: v }) })}</td>
-                        </>
-                      )}
-                      <td>{uf("rate", { ariaLabel: `${w.name} rate`, value: w.rateMtpa, onChange: (v) => updWell(w.id, { rateMtpa: v }), min: 0 })}</td>
-                      <td><NumField ariaLabel={`${w.name} start`} value={w.startYr} onChange={(v) => updWell(w.id, { startYr: v })} min={0} /></td>
-                      <td><NumField ariaLabel={`${w.name} end`} value={w.endYr} onChange={(v) => updWell(w.id, { endYr: v })} min={0} /></td>
-                      <td><input type="number" step="any" className="skininput" aria-label={`${w.name} skin`} value={w.skinText} placeholder={calcSkin.toFixed(2)} title={`Type a skin value, or leave blank to use the calculated value (${calcSkin.toFixed(2)})`} onChange={(e) => updWell(w.id, { skinText: e.target.value })} /></td>
-                      <td className="actions">
-                        <button className="x" aria-label={`Add a rate change for ${w.name}`} title="Add a rate change (a new rate from a later year)" onClick={() => addChange(w.id)}>＋</button>
-                        <button className="x" aria-label={`Remove ${w.name}`} onClick={() => setWells((ws) => ws.filter((q) => q.id !== w.id))}>×</button>
-                      </td>
-                    </tr>
-                    {(w.changes ?? []).map((ch, ci) => (
-                      <tr key={`${w.id}-c${ci}`} className="subrow">
-                        <td className="sub">↳ rate change</td>
-                        <td colSpan={2} className="sub">new rate from year →</td>
-                        <td>{uf("rate", { ariaLabel: `${w.name} new rate ${ci + 1}`, value: ch.rateMtpa, onChange: (v) => updChange(w.id, ci, { rateMtpa: v }), min: 0 })}</td>
-                        <td><NumField ariaLabel={`${w.name} rate change year ${ci + 1}`} value={ch.yr} onChange={(v) => updChange(w.id, ci, { yr: v })} min={0} /></td>
-                        <td colSpan={2} />
-                        <td><button className="x" aria-label={`Remove rate change ${ci + 1} of ${w.name}`} onClick={() => delChange(w.id, ci)}>×</button></td>
+            </div>
+
+            <div className="group" data-group="shutin">
+              <h3>Post-shut-in observation</h3>
+              <p className="hint" style={{ marginTop: 0 }}>Include pressure observation after injection stops?</p>
+              <label className="check"><input type="radio" name="observe" checked={observeL === "yes"} onChange={() => setObserve("yes")} /> Yes</label>{" "}
+              <label className="check"><input type="radio" name="observe" checked={observeL === "no"} onChange={() => setObserve("no")} /> No</label>
+              {observeL === "yes" && (
+                <div className="grid2" style={{ marginTop: 8 }}>
+                  <label className="field"><span>Observation duration (years)</span>
+                    <input type="number" step="any" min={0} placeholder="e.g. 10" aria-label="Observation duration (years)" value={obsPeriodL} onChange={(e) => setObsPeriod(e.target.value)} />
+                  </label>
+                  <label className="field"><span>Observation years to report</span>
+                    <input type="text" placeholder="e.g. 0, 0.5, 1, 5, 10" aria-label="Observation years to report" value={obsYearsL} onChange={(e) => setObsYears(e.target.value)} />
+                  </label>
+                </div>
+              )}
+              <p className="hint">{observeL === "yes"
+                ? `${multiL ? "Observation starts when the last well stops (the latest End year)" : "The well stops after its injection years"} and the pressure is followed for this many years (zero rate, zones frozen at shut-in, as in the program). Report years are comma-separated years after shut-in; year 0 is the instant injection stops; leave blank for every whole year and the end.`
+                : "No observation: the results stop when injection stops."}
+                {" "}Results run from year 0 to {num(horizonL)} yr.</p>
+            </div>
+
+            <div className="group" data-group="points">
+              <h3>Monitoring points</h3>
+              <div className="tablewrap">
+                <table className="edit">
+                  <thead><tr><th>Name</th>{isGeo ? <><th>Lon (°)</th><th>Lat (°)</th></> : <><th>x {unitHead("distance")}</th><th>y {unitHead("distance")}</th></>}<th /></tr></thead>
+                  <tbody>
+                    {pointsL.map((p) => (
+                      <tr key={p.id}>
+                        <td><input value={p.name} aria-label="Point name" onChange={(e) => updPoint(p.id, { name: e.target.value })} /></td>
+                        {isGeo ? (
+                          <>
+                            <td><NumField className="geoin" ariaLabel={`${p.name} longitude`} value={p.lon ?? 0} onChange={(v) => updPoint(p.id, { lon: v })} /></td>
+                            <td><NumField className="geoin" ariaLabel={`${p.name} latitude`} value={p.lat ?? 0} onChange={(v) => updPoint(p.id, { lat: v })} /></td>
+                          </>
+                        ) : (
+                          <>
+                            <td>{uf("distance", { ariaLabel: `${p.name} x`, value: p.x, onChange: (v) => updPoint(p.id, { x: v }) })}</td>
+                            <td>{uf("distance", { ariaLabel: `${p.name} y`, value: p.y, onChange: (v) => updPoint(p.id, { y: v }) })}</td>
+                          </>
+                        )}
+                        <td><button className="x" aria-label={`Remove ${p.name}`} onClick={() => setPoints((ps) => ps.filter((q) => q.id !== p.id))}>×</button></td>
                       </tr>
                     ))}
-                    </Fragment>
-                  ))}
-                </tbody>
-              </table>
+                  </tbody>
+                </table>
+              </div>
+              <button className="ghost" onClick={() => setPoints((ps) => [...ps, { id: uid("p"), name: `Point ${ps.length + 1}`, x: 0, y: 0, lon: origin?.lon ?? geoRef.lon, lat: origin?.lat ?? geoRef.lat }])}>+ Add point</button>
             </div>
-            <button className="ghost" onClick={() => setWells((ws) => [...ws, { id: uid("w"), name: `INJ-${ws.length + 1}`, x: 0, y: 0, lon: origin?.lon ?? geoRef.lon, lat: origin?.lat ?? geoRef.lat, rateMtpa: 1, startYr: 0, endYr: 25, skin: 0, skinText: "" }])}>+ Add well</button>
-            <p className="hint">Rate: use ＋ on a well to add a rate change (a new rate from a later year; the last rate stays in force until End, then the well is shut in). Skin: type a value if you have it; leave it blank and the app calculates it (grey number = calculated value). CSV columns (metres or degrees, Mt/yr): name, x_m, y_m <i>or</i> lon_deg, lat_deg, rate_Mtpa, start_yr, end_yr, skin (optional), changes (optional, e.g. 8:0.5|15:0.2). Excel: save as CSV.</p>
-          </section>
 
-          <section>
-            <h2>Monitoring points</h2>
-            <div className="tablewrap">
-              <table className="edit">
-                <thead><tr><th>Name</th>{isGeo ? <><th>Lon (°)</th><th>Lat (°)</th></> : <><th>x {unitHead("distance")}</th><th>y {unitHead("distance")}</th></>}<th /></tr></thead>
-                <tbody>
-                  {pointsL.map((p) => (
-                    <tr key={p.id}>
-                      <td><input value={p.name} aria-label="Point name" onChange={(e) => updPoint(p.id, { name: e.target.value })} /></td>
-                      {isGeo ? (
-                        <>
-                          <td><NumField className="geoin" ariaLabel={`${p.name} longitude`} value={p.lon ?? 0} onChange={(v) => updPoint(p.id, { lon: v })} /></td>
-                          <td><NumField className="geoin" ariaLabel={`${p.name} latitude`} value={p.lat ?? 0} onChange={(v) => updPoint(p.id, { lat: v })} /></td>
-                        </>
-                      ) : (
-                        <>
-                          <td>{uf("distance", { ariaLabel: `${p.name} x`, value: p.x, onChange: (v) => updPoint(p.id, { x: v }) })}</td>
-                          <td>{uf("distance", { ariaLabel: `${p.name} y`, value: p.y, onChange: (v) => updPoint(p.id, { y: v }) })}</td>
-                        </>
-                      )}
-                      <td><button className="x" aria-label={`Remove ${p.name}`} onClick={() => setPoints((ps) => ps.filter((q) => q.id !== p.id))}>×</button></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="group" data-group="report">
+              <h3>Report details</h3>
+              <div className="grid2">
+                <label className="field"><span>Project name</span><input value={project} onChange={(e) => setProject(e.target.value)} placeholder="optional" /></label>
+                <label className="field"><span>Author</span><input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="optional" /></label>
+              </div>
+              <p className="hint">Printed on the PDF / Word report.</p>
             </div>
-            <button className="ghost" onClick={() => setPoints((ps) => [...ps, { id: uid("p"), name: `Point ${ps.length + 1}`, x: 0, y: 0, lon: origin?.lon ?? geoRef.lon, lat: origin?.lat ?? geoRef.lat }])}>+ Add point</button>
-          </section>
-
-          <section>
-            <h2>Report details</h2>
-            <div className="grid2">
-              <label className="field"><span>Project name</span><input value={project} onChange={(e) => setProject(e.target.value)} placeholder="optional" /></label>
-              <label className="field"><span>Author</span><input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="optional" /></label>
-            </div>
-            <p className="hint">Printed on the PDF / Word report.</p>
           </section>
         </aside>
 
@@ -883,7 +1520,18 @@ export default function Page() {
             </div>
           )}
 
-          {applied && (
+          {applied && fieldError && (
+            <>
+              {stale && <div className="stale">The inputs have changed since the last run — press <b>▶ RUN analysis</b> to try again. <button type="button" className="linkbtn" onClick={() => runNow()}>▶ RUN analysis</button></div>}
+              <div className="empty">
+                <p><b>Calculation stopped.</b></p>
+                <p className="err">{fieldError}</p>
+                <p className="hint">The program checks its inputs and its intermediate results (for example the zone 2 saturation must stay between 0 and 1 − Swr). Change the inputs and press RUN again.</p>
+              </div>
+            </>
+          )}
+
+          {applied && !fieldError && (
             <>
               {stale && <div className="stale">The inputs have changed since the last run. The results below still show the previous run — press <b>▶ RUN analysis</b> to update them. <button type="button" className="linkbtn" onClick={() => runNow()}>▶ RUN analysis</button></div>}
               {warnings.length > 0 && (
@@ -892,26 +1540,31 @@ export default function Page() {
 
               <div className="kpis">
                 <div className="kpi">
-                  <span>Peak buildup (worst well)</span>
-                  <b>{wells.length ? P(peaks[worst].peak) : "–"} {pU.label}</b>
-                  <small>{wells.length ? `${wells[worst].name} at ${peaks[worst].t.toFixed(1)} yr` : ""} · {pressure.model === "three" ? "three-zone model" : "single-phase model"}</small>
+                  <span>Peak BHP (worst well)</span>
+                  <b>{worstRow ? P(worstRow.peak_BHP_psia * PSI, 2) : "–"} {pU.label}</b>
+                  <small>{worstRow ? `${nameOf(worstRow.well)} at year ${pyFormat(Number(worstRow.peak_project_year), "g")}` : ""} · {modelLabel(bhpIn)} · {multi ? `${wells.length} wells` : "single well"}</small>
                 </div>
                 <div className="kpi">
-                  <span>Allowable buildup</span>
-                  <b>{P(lim.maxBuildupMPa)} {pU.label}</b>
-                  <small>{aq.safetyFactor} × Pfrac − P₀</small>
+                  <span>Allowable BHP</span>
+                  <b>{lim.allowableMPa !== null ? `${P(lim.allowableMPa, 1)} ${pU.label}` : "Not assessed"}</b>
+                  <small>{cur.limit.mode === "none" ? "No pressure limit supplied" : cur.limit.mode === "max_bhp" ? "Maximum allowable BHP" : `${num(cur.limit.fraction)} × fracture pressure ${P(cur.limit.fractureMPa, 1)} ${pU.label}`}{multi && wells.some((w) => w.maxBhpMPa !== null && w.maxBhpMPa !== undefined) ? " · some wells have their own maximum" : ""}</small>
                 </div>
-                <div className={`kpi ${wells.length && peaks[worst].peak > lim.maxBuildupMPa ? "bad" : "good"}`}>
-                  <span>Status vs max allowable buildup</span>
-                  <b>{wells.length && peaks[worst].peak > lim.maxBuildupMPa ? "Limit exceeded" : "Within limit"}</b>
-                  <small>Pass/fail uses the max allowable buildup, not the interference threshold.</small>
-                  <small>{Number.isFinite(scaleToLimit) ? `Rates can scale ×${scaleToLimit.toFixed(2)} to reach the limit.` : ""}</small>
+                <div className={`kpi ${overall === "FAIL" ? "bad" : overall === "PASS" ? "good" : ""}`}>
+                  <span>Pressure status</span>
+                  <b>{overall}</b>
+                  <small>{overall === "FAIL" ? "The required BHP exceeds the allowable BHP at a computed time." : overall === "PASS" ? "The required BHP stays at or below the allowable BHP at every computed time." : "No limit supplied."}</small>
+                  <small>{Number.isFinite(scaleToLimit) ? `Rates can scale about ×${scaleToLimit.toFixed(2)} to reach the limit.` : ""}</small>
+                </div>
+                <div className="kpi">
+                  <span>Cumulative {fluidName} injected (field)</span>
+                  <b>{massText(injected.totalLb)}</b>
+                  <small>{intStr(tonnes(injected.totalLb))} tonnes = {intStr(injected.totalLb)} lb · {intStr(volOf(injected.totalVol))} {volUnit} at the end of injection (year {pyFormat(injected.end, "g")}){multi ? `, ${injected.rows.length} wells` : ""}</small>
                 </div>
               </div>
 
               <nav className="tabs" role="tablist">
-                {([["sat", "CO₂ saturation"], ["map", "Pressure map"], ["series", "Time series"], ["matrix", "Interference matrix"], ["limits", "Limit check"], ["compare", "Compare boundaries"]] as [View, string][]).map(([v, l]) => (
-                  <button key={v} role="tab" aria-selected={view === v} className={view === v ? "on" : ""} onClick={() => setView(v)}>{l}</button>
+                {tabs.map(([v, l]) => (
+                  <button key={v} role="tab" aria-selected={viewEff === v} className={viewEff === v ? "on" : ""} onClick={() => setView(v)}>{l}</button>
                 ))}
               </nav>
 
@@ -924,58 +1577,108 @@ export default function Page() {
                     {UNITS.pressure.map((u) => <option key={u.label} value={u.label}>{u.label}</option>)}
                   </select>
                 </label>
-                {(view === "map" || view === "sat") && uf("distance", { label: "Map padding", value: padM, onChange: (v) => setPadM(Math.max(0, v)), min: 0 })}
-                {view === "series" && (
+                {(viewEff === "map" || viewEff === "sat") && (
+                  <>
+                    <label className="field"><span>Map area</span>
+                      <select aria-label="Map area" value={mapArea} onChange={(e) => setMapArea(e.target.value as "wells" | "all")}>
+                        <option value="wells">Around the wells</option>
+                        <option value="all">Wells and monitoring points</option>
+                      </select>
+                    </label>
+                    {uf("distance", { label: padM === null ? "Map padding (auto)" : "Map padding", value: padEff, onChange: (v) => setPadM(Math.max(0, v)), min: 0 })}
+                    {padM !== null && <button type="button" className="ghost" style={{ alignSelf: "end" }} onClick={() => setPadM(null)}>Auto padding</button>}
+                  </>
+                )}
+                {viewEff === "series" && (
                   <label className="field"><span>Show</span>
                     <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
-                      <option value="total">Total buildup (ΔP)</option>
                       <option value="bhp">Bottomhole pressure (absolute)</option>
+                      <option value="total">Total buildup (ΔP)</option>
                       <option value="interference">Interference only (excl. self)</option>
+                    </select>
+                  </label>
+                )}
+                {viewEff === "bhp" && multi && (
+                  <label className="field"><span>Well</span>
+                    <select value={bhpIdx} onChange={(e) => setBhpWell(+e.target.value)}>
+                      {wells.map((w, i) => <option key={w.id} value={i}>{w.name}</option>)}
                     </select>
                   </label>
                 )}
               </div>
 
-              {view === "sat" && specSat && (
+              {viewEff === "mw" && mwRun && mwFiles && mwPlots && (
+                <div id="results">
+                  <h3>Multiwell pressure and interference</h3>
+                  <p className="caption" style={{ marginTop: 0 }}>
+                    Your program&apos;s multiwell calculation ({modelLabel(bhpIn)}, {mwRun.result.wells.length} wells, the last well stops at year {pyFormat(mwRun.result.years, "g")}{boundary.type !== "none" ? "; the program is infinite-acting, the boundary is used only in the maps and curves" : ""}).
+                    Each well&apos;s BHP = initial pressure + its own formation response + its skin + the interference from the other wells; rows of the matrix are receiving wells, columns are sources.
+                  </p>
+                  <PyTable cols={MW_SUMMARY_COLS} rows={mwRun.result.summary.filter((r) => r.year === mwRun.result.years)} />
+                  <h3>Peak pressure assessment</h3>
+                  <PyTable cols={FAILURE_COLS} rows={mwRun.limitSummary} fmt=".4f" />
+                  <h3>Cumulative {fluidName} injected at the end of injection</h3>
+                  <p className="caption" style={{ marginTop: 0 }}>Mass = the program&apos;s standard-condition {water ? "water mass per STB" : "CO₂ density"} ({water ? "water_mass_per_stb_lb" : "rho_sc_lb_scf"}) × the surface volume each well injects from its start to its end of injection{water ? "" : " (1 Mscf = 1000 scf)"}; the Field row is the sum of all wells.</p>
+                  <InjectedTable />
+                  <h3>Well separation distances (ft)</h3>
+                  <div className="bhp-summary-wrap">
+                    <table className="bhp-summary">
+                      <thead><tr><th />{mwRun.result.wells.map((w) => <th key={w.name}>{w.name}</th>)}</tr></thead>
+                      <tbody>{wellSeparations(mwRun.result.wells).map((row, i) => <tr key={i}><th>{mwRun.result.wells[i].name}</th>{row.map((v, j) => <td key={j}>{v.toFixed(3)}</td>)}</tr>)}</tbody>
+                    </table>
+                  </div>
+                  {two && <p className="caption">Three-zone multiphase superposition approximation. Plume overlap is reported separately (plume_overlap.csv){mwRun.result.overlaps.some((r) => r.plumes_touch_or_overlap) ? ": the individual plume circles touch or overlap at one or more reporting times" : ""}.</p>}
+                  {mwRun.observation && (
+                    <>
+                      <h3>After all wells stop</h3>
+                      <PyTable cols={MW_OBS_COLS} rows={mwRun.observation.rows} />
+                    </>
+                  )}
+                  <div className="plotwrap" role="img" aria-label="BHP and interference of every well versus project time" dangerouslySetInnerHTML={{ __html: mwPlots[0].svg.replace(`width="${mwPlots[0].width}" height="${mwPlots[0].height}"`, 'width="100%"') }} />
+                  <div className="plotwrap" role="img" aria-label="Final interference matrix and front estimates" dangerouslySetInnerHTML={{ __html: mwPlots[1].svg.replace(`width="${mwPlots[1].width}" height="${mwPlots[1].height}"`, 'width="100%"') }} />
+                  <h3>Download calculations</h3>
+                  <ul className="files">
+                    {Object.entries(mwFiles).map(([name, text]) => (
+                      <li key={name}><button type="button" className="linkbtn" onClick={() => textFile(name, text)}>{name}</button></li>
+                    ))}
+                    <li><button type="button" className="linkbtn" onClick={() => savePlot(mwPlots[0], "multiwell_bhp_and_interference.png")}>multiwell_bhp_and_interference.png</button></li>
+                    <li><button type="button" className="linkbtn" onClick={() => savePlot(mwPlots[1], "multiwell_matrix_and_fronts.png")}>multiwell_matrix_and_fronts.png</button></li>
+                  </ul>
+                  <details>
+                    <summary>multiwell_summary.csv at every reporting time ({mwRun.result.report_times.length} times)</summary>
+                    <PyTable cols={MW_SUMMARY_COLS} rows={mwRun.result.summary} />
+                  </details>
+                </div>
+              )}
+
+              {(viewEff === "map" || viewEff === "sat") && outsidePoints.length > 0 && (
+                <p className="hint">{outsidePoints.map((q) => q.name).join(", ")} {outsidePoints.length > 1 ? "lie" : "lies"} outside the map. Choose Map area: Wells and monitoring points to include {outsidePoints.length > 1 ? "them" : "it"}.</p>
+              )}
+
+              {viewEff === "sat" && specSat && (
                 <>
                   <ChartView key={`sat-${runId}`} spec={specSat} title={`CO₂ saturation map at t = ${tNow.toFixed(1)} yr`} filename="co2-saturation-map" />
                   <p className="caption">
-                    Saturation of the injected CO₂ (Sg) at {tNow.toFixed(1)} yr from a radial Buckley–Leverett front around each injector; overlapping plumes are added and capped at {satModel.smax.toFixed(2)}. Brine fills the rest of the pore space. Each well is a thin vertical line starting at the plume centre and pointing up, with its name centred on top of the line. Gravity override, dissolution and residual trapping are not modelled. Drag the evaluation-time slider to watch the plumes grow; they stop growing at each well&apos;s shut-in.
+                    Saturation of the injected CO₂ (Sg) at {tNow.toFixed(1)} yr from a radial Buckley–Leverett front around each injector, for the cumulative reservoir volume of CO₂ of each well (surface volume × Bg at its bottom-hole pressure); where plumes overlap the higher saturation of the two is shown, so each well keeps its own profile, highest next to the well and falling outward to its front (maximum possible {satModel.smax.toFixed(2)}). Brine fills the rest of the pore space. Each well is a thin vertical line starting at the plume centre and pointing up, with its name centred on top of the line. Gravity override, dissolution and residual trapping are not modelled. Drag the evaluation-time slider to watch the plumes grow; they stop growing at each well&apos;s shut-in.
                   </p>
-                  <h3>CO₂ plume of each well at t = {tNow.toFixed(1)} yr</h3>
-                  <p className="caption" style={{ marginTop: 0 }}>Tip: click a well name in the table to rename it. The new name appears at once on every chart, table and report (you can also edit it in the Injection wells table).</p>
+                  <h3>CO₂ zones of each well at t = {tNow.toFixed(1)} yr</h3>
+                  <p className="caption" style={{ marginTop: 0 }}>Gas front r<sub>g</sub>, dry front r<sub>d</sub> and the zone 2 (CO₂ + brine) saturation from the program. Tip: click a well name to rename it everywhere.</p>
                   <div className="tablewrap">
                     <table className="matrix">
-                      <thead><tr><th>Well</th><th>CO₂ injected (Mt)</th><th>Plume radius ({dU.label})</th><th>Dry-zone radius ({dU.label})</th><th>Sg behind front</th><th>Max Sg (at well)</th></tr></thead>
+                      <thead><tr><th>Well</th><th>CO₂ injected (Mt)</th><th>Gas front r<sub>g</sub> ({dU.label})</th><th>Dry front r<sub>d</sub> ({dU.label})</th><th>Zone 2 Sg</th><th>Front Sg</th><th>Max Sg</th></tr></thead>
                       <tbody>
                         {plumes.map((q) => (
                           <tr key={q.id}>
-                            <th><input className="nameedit" aria-label={`Rename ${q.name}`} title="Click to rename this well" value={q.name} onChange={(e) => updWell(q.id, { name: e.target.value })} /></th><td>{q.massMt.toFixed(2)}</td><td>{D(q.radius)}</td><td>{D(q.dryR)}</td><td>{satModel.sf.toFixed(2)}</td><td>{satModel.smax.toFixed(2)}</td>
+                            <th><input className="nameedit" aria-label={`Rename ${q.name}`} title="Click to rename this well" value={q.name} onChange={(e) => updWell(q.id, { name: e.target.value })} /></th><td>{q.massMt.toFixed(4)}</td><td>{D(q.radius)}</td><td>{D(q.dryR)}</td><td>{Number.isFinite(q.sg2) ? q.sg2.toFixed(3) : "–"}</td><td>{frontSg.toFixed(3)}</td><td>{satModel.smax.toFixed(2)}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
-                  {pressure.model === "three" && pressure.zones && (
-                    <>
-                      <h3>Zones used by the three-zone pressure model</h3>
-                      <p className="caption" style={{ marginTop: 0 }}>Mobility ratio m = zone mobility / (k/μw); storage ratio c* = zone compressibility / brine-zone compressibility; diffusivity ratio D = m / c*. The two-phase zone is evaluated at the average CO₂ saturation behind the front, {pressure.zones.avgSat.toFixed(2)}.</p>
-                      <div className="tablewrap">
-                        <table className="matrix">
-                          <thead><tr><th>Zone</th><th>Mobility ratio m</th><th>Storage ratio c*</th><th>Diffusivity ratio D</th><th>Diffusivity η ({units.diffusivity})</th></tr></thead>
-                          <tbody>
-                            {["1  Dry CO₂", "2  CO₂ + brine", "3  Brine"].map((z, i) => (
-                              <tr key={z}><th>{z}</th><td>{pressure.zones!.consts.m[i].toPrecision(3)}</td><td>{pressure.zones!.cStar[i].toPrecision(3)}</td><td>{pressure.zones!.consts.D[i].toPrecision(3)}</td><td>{num((consts(aq).eta * pressure.zones!.consts.D[i]) / findUnit("diffusivity", units.diffusivity).f)}</td></tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </>
-                  )}
                 </>
               )}
 
-              {view === "map" && specMap && (
+              {viewEff === "map" && specMap && (
                 <>
                   <div className="mapstyle">
                     <label className="field"><span>Colour scale</span>
@@ -1029,13 +1732,13 @@ export default function Page() {
                   </div>
                   <ChartView key={`map-${runId}`} spec={specMap} title={`Pressure buildup map at t = ${tNow.toFixed(1)} yr`} filename="pressure-map" />
                   <p className="caption">
-                    Buildup at {tNow.toFixed(1)} yr. <b>Pass/fail</b> is judged against the <b>max allowable buildup</b> ({P(lim.maxBuildupMPa)} {pU.label} = {aq.safetyFactor} × fracture pressure − initial pressure), shown as the solid white/black contour, which only appears near the wells if the limit is approached.
+                    Buildup at {tNow.toFixed(1)} yr: the sum of every well&apos;s pressure profile from the program ({modelLabel(bhpIn)}). {lim.allowableMPa !== null ? <><b>Pass/fail</b> is judged against the <b>allowable BHP</b> ({P(lim.allowableMPa, 1)} {pU.label}, a buildup of {P(lim.maxBuildupMPa)} {pU.label}), shown as the solid white/black contour, which only appears near the wells if the limit is approached.</> : <>No pressure limit was supplied.</>}
                     The dashed teal contour is the <b>interference threshold</b> ({P(threshold, 3)} {pU.label}); it only shows how far a pressure effect can be detected and is not a pass/fail limit.
                   </p>
                 </>
               )}
 
-              {view === "series" && (
+              {viewEff === "series" && (
                 <>
                   <ChartView key={`series-${runId}-${mode}`} spec={specSeries} title={mode === "bhp" ? "Bottomhole pressure of each well vs time" : mode === "total" ? "Wellbore pressure buildup vs time" : "Interference pressure at each well vs time"} filename={`time-series-${mode}`} />
                   {wells.length > 0 && (
@@ -1061,11 +1764,70 @@ export default function Page() {
                       </div>
                     </>
                   )}
-                  <p className="caption">Wells are evaluated at the wellbore radius; dashed lines are monitoring points. Bottomhole pressure = initial pressure + own buildup + skin + interference from every other well; the field lines show the highest and the average across all wells at each time. Interference-only removes each well&apos;s own contribution at its own location.</p>
+                  <p className="caption">Wells are evaluated at the wellbore radius; dashed lines are monitoring points. Bottomhole pressure = initial pressure + own response from the program + skin + interference from every other well; the field lines show the highest and the average across all wells at each time. Interference-only removes each well&apos;s own contribution at its own location.</p>
                 </>
               )}
 
-              {view === "matrix" && (
+              {viewEff === "bhp" && wells[bhpIdx] && (
+                <>
+                  {multi && specWellBhp && <ChartView key={`wbhp-${runId}-${bhpIdx}`} spec={specWellBhp} title={`Bottom-hole pressure of ${wells[bhpIdx].name}, with interference from the other wells`} filename={`${wells[bhpIdx].name}-bhp`} />}
+                  {multi ? (
+                    <>
+                      <h3>Your program for {wells[bhpIdx].name} on its own</h3>
+                      <p className="caption" style={{ marginTop: 0 }}>
+                        The program&apos;s single-well calculation for this well alone: rate {num(fromCanon(rU, wells[bhpIdx].rate))} {rU.label}, radius {L(wells[bhpIdx].rwM ?? res.wellboreRadiusM)} {lU.label}, skin {num(wells[bhpIdx].skin)}, {code.out ? code.out.years : Math.round(wells[bhpIdx].endYr - wells[bhpIdx].startYr)} injection years, with the post-shut-in observation entered in the Input section. The chart above adds the interference from the other wells (Multiwell results tab).
+                        {code.note ? ` Note: ${code.note}.` : ""}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="caption" style={{ marginTop: 0 }}>
+                      Your program&apos;s single-well calculation: rate {num(fromCanon(rU, wells[0].rate))} {rU.label}, well radius {L(res.wellboreRadiusM)} {lU.label}, skin {num(wells[0].skin)}, {cur.single.years} injection years, with the post-shut-in observation and the pressure check entered in the Input section. These are the program&apos;s own outputs; the other tabs show the same well on maps and curves.
+                    </p>
+                  )}
+                  {code.error && <p className="err" role="alert">{code.error}</p>}
+                  {code.out && codeFiles && codePlot && (
+                    <div id="results">
+                      <h3>Calculated pressure</h3>
+                      <p>{code.out.label} · End-of-injection BHP at year {code.out.years}: <strong>{code.out.results[code.out.results.length - 1].BHP_psia.toFixed(3)} psia</strong></p>
+                      {code.out.observation && (
+                        <>
+                          <h3>Selected post-shut-in observation years</h3>
+                          <SummaryTable rows={code.out.observation.rows} />
+                        </>
+                      )}
+                      <div className="plotwrap" role="img" aria-label="Bottom-hole pressure versus elapsed time" dangerouslySetInnerHTML={{ __html: codePlot.svg.replace(`width="${codePlot.width}" height="${codePlot.height}"`, 'width="100%"') }} />
+                      <h3>Annual injection results</h3>
+                      <SummaryTable rows={code.out.results} />
+                      <h3>Pressure assessment</h3>
+                      <PyTable cols={FAILURE_COLS} rows={pressureLimitSummary(code.out).map((r) => ({ ...r, well: wells[bhpIdx].name }))} fmt=".4f" />
+                      {!multi && (
+                        <>
+                          <h3>Cumulative {fluidName} injected at the end of injection</h3>
+                          <p className="caption" style={{ marginTop: 0 }}>The program&apos;s Minj_lb and {water ? "Vwater_stb" : "Vsc_scf"} in the last year of the annual results.</p>
+                          <InjectedTable />
+                        </>
+                      )}
+                      <h3>Saved results</h3>
+                      <ul className="files">
+                        {Object.entries(codeFiles).map(([name, text]) => (
+                          <li key={name}><button type="button" className="linkbtn" onClick={() => textFile(`${wells[bhpIdx].name}-${name}`, text)}>{name}</button></li>
+                        ))}
+                        <li><button type="button" className="linkbtn" onClick={saveCodePlot}>bhp_vs_year.png</button></li>
+                      </ul>
+                      <details>
+                        <summary>all_calculations.csv (every annual intermediate calculation, including the zone diffusivity ratios D1, D2, D3)</summary>
+                        <FileTable columns={Object.keys(code.out.results[0])} rows={code.out.results} />
+                      </details>
+                      <details>
+                        <summary>first_year_detail.csv (initial state and detailed BHP samples through year 1)</summary>
+                        <FileTable columns={DETAIL_FIELDS} rows={code.out.firstYear} />
+                      </details>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {viewEff === "matrix" && (
                 <>
                   <h3>Buildup ({pU.label}) at t = {tNow.toFixed(1)} yr</h3>
                   <p className="caption">Row = injecting well, column = where pressure is felt. Diagonal is the well&apos;s own buildup.</p>
@@ -1109,25 +1871,27 @@ export default function Page() {
                 </>
               )}
 
-              {view === "limits" && (
+              {viewEff === "limits" && (
                 <>
                   <p className="caption" style={{ marginTop: 0 }}>
-                    <b>Injection wells</b> are judged against the <b>max allowable buildup</b> of {P(lim.maxBuildupMPa)} {pU.label} ({aq.safetyFactor} × fracture pressure − initial pressure). The <b>interference threshold</b> ({P(threshold, 3)} {pU.label}) is not a pass/fail limit; it is only used for the map contour, the arrival times and the monitoring-point table below.
+                    The program&apos;s pressure check (pressure_limit_summary.csv): the required BHP of each well at every computed time{multi ? ", during injection and after all wells stop," : ""} is compared with the allowable BHP {lim.allowableMPa !== null ? <>(<b>{P(lim.allowableMPa, 1)} {pU.label}</b>{multi && wells.some((w) => w.maxBhpMPa !== null && w.maxBhpMPa !== undefined) ? ", or the well's own maximum" : ""})</> : "(none supplied: NOT ASSESSED)"}. FAIL means the required BHP exceeds the limit at a computed time; rates are not reduced automatically. This is an operating-pressure check, not a prediction of mechanical well integrity.
+                    The <b>interference threshold</b> ({P(threshold, 3)} {pU.label}) is not a pass/fail limit; it is only used for the map contour, the arrival times and the monitoring-point table below.
                   </p>
                   <div className="tablewrap">
                     <table className="matrix">
-                      <thead><tr><th>Well</th><th>Peak buildup ({pU.label})</th><th>at (yr)</th><th>of which self</th><th>of which skin</th><th>of which interference</th><th>Bottomhole P ({pU.label})</th><th>Margin ({pU.label})</th><th>Status</th></tr></thead>
+                      <thead><tr><th>Well</th><th>Status</th><th>Peak BHP ({pU.label})</th><th>at (yr)</th>{multi && <><th>own formation</th><th>skin</th><th>interference</th></>}<th>Allowable BHP ({pU.label})</th><th>Minimum margin ({pU.label})</th><th>First exceedance (yr)</th></tr></thead>
                       <tbody>
-                        {wells.map((w, i) => {
-                          const p = peaks[i], margin = lim.maxBuildupMPa - p.peak;
+                        {limitRows.map((r) => {
+                          const sp = peakSplit(r);
+                          const n = (v: unknown, d = 2) => (typeof v === "number" ? P(v * PSI, d) : "–");
                           return (
-                            <tr key={w.id}>
-                              <th>{w.name}</th>
-                              <td>{P(p.peak)}</td><td>{p.t.toFixed(1)}</td>
-                              <td>{P(p.self)}</td><td>{P(p.skin)}</td><td>{P(p.interference)}</td>
-                              <td>{P(lim.initialMPa + p.peak)}</td>
-                              <td>{P(margin)}</td>
-                              <td className={margin < 0 ? "bad-cell" : "good-cell"}>{margin < 0 ? "Exceeds" : "OK"}</td>
+                            <tr key={r.well}>
+                              <th>{nameOf(r.well)}</th>
+                              <td className={r.overall_status === "FAIL" ? "bad-cell" : r.overall_status === "PASS" ? "good-cell" : ""}>{r.overall_status}</td>
+                              <td>{n(r.peak_BHP_psia)}</td><td>{typeof r.peak_project_year === "number" ? +r.peak_project_year.toFixed(4) : "–"}</td>
+                              {multi && <><td>{n(sp?.own_formation_response_psi)}</td><td>{n(sp?.own_skin_psi)}</td><td>{n(sp?.interference_psi)}</td></>}
+                              <td>{n(r.max_allowable_BHP_psia)}</td><td>{n(r.minimum_pressure_margin_psi)}</td>
+                              <td>{typeof r.first_detected_failure_year === "number" ? +r.first_detected_failure_year.toFixed(4) : "–"}</td>
                             </tr>
                           );
                         })}
@@ -1135,8 +1899,8 @@ export default function Page() {
                     </table>
                   </div>
                   <p className="caption">
-                    Interference share at the worst well: {wells.length && peaks[worst].peak > 0 ? Math.round((peaks[worst].interference / peaks[worst].peak) * 100) : 0}% of its peak buildup.
-                    Because the model is linear in rate, scaling every rate by ×{Number.isFinite(scaleToLimit) ? scaleToLimit.toFixed(2) : "–"} brings the worst well exactly to the limit.
+                    {worstRow && peaks.length ? `Interference share at the worst well: ${peaks[worst].peak > 0 ? Math.round((peaks[worst].interference / peaks[worst].peak) * 100) : 0}% of its peak buildup. ` : ""}
+                    {Number.isFinite(scaleToLimit) ? `The pressure model is close to linear in rate (the CO₂ properties depend weakly on pressure), so scaling every rate by about ×${scaleToLimit.toFixed(2)} brings the worst well to the limit.` : ""}
                   </p>
                   {points.length > 0 && (
                     <>
@@ -1161,7 +1925,7 @@ export default function Page() {
                 </>
               )}
 
-              {view === "compare" && (
+              {viewEff === "compare" && (
                 <>
                   <div className="controls">
                     <label className="field"><span>Well shown in chart</span>
@@ -1187,7 +1951,7 @@ export default function Page() {
                         ))}
                         <tr className="total">
                           <th>Allowed</th>
-                          {cases.map((k) => <td key={k.key}>{P(lim.maxBuildupMPa)}</td>)}
+                          {cases.map((k) => <td key={k.key}>{Number.isFinite(lim.maxBuildupMPa) ? P(lim.maxBuildupMPa) : "–"}</td>)}
                         </tr>
                       </tbody>
                     </table>
@@ -1201,10 +1965,13 @@ export default function Page() {
               <details className="assump">
                 <summary>Model assumptions and limitations</summary>
                 <ul>
-                  <li>Homogeneous, isotropic, confined aquifer of constant thickness; single-phase slightly-compressible flow (Theis line source) with Δp = qμ/(4πkh)·E₁(r²/4ηt).</li>
-                  <li>CO₂ mass is converted to reservoir volume with the given CO₂ density and the brine viscosity is used everywhere (brine-equivalent). This overstates near-well pressure because CO₂ is less viscous than brine, but is reasonable for far-field interference.</li>
-                  <li>Wells are evaluated at the wellbore radius. Skin adds a steady pressure drop Δp = qμs/(2πkh) at the injector itself, only while injecting; it does not change interference at other wells. Wellbore storage, non-Darcy flow and CO₂-mobility effects are not modelled.</li>
-                  <li>Boundaries are one straight line handled by image wells. Leaky caprock, multiple faults, heterogeneity, dissolution and brine production are not modelled.</li>
+                  <li>Each well follows the reference injection-BHP program ({modelLabel(bhpIn)}): homogeneous, confined, infinite-acting radial flow with one permeability and porosity for all zones, constant temperature and viscosities. In the two-phase model the dry-CO₂, CO₂ + brine and brine zones each have their own mobility and compressibility, the fronts grow with the injected volume, and the CO₂ properties come from the Peng–Robinson equation of state for pure CO₂ at the well&apos;s bottom-hole pressure (solved to 10⁻⁴ psi).</li>
+                  <li>{multi
+                    ? <>Multiwell interference follows the program&apos;s multiwell section: the pressure at every well is the sum of every source&apos;s radial pressure profile (the well itself at its own radius), so a well&apos;s BHP = initial pressure + own formation response + skin + interference. Each two-phase source has one constant rate from its start year, and its Peng–Robinson properties and fronts are evaluated at its own total BHP (the coupled system of all wells is solved at every time). This is a representative-property multiphase superposition approximation: overlapping plumes are flagged, not resolved. Single-phase wells may change rate (time superposition). Each well stops at its own End year: a single-phase stop is a rate change to 0 (the program's rate schedule); a two-phase well that stops before the last one follows the program's fixed-zone falloff from its end year while the others continue (an extension: the program stops all wells together).</>
+                    : <>Single well: the program&apos;s single-well calculation, one well at a constant rate from year 0. The maps and curves evaluate the same well&apos;s radial pressure profile around it.</>}</li>
+                  <li>After shut-in the pressure diffuses at zero rate with the zones frozen at shut-in (the program&apos;s fixed-zone falloff approximation).</li>
+                  <li>Skin adds 141.2·μ·q·B·s/(k·h) at the injector itself, only while injecting. Wellbore storage, gravity override, dissolution and trapping are not modelled.</li>
+                  <li>The program is infinite-acting. A boundary (one straight line) is an addition of this website, handled by image wells in the maps, curves and matrix; the program results stay infinite-acting. Leaky caprock, multiple faults and heterogeneity are not modelled. The equations have not been fitted to simulation.</li>
                   <li>Use for screening and ranking of well layouts; confirm with numerical simulation before decisions.</li>
                 </ul>
               </details>

@@ -47,7 +47,7 @@ table.matrix td.diag { background: var(--bg); color: var(--muted); font-style: i
 table.matrix tr.total th, table.matrix tr.total td { font-weight: 600; }
 .bad-cell { color: var(--bad); font-weight: 600; } .good-cell { color: var(--good); font-weight: 600; }
 .warn { background: var(--warn-bg); border: 1px solid #e8b04a; border-radius: 8px; margin: 0 0 12px; padding: 8px 8px 8px 26px; font-size: 13px; }
-.kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 14px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-bottom: 14px; }
 @media (max-width: 640px) { .kpis { grid-template-columns: 1fr; } }
 .kpi { border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; display: flex; flex-direction: column; border-left-width: 4px; }
 .kpi span { color: var(--muted); font-size: 12px; } .kpi b { font-size: 20px; } .kpi small { color: var(--muted); }
@@ -176,3 +176,68 @@ table.edit td.sub { font-size: 12px; color: var(--muted); font-style: italic; }
 .mapstyle .check { display: flex; gap: 6px; align-items: center; font-size: 13px; padding-bottom: 6px; cursor: pointer; }
 .mapstyle .check input { width: auto; }
 .mapstyle button.ghost { margin-top: 0; }
+
+/* one Input section, split into labelled groups */
+.panel .inputs .group { padding-top: 12px; margin-top: 12px; border-top: 1px solid var(--line); }
+.panel .inputs .group > h3, .panel .inputs .group > .row-head h3 { font-size: 13px; margin: 0 0 8px; color: var(--text); }
+.panel .inputs .group > .row-head { margin-bottom: 4px; }
+
+/* result tables: the look of the Python's _notebook_summary_html */
+.bhp-summary-wrap { max-height: 520px; overflow: auto; margin: 6px 0 10px; border: 1px solid var(--line); }
+.bhp-summary { border-collapse: collapse; font-size: 14px; width: max-content; min-width: 100%; }
+.bhp-summary th, .bhp-summary td { padding: 6px 9px; text-align: right; border-bottom: 1px solid #ddd; white-space: nowrap; }
+.bhp-summary thead th { position: sticky; top: 0; background: #234e70; color: #fff; font-weight: 600; }
+fieldset.obs { margin: 14px 0; padding: 10px 14px 14px; border: 2px solid #2c6577; border-radius: 8px; }
+fieldset.obs legend { padding: 0 6px; font-weight: 700; font-size: 13px; }
+.plotwrap { margin: 10px 0 4px; border: 1px solid var(--line); background: #fff; }
+.plotwrap svg { display: block; height: auto; }
+ul.files { margin: 4px 0 10px; padding-left: 18px; }
+#results details { margin: 8px 0; }
+#results summary { cursor: pointer; font-weight: 600; }
+fieldset.obs .check { display: inline-flex; align-items: center; gap: 5px; margin-right: 16px; font-size: 13px; }
+fieldset.obs .check input { width: auto; margin: 0; }
+/* time-series and stacked charts use the full width of the results; maps keep their size so they fit on screen */
+.chartsvg.kind-line svg, .chartsvg.kind-stack svg { max-width: 1400px; }
+/* keep the results column inside the window: wide tables scroll inside their own box instead of widening the page */
+.layout { grid-template-columns: 500px minmax(0, 1fr); }
+.results { min-width: 0; }
+.bhp-summary-wrap, .tablewrap { max-width: 100%; overflow-x: auto; }
+@media (max-width: 1000px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---- use the available space ---- */
+/* the page uses the whole width of wide screens */
+.app { max-width: 2400px; }
+@media (min-width: 1001px) {
+  /* the input column stays beside the results and scrolls on its own, so the results use the full height */
+  aside.panel { position: sticky; top: 12px; max-height: calc(100vh - 24px); overflow-y: auto; }
+  /* maps grow with the results column, as large as fits in the window height */
+  .chartsvg.kind-map svg { max-width: min(100%, calc((100vh - 150px) * 1.4)); margin: 0 auto; }
+  /* time-series charts use the full width, but stay within the window height */
+  .chartsvg.kind-line svg, .chartsvg.kind-stack svg { max-width: min(100%, calc((100vh - 150px) * 1.75)); }
+}
+@media (min-width: 1700px) { .layout { grid-template-columns: 540px minmax(0, 1fr); } }
+/* Yes / No of the post-shut-in observation on one line */
+[data-group="shutin"] .check { display: inline-flex; align-items: center; gap: 5px; margin-right: 16px; font-size: 13px; }
+[data-group="shutin"] .check input { width: auto; margin: 0; }
+
+/* Well system choice: single well or multiwell interference */
+.sysbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.sysbtn { display: flex; flex-direction: column; gap: 2px; padding: 9px 11px; border: 1px solid var(--line, #c9d3dc); border-radius: 8px; cursor: pointer; }
+.sysbtn input { position: absolute; opacity: 0; pointer-events: none; }
+.sysbtn b { font-size: 14px; }
+.sysbtn small { font-size: 12px; opacity: 0.75; line-height: 1.3; }
+.sysbtn.on { border-color: var(--accent, #2a6fdb); box-shadow: inset 0 0 0 1px var(--accent, #2a6fdb); background: color-mix(in srgb, var(--accent, #2a6fdb) 9%, transparent); }
+.sysbtn:focus-within { outline: 2px solid var(--accent, #2a6fdb); outline-offset: 1px; }
+@media (max-width: 420px) { .sysbtns { grid-template-columns: 1fr; } }
+td.calc { color: var(--muted, #6b7785); font-variant-numeric: tabular-nums; text-align: right; padding-right: 8px; }
+textarea.mono { width: 100%; font-family: ui-monospace, Consolas, monospace; font-size: 13px; resize: vertical; }
+h3.sub-h { margin: 12px 0 6px; font-size: 13px; }
+details.seps { margin-top: 8px; }
+details.seps summary { cursor: pointer; font-size: 13px; }
+table.matrix.compact th, table.matrix.compact td { padding: 3px 7px; font-size: 12px; }
+
+/* multiwell well table: room for every column (scrolls sideways in a narrow panel) */
+[data-group="wells"] table.edit { min-width: 720px; }
+[data-group="wells"] table.edit th { white-space: nowrap; }
+td.calc { display: table-cell; white-space: nowrap; min-width: 54px; }
+[data-group="wells"] table.edit select { min-width: 74px; padding: 3px 4px; font-size: 12px; }

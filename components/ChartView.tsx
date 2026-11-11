@@ -154,7 +154,7 @@ export default function ChartView({ spec, title, filename }: Props) {
       </div>
       <div
         ref={box}
-        className="chartsvg"
+        className={`chartsvg kind-${spec.kind}`}
         role="img"
         aria-label={title}
         onMouseDown={onMouseDown}

@@ -26,6 +26,10 @@ export interface ReportData {
   nPoints: number;
   horizon: number;
   pLabel: string;
+  /** pressure model: two-phase CO2-brine (three-zone), single-phase CO2 or single-phase water */
+  model: "two" | "co2" | "water";
+  modelLabel: string;
+  evaporation: boolean;
   paramHead: string[];
   paramRows: string[][];
   wellHead: string[];
@@ -35,7 +39,8 @@ export interface ReportData {
   boundaryDesc: string;
   coordDesc: string;
   skinDesc: string;
-  limits: { p0: string; pfrac: string; safety: string; maxBuildup: string; maxBhp: string };
+  /** the program's pressure check: a sentence describing it, and the allowable BHP / buildup ("–" when not assessed) */
+  limits: { p0: string; check: string; assessed: boolean; maxBuildup: string; maxBhp: string };
   kpi: { worst: string; peak: string; at: string; allowable: string; exceeded: boolean; scale: string; interferenceShare: number };
   peakHead: string[];
   peakRows: string[][];
@@ -53,7 +58,6 @@ export interface ReportData {
   driverHead: string[];
   driverRows: string[][];
   driverSentence: string;
-  threeZone: boolean;
   zoneHead: string[];
   zoneRows: string[][];
   zoneNote: string;
@@ -62,6 +66,10 @@ export interface ReportData {
   satHead: string[];
   satRows: string[][];
   satSentence: string;
+  bhpHead: string[];
+  /** cumulative injected mass of the field at the end of injection */
+  injectedTotal: string;
+  bhpRows: string[][];
   figures: { sat?: FigureData; map?: FigureData; bhp?: FigureData; drivers?: FigureData; compare?: FigureData };
   warnings: string[];
 }
@@ -74,85 +82,94 @@ export function buildBlocks(d: ReportData): Block[] {
   const E = (text: string): Block => ({ t: "eq", text, n: ++eq });
   const T = (caption: string, head: string[], rows: string[][], note?: string): Block => ({ t: "table", caption: `Table ${++tab}. ${caption}`, head, rows, note });
   const F = (f: FigureData | undefined, caption: string): Block[] => (f ? [{ t: "fig", caption: `Figure ${++fig}. ${caption}`, png: f.png, w: f.w, h: f.h }] : []);
+  const two = d.model === "two";
+  const fluid = d.model === "water" ? "water" : "CO₂";
 
-  b.push({ t: "title", title: "Pressure Interference Analysis for Multi-Well CO₂ Injection into a Saline Aquifer", subtitle: d.project || undefined, author: d.author || undefined, date: d.date });
+  b.push({ t: "title", title: `Pressure Interference Analysis for Multi-Well ${d.model === "water" ? "Water" : "CO₂"} Injection into a Saline Aquifer`, subtitle: d.project || undefined, author: d.author || undefined, date: d.date });
   b.push({
     t: "abstract",
     text:
-      `A screening-level pressure interference analysis was carried out for ${d.nWells} CO₂ injection well${d.nWells === 1 ? "" : "s"} operating in a confined saline aquifer over a ${d.horizon}-year horizon. ` +
-      `Pressure buildup was computed with the Theis line-source solution, superposed in space and time over all wells, with the aquifer boundary condition represented by image wells and the near-well pressure drop represented by skin. ` +
-      `The highest wellbore buildup is ${d.kpi.peak} (${d.kpi.worst}, ${d.kpi.at}) against an allowable buildup of ${d.kpi.allowable}; the field therefore ${d.kpi.exceeded ? "exceeds" : "remains within"} the pressure limit. ` +
-      `${d.kpi.interferenceShare}% of the peak buildup at the controlling well is caused by interference from the other wells.`,
-    keywords: "CO₂ storage; pressure interference; superposition; Theis solution; skin; saline aquifer",
+      `A screening-level pressure interference analysis was carried out for ${d.nWells} ${fluid} injection well${d.nWells === 1 ? "" : "s"} operating in a confined saline aquifer over a ${d.horizon}-year horizon. ` +
+      `The bottom-hole pressure of each well was computed with an injection-BHP model (${d.modelLabel}) in which the pressure-dependent fluid properties are converged with the bottom-hole pressure; the pressure fields of all wells were superposed, with the aquifer boundary represented by image wells and the near-well pressure drop represented by skin. ` +
+      (d.limits.assessed
+        ? `The highest wellbore buildup is ${d.kpi.peak} (${d.kpi.worst}, ${d.kpi.at}) against an allowable buildup of ${d.kpi.allowable}; the field therefore ${d.kpi.exceeded ? "exceeds" : "remains within"} the pressure limit. `
+        : `The highest wellbore buildup is ${d.kpi.peak} (${d.kpi.worst}, ${d.kpi.at}); no pressure limit was supplied. `) +
+      `${d.kpi.interferenceShare}% of the peak buildup at the controlling well is caused by interference from the other wells. ` +
+      `By the end of injection the field has injected ${d.injectedTotal} of ${fluid}.`,
+    keywords: `${fluid} injection; bottom-hole pressure; pressure interference; superposition; ${two ? "three-zone model; Peng–Robinson; " : ""}skin; saline aquifer`,
   });
 
   b.push({ t: "h1", text: "1. Introduction" });
-  b.push({ t: "p", text: "Injecting CO₂ into a saline aquifer displaces brine and raises the formation pressure well beyond the CO₂ plume. When several injectors operate in the same aquifer, their pressure fields overlap, and the buildup at any one well is the sum of its own response and the interference from its neighbours. This report quantifies that interference, compares it with a pressure limit derived from the fracture gradient, and examines the sensitivity of the result to the aquifer boundary condition and to near-well skin." });
+  b.push({ t: "p", text: `Injecting ${fluid} into a saline aquifer raises the formation pressure well beyond the injected volume. When several injectors operate in the same aquifer, their pressure fields overlap, and the bottom-hole pressure at any one well is the sum of its own response and the interference from its neighbours. This report quantifies that interference, compares it with the pressure limit chosen for the study, and examines the sensitivity of the result to the aquifer boundary condition and to near-well skin.` });
 
   b.push({ t: "h1", text: "2. Methodology" });
-  b.push({ t: "h2", text: "2.1 Single-well pressure response" });
-  b.push({ t: "p", text: "The aquifer is treated as homogeneous, isotropic and confined, with single-phase slightly compressible radial flow. The injected CO₂ mass is converted to an equivalent reservoir-volume rate q using the CO₂ density at reservoir conditions, and brine viscosity is used throughout (brine-equivalent approach). The buildup at distance r and time t is given by the Theis line-source solution (Theis, 1935):" });
-  b.push(E("Δp(r, t) = q μ / (4π k h) · E₁(r² / 4ηt),   η = k / (φ μ c_t)"));
-  b.push({ t: "p", text: "where k is permeability, h thickness, μ viscosity, φ porosity, c_t total compressibility, η the hydraulic diffusivity and E₁ the exponential integral:" });
-  b.push(E("E₁(u) = integral of ( e^(−s) / s ) ds, taken from s = u to infinity"));
-  if (d.threeZone) b.push({ t: "p", text: "In this analysis the single-phase pressure function p_D is replaced by the three-zone CO₂–brine function of Section 2.8; the Theis expression above is its limit when all three zones have the properties of brine." });
-  b.push({ t: "h2", text: "2.2 Multi-well superposition and shut-in" });
-  b.push({ t: "p", text: "Because the governing equation is linear, the buildup at any point is the sum of the contributions of all wells and of all rate changes of each well. A well i that injects at rates q_i,1, q_i,2, …, q_i,N (each in force until the next change) is represented by one single-well solution per rate change, with the elapsed time since that change; the final change is the shut-in (q = 0), which superposes a negative rate and makes the pressure recover towards the initial value:" });
-  b.push(E("Δp(x, t) = Σ_i Σ_j (q_i,j − q_i,j−1) · μ / (4π k h) · E₁( r_i² / 4η (t − t_i,j−1) ),   q_i,0 = 0"));
+  b.push({ t: "h2", text: "2.1 Single-well injection pressure" });
+  b.push({ t: "p", text: "Each well follows the injection bottom-hole-pressure model supplied for this study, in field units (psia, ft, mD, cP; one year = 365.25 days). The reservoir is homogeneous and infinite-acting with one permeability k and porosity φ for all zones, constant temperature and constant viscosities. The pressure increase of one well injecting at a constant surface rate q for an elapsed time t is" });
+  b.push(E("Δp = 141.2 μ q B / (k h) · ( p_D + s )"));
+  if (two) {
+    b.push({ t: "p", text: "In the two-phase CO₂–brine model three zones form around the well: dry CO₂ (zone 1, r_w ≤ r ≤ r_d), CO₂ + brine (zone 2, r_d < r ≤ r_g) and brine (zone 3, r > r_g). The prefactor uses the gas viscosity μ_g and the gas formation volume factor B_g, and the dimensionless pressure is referenced to the dry-CO₂ zone (p_D = p_D,gas / k_rg1). In each zone" });
+    b.push(E("p_D,n(r_D, t_D) = a_n + b_n E₁( r_D² / 4 D_n t_D ),   r_D = r / r_w,   t_D = k k_rg1 t / (μ_g φ c_t1 r_w²)"));
+    b.push({ t: "p", text: "where E₁ is the exponential integral, m_n = Λ_n / Λ_1 is the mobility ratio (Λ_1 = k k_rg1 / μ_g, Λ_2 = k (k_rg2 / μ_g + k_rw2 / μ_w), Λ_3 = k / μ_w), c*_n = c_tn / c_t1 the storage ratio (c_t1 = c_g + c_r, c_t2 = S_g2 c_g + S_w2 c_w + c_r, c_t3 = c_w + c_r) and D_n = m_n / c*_n. The constants follow from the line-source condition, the far-field condition (a_3 = 0) and continuity of pressure and flux at the two fronts:" });
+    b.push(E("b_1 = 1 / 2m_1,   b_2 = e^(u_2d − u_1d) / 2m_2,   b_3 = e^((u_2d − u_1d) + (u_3g − u_2g)) / 2m_3,   a_2 = b_3 E₁(u_3g) − b_2 E₁(u_2g),   a_1 = a_2 + b_2 E₁(u_2d) − b_1 E₁(u_1d)"));
+    b.push({ t: "p", text: "with u_nd = r_dD² / 4 D_n t_D and u_ng = r_gD² / 4 D_n t_D. The gas front follows from the Corey leading-shock condition (both exponents 3: (M_λ − 1) s_f³ + 3 s_f − 2 = 0, F = (s_f + 2) / (3 s_f (1 − S_wr)); both exponents 2: the matching quadratic front), with M_λ = k_rg0 μ_w / (k_rw0 μ_g) and V_r the cumulative reservoir volume of CO₂ (surface volume × B_g):" });
+    b.push(E("r_g = √( r_w² + F V_r / (π φ h) )"));
+    b.push({ t: "p", text: d.evaporation
+      ? "Next to the well the CO₂ evaporates the residual brine. With the water mole fraction in the CO₂ y_w = a_w P_sat / P (IAPWS saturation pressure, NaCl water activity) and c_eq = (M_w / M_CO2) y_w / (1 − y_w), the dry front is"
+      : "Evaporation was not included in this analysis (y_w = c_eq = α_d = 0), so the dry front stays at the wellbore (r_d = r_w) and there is no dry zone. With evaporation the dry front would be" });
+    b.push(E("r_d = √( r_w² + α_d V_r / (π φ h) ),   α_d = ρ_g c_eq / ( ρ_b (1 − X_s) S_wr + ρ_g c_eq (1 − S_wr) )"));
+    b.push({ t: "p", text: "The zone 2 gas saturation S_g2 follows from the CO₂ mass balance (injected mass less the CO₂ in the dry zone, divided by the zone 2 pore volume), and gives the zone 2 relative permeabilities k_rg2 = k_rg0 x^n_g and k_rw2 = k_rw0 (1 − x)^n_w with x = S_g2 / (1 − S_wr); the zone 2 mobility is Λ_2 = k (k_rg2 / μ_g + k_rw2 / μ_w). The CO₂ properties (compressibility factor Z, compressibility c_g, density ρ_g = p M / (Z R T) and B_g) come from the Peng–Robinson equation of state for pure CO₂ and are evaluated at the bottom-hole pressure itself: at each time the equation P = P_i + Δp(t, P) is solved by fixed-point iteration (Brent's method once the residual changes sign) until the residual is below 10⁻⁴ psi." });
+  } else if (d.model === "co2") {
+    b.push({ t: "p", text: "In the single-phase CO₂ model the reservoir is initially filled with CO₂ (relative permeability 1). B_g is fixed at 0.0005690187 rb/scf, and the CO₂ density and compressibility c_g are fixed at their Peng–Robinson values at the initial pressure and reservoir temperature; c_t = c_g + c_r and μ = μ_g. The dimensionless pressure is the line-source solution" });
+    b.push(E("p_D = ½ E₁( 1 / 4t_D ),   t_D = k t / (μ φ c_t r_w²)"));
+  } else {
+    b.push({ t: "p", text: "In the single-phase water model the reservoir is initially filled with water (relative permeability 1), B_w = 1.0 rb/STB at all pressures, c_t = c_w + c_r and μ = μ_w; the water density is ρ_w(P) = ρ_w(P_i) exp(c_w (P − P_i)). The dimensionless pressure is the line-source solution" });
+    b.push(E("p_D = ½ E₁( 1 / 4t_D ),   t_D = k t / (μ φ c_t r_w²)"));
+  }
+  b.push({ t: "h2", text: "2.2 Multiwell interference and shut-in" });
+  b.push({ t: "p", text: "The single-well expressions above give the pressure increase at any radius r around a well (the same profile is used at the well, r = r_w, and away from it). Following the multiwell section of the model, the pressure at every well is the sum of the profiles of all sources at their distances from it (the well itself at its own radius), so the bottom-hole pressure of a well is the initial pressure plus its own formation response, its skin and the interference from the other wells; skin acts only at the well itself. Each two-phase source has its own constant rate, start year, radius, skin and evaporation choice; its Peng–Robinson properties and fronts are evaluated at its own total bottom-hole pressure, including the pressure from its neighbours, by solving the coupled system of all wells at each time (damped fixed-point iteration to 10⁻⁴ psi). This is a representative-property multiphase superposition approximation; overlapping plumes are flagged, not resolved. Single-phase sources may change rate; their constant-property line-source responses are superposed in time:" });
+  b.push(E("Δp(x, t) = Σ_i Σ_j (q_i,j − q_i,j−1) · ½ E₁( r_i² φ μ c_t / (4 k (t − t_i,j)) ) · 141.2 μ B / (k h)"));
+  b.push({ t: "p", text: "All wells stop at the project endpoint. With post-shut-in observation, each source's final pressure profile then diffuses at zero rate with its zone radii, mobilities and storage frozen at shut-in (fixed-zone falloff approximation; finite-volume radial grid), and the sources are again added at every well. At the instant of shut-in the flowing skin drop is removed." });
   b.push({ t: "h2", text: "2.3 Boundary conditions" });
   b.push({ t: "p", text: "Three conditions were evaluated: an infinite-acting aquifer; a constant-pressure boundary; and a no-flow (sealing) boundary. The bounded cases are solved with the method of images (Matthews and Russell, 1967): each well is mirrored across the straight boundary, and the image carries the same sign for a no-flow boundary (pressure is reinforced) and the opposite sign for a constant-pressure boundary (pressure is relieved):" });
   b.push(E("Δp = Δp_real ± Δp_image,   x′ = 2x_b − x"));
   b.push({ t: "h2", text: "2.4 Well skin" });
-  b.push({ t: "p", text: "Near-well damage adds a steady pressure drop across the skin zone of the injector, acting only on that well and only while it injects (Earlougher, 1977):" });
-  b.push(E("Δp_s = q μ s / (2π k h)"));
-  b.push({ t: "p", text: `${d.skinDesc} Where the skin factor was calculated from a damaged zone, the Hawkins (1956) relation was used:` });
-  b.push(E("s = (k / k_s − 1) ln(r_s / r_w)"));
+  b.push({ t: "p", text: "Near-well damage adds a steady pressure drop across the skin zone of the injector, acting only on that well and only while it injects (the s term of Equation 1):" });
+  b.push(E("Δp_s = 141.2 μ q B s / (k h)"));
+  b.push({ t: "p", text: d.skinDesc });
   b.push({ t: "h2", text: "2.5 Pressure limit" });
-  b.push({ t: "p", text: "The allowable buildup is the safety-factored fracture pressure less the initial pressure, using hydrostatic and fracture gradients applied at the injection depth D:" });
-  b.push(E("Δp_max = f · G_f · D − G_h · D"));
-
-  b.push({ t: "h2", text: "2.6 CO₂ saturation" });
-  b.push({ t: "p", text: "The CO₂ plume around each injector is described by the radial Buckley–Leverett (Welge) solution for CO₂ displacing brine at the volumetric injection rate q. A given saturation S_g sits at radius r at time t according to" });
-  b.push(E("r²(S_g, t) = q t / (π φ h) · df_g/dS_g"));
-  b.push({ t: "p", text: "where the fractional flow of CO₂ follows from Corey relative permeabilities:" });
-  b.push(E("f_g = 1 / (1 + k_rw μ_g / (k_rg μ_w)),   k_rw = (1 − S*)^n_w,   k_rg = k_rg,max · S*^n_g,   S* = S_g / (1 − S_wr)"));
-  b.push({ t: "p", text: "The saturation jumps at the plume front to the Welge tangent value, where df_g/dS_g equals f_g/S_g. Overlapping plumes of neighbouring wells are added and capped at 1 − S_wr, and each plume stops growing at the end of injection of its well. Gravity override, dissolution, capillary effects and residual trapping are not included." });
-
-  b.push({ t: "p", text: "For quadratic Corey curves the shock saturation and the front radius reduce to closed form, which was used to verify the numerical solution (β_g is the slope of the fractional-flow curve at the front and M_λ the end-point mobility ratio):" });
-  b.push(E("r_g(t) = √( r_w² + β_g V(t) / (π φ h) ),   β_g = (1 + √(1 + M_λ)) / (2 (1 − S_wr)),   M_λ = k_rg0 μ_w / (k_rw0 μ_g)"));
-  b.push({ t: "h2", text: "2.7 Dry-zone radius" });
-  b.push({ t: "p", text: "Next to the injector the CO₂ evaporates the brine and leaves a dry zone. A water balance at the moving dry front, using the cumulative reservoir volume V(t) of CO₂ injected, gives" });
-  b.push(E("r_d(t) = √( r_w² + α_d V(t) / (π φ h) ),   α_d = ρ_g c_eq / ( ρ_b (1 − X_s) S_wr + ρ_g c_eq (1 − S_wr) )"));
-  b.push({ t: "p", text: "where c_eq is the mass of water carried per mass of CO₂ at equilibrium. It follows from equality of the water fugacity in the CO₂-rich phase and in the brine, using the IAPWS saturation pressure P_sat(T), a Poynting correction Π_w and the NaCl water activity a_w (screening value Φ_w ≈ 1 unless a different fugacity coefficient is entered). It is evaluated at the initial reservoir pressure P:" });
-  b.push(E("y_w = a_w P_sat Π_w / (Φ_w P),   c_eq = (M_w / M_CO2) · y_w / (1 − y_w),   Π_w = exp[ V_w (P − P_sat) / (R T) ]"));
-
-  if (d.threeZone) {
-    b.push({ t: "h2", text: "2.8 Three-zone pressure kernel" });
-    b.push({ t: "p", text: "Injected CO₂ displaces brine and creates three regions around each well: a dry CO₂ zone (zone 1, r ≤ r_d), a CO₂–brine two-phase zone (zone 2, r_d < r ≤ r_g) and the undisturbed brine zone (zone 3, r > r_g). Each zone has its own mobility and diffusivity, and in each zone the dimensionless pressure has the similarity form" });
-    b.push(E("P_D,n(r_D, t_D) = a_n + b_n E₁( r_D² / 4 D_n t_D ),   n = 1, 2, 3"));
-    b.push({ t: "p", text: "with r_D = r / r_w, t_D = k t / (μ_w φ c_t r_w²) and the brine zone as reference. The zone diffusivity ratio is D_n = m_n / c*_n, where m_n = Λ_n / Λ_0 is the mobility ratio (Λ_0 = k / μ_w) and c*_n = c_t,n / c_t the storage ratio. The mobility ratios are m_1 = k_rg,1 μ_w / μ_g, m_2 = k_rg(S̄) μ_w / μ_g + k_rw(S̄) at the average saturation S̄ = 1/β_g behind the front, and m_3 = 1; the zone compressibilities are c_t,1 = c_f + c_g, c_t,2 = c_f + (1 − S̄) c_w + S̄ c_g and c_t,3 = c_t. The constants follow from the line-source condition (b_1 = 1 / 2m_1), the far-field condition (a_3 = 0) and continuity of pressure and flux at the two fronts:" });
-    b.push(E("b_2 = e^(u_2d − u_1d) / 2m_2,   b_3 = e^((u_2d − u_1d) + (u_3g − u_2g)) / 2m_3,   a_2 = b_3 E₁(u_3g) − b_2 E₁(u_2g),   a_1 = a_2 + b_2 E₁(u_2d) − b_1 E₁(u_1d)"));
-    b.push({ t: "p", text: "Here u_nd = r_dD² / 4 D_n t_D and u_ng = r_gD² / 4 D_n t_D are constants because the dry front r_d and the gas front r_g both grow with √t (Sections 2.6 and 2.7). The pressure change is Δp = q μ_w P_D / (2π k h) plus the skin term. For a variable rate each rate change is represented by this kernel evaluated with the rate of the period that starts at that change (a shut-in uses the rate it stops), and the contributions are added by superposition in time." });
+  b.push({ t: "p", text: "The pressure check of the model compares the required bottom-hole pressure with a user-specified allowable value at every computed time: either a maximum allowable bottom-hole pressure, or a fraction f of the fracture pressure P_frac (a user choice, not a regulatory rule); a well may also carry its own maximum. PASS means the required BHP does not exceed the allowable BHP; rates are not reduced automatically, and the check concerns operating pressure, not mechanical well integrity." });
+  b.push(E("BHP_allow = f · P_frac   (or the maximum allowable BHP),   Δp_max = BHP_allow − P_i"));
+  if (two) {
+    b.push({ t: "h2", text: "2.6 CO₂ saturation map" });
+    b.push({ t: "p", text: "The saturation map places, around each injector, the radial Buckley–Leverett (Welge) saturation profile for that well's cumulative reservoir volume of CO₂ V_r, with the same Corey relative permeabilities:" });
+    b.push(E("r²(S_g) = V_r / (π φ h) · df_g/dS_g,   f_g = 1 / (1 + k_rw μ_g / (k_rg μ_w))"));
+    b.push({ t: "p", text: "Where the plumes of neighbouring wells overlap, the map shows the higher of their saturations, so each plume keeps its own profile from the well outward. Gravity override, dissolution, capillary effects and residual trapping are not included." });
   }
 
   b.push({ t: "h1", text: "3. Input Data" });
-  b.push({ t: "p", text: `Aquifer, fluid and pressure-limit parameters are listed in Table ${tab + 1}, and the well and monitoring-point data in Tables ${tab + 2} and ${tab + 3}. ${d.coordDesc} ${d.boundaryDesc}` });
-  b.push(T("Aquifer, fluid and pressure-limit input parameters.", d.paramHead, d.paramRows));
-  b.push(T("Injection well data (coordinates, CO₂ injection rate, injection period and skin factor).", d.wellHead, d.wellRows));
-  if (d.threeZone) b.push(T("Zone properties of the three-zone pressure model.", d.zoneHead, d.zoneRows, d.zoneNote));
+  b.push({ t: "p", text: `Reservoir, fluid and pressure-limit parameters are listed in Table ${tab + 1}, and the well and monitoring-point data in Tables ${tab + 2} and ${tab + 3}. ${d.coordDesc} ${d.boundaryDesc}` });
+  b.push(T("Reservoir, fluid and pressure-limit input parameters.", d.paramHead, d.paramRows));
+  b.push(T(`Injection well data (coordinates, surface ${fluid} injection rate, injection period and skin factor).`, d.wellHead, d.wellRows));
   if (d.scheduleRows.length) b.push(T("Rate changes of the injection wells (the new rate is in force from the stated year until the next change or the shut-in at the end year).", d.scheduleHead, d.scheduleRows));
   if (d.pointRows.length) b.push(T("Monitoring points.", d.pointHead, d.pointRows));
 
   b.push({ t: "h1", text: "4. Results" });
-  b.push({ t: "h2", text: "4.1 CO₂ saturation and plume extent" });
-  b.push({ t: "p", text: d.satSentence });
-  b.push(T(`CO₂ plume of each well at t = ${d.matrixTime}.`, d.satHead, d.satRows));
-  b.push(...F(d.figures.sat, `CO₂ saturation map at t = ${d.matrixTime}, showing the plume of each injector.`));
-  b.push({ t: "h2", text: "4.2 Pressure buildup and limit check" });
-  b.push({ t: "p", text: `The pressure limits at the injection depth are an initial pressure of ${d.limits.p0}, a fracture pressure of ${d.limits.pfrac} and, with a safety factor of ${d.limits.safety}, an allowable buildup of ${d.limits.maxBuildup} (maximum allowable bottomhole pressure ${d.limits.maxBhp}). Table ${tab + 1} gives the peak wellbore buildup of each well, split into the well's own response, skin and interference from the other wells. Pass/fail is judged against the allowable buildup only; the interference threshold of ${d.arrivalThreshold} is not a pass/fail limit and is used solely to define the detection contour, the arrival times and the monitoring-point check.` });
+  b.push({ t: "h2", text: "4.1 Bottom-hole pressure of each well" });
+  b.push({ t: "p", text: `Table ${tab + 1} gives the bottom-hole pressure of each well at the end of its injection period and at the end of the analysis horizon, including interference from the other wells, and the mass of ${fluid} each well has injected by the end of its injection (standard-condition density × injected surface volume); the field has injected ${d.injectedTotal} in total. Table ${tab + 2} lists the zone properties of the controlling well.` });
+  b.push(T(`Bottom-hole pressure of each well (${d.pLabel}).`, d.bhpHead, d.bhpRows));
+  if (d.zoneRows.length) b.push(T("Zone properties of the pressure model for the controlling well.", d.zoneHead, d.zoneRows, d.zoneNote));
+  if (two) {
+    b.push({ t: "h2", text: "4.2 CO₂ zones and plume extent" });
+    b.push({ t: "p", text: d.satSentence });
+    b.push(T(`CO₂ zones of each well at t = ${d.matrixTime}.`, d.satHead, d.satRows));
+    b.push(...F(d.figures.sat, `CO₂ saturation map at t = ${d.matrixTime}, showing the plume of each injector.`));
+  }
+  const s = two ? 3 : 2;
+  b.push({ t: "h2", text: `4.${s} Pressure buildup and limit check` });
+  b.push({ t: "p", text: `The initial pressure is ${d.limits.p0}. ${d.limits.check}${d.limits.assessed ? `, that is an allowable buildup of ${d.limits.maxBuildup}` : ""}. Table ${tab + 1} gives the peak wellbore buildup of each well, split into the well's own response, skin and interference from the other wells. Pass/fail is judged against the allowable bottom-hole pressure only; the interference threshold of ${d.arrivalThreshold} is not a pass/fail limit and is used solely to define the detection contour, the arrival times and the monitoring-point check.` });
   b.push(T(`Peak wellbore pressure buildup per well (${d.pLabel}) and comparison with the allowable buildup.`, d.peakHead, d.peakRows));
   b.push(...F(d.figures.bhp, `Bottomhole pressure of each well and monitoring point, with the field-maximum and field-average curves and the maximum allowable bottomhole pressure.`));
-  b.push({ t: "h2", text: "4.3 Well-to-well interference" });
+  b.push({ t: "h2", text: `4.${s + 1} Well-to-well interference` });
   b.push({ t: "p", text: `Table ${tab + 1} gives the pressure that each injector (row) contributes at every well (column) at t = ${d.matrixTime}; the diagonal is each well's own buildup including skin. Table ${tab + 2} gives the time at which a single source well raises the pressure at each target by ${d.arrivalThreshold}.` });
   b.push(T(`Interference matrix at t = ${d.matrixTime} (${d.pLabel}).`, d.matrixHead, d.matrixRows));
   b.push(T(`Arrival time (years) of a pressure rise of ${d.arrivalThreshold} from each source well at each target.`, d.arrivalHead, d.arrivalRows, "A dash indicates the threshold is not reached within the injection period and analysis horizon."));
@@ -161,27 +178,30 @@ export function buildBlocks(d: ReportData): Block[] {
     b.push(T(`Monitoring points compared with the interference threshold of ${d.arrivalThreshold}.`, d.pointCheckHead, d.pointCheckRows));
   }
   b.push(...F(d.figures.map, `Pressure buildup map at t = ${d.matrixTime}, with the interference-threshold and allowable-buildup contours.`));
-  b.push({ t: "h2", text: "4.4 Sensitivity to the boundary condition" });
+  b.push({ t: "h2", text: `4.${s + 2} Sensitivity to the boundary condition` });
   b.push({ t: "p", text: d.compareSentence });
   b.push(T(`Peak wellbore buildup (${d.pLabel}), skin included, for the three boundary conditions.`, d.compareHead, d.compareRows));
   b.push(...F(d.figures.compare, "Wellbore buildup of the controlling well for the three boundary conditions."));
-  b.push({ t: "h2", text: "4.5 Drivers of the field-maximum pressure" });
+  b.push({ t: "h2", text: `4.${s + 3} Drivers of the field-maximum pressure` });
   b.push({ t: "p", text: d.driverSentence });
   b.push(T(`Contributions to the field-maximum buildup (${d.pLabel}) at the time of the peak.`, d.driverHead, d.driverRows));
   b.push(...F(d.figures.drivers, "Field-maximum buildup split by source well and skin over time."));
 
   b.push({ t: "h1", text: "5. Discussion" });
-  b.push({ t: "p", text: `${d.kpi.exceeded ? `The analysis indicates that the allowable buildup is exceeded at ${d.kpi.worst}.` : `The analysis indicates that the allowable buildup is not exceeded at any well.`} Because the model is linear in injection rate, scaling all rates by a factor of ${d.kpi.scale} brings the worst well exactly to the limit; this factor is a first-order guide to the rate reduction (or headroom) available. The comparison of boundary conditions brackets the result: a sealing boundary is the conservative case and a constant-pressure boundary the optimistic one, and the true boundary behaviour of the formation should be established from geological data and pressure monitoring.` });
+  b.push({ t: "p", text: `${!d.limits.assessed ? "No pressure limit was supplied, so the wells were not assessed against one." : d.kpi.exceeded ? `The analysis indicates that the allowable buildup is exceeded at ${d.kpi.worst}.` : `The analysis indicates that the allowable buildup is not exceeded at any well.`} The pressure model is close to linear in injection rate (the fluid properties depend only weakly on pressure), so scaling all rates by a factor of about ${d.kpi.scale} brings the worst well to the limit; this factor is a first-order guide to the rate reduction (or headroom) available. The comparison of boundary conditions brackets the result: a sealing boundary is the conservative case and a constant-pressure boundary the optimistic one, and the true boundary behaviour of the formation should be established from geological data and pressure monitoring.` });
   if (d.warnings.length) b.push({ t: "p", text: `Input checks raised the following notes: ${d.warnings.join(" ")}` });
 
   b.push({ t: "h1", text: "6. Assumptions and Limitations" });
   b.push({
     t: "bullets",
     items: [
-      "Homogeneous, isotropic, confined aquifer of constant thickness; no leakage through the caprock.",
-      "Brine-equivalent single-phase flow: the CO₂ is converted to reservoir volume and brine viscosity is used everywhere. This overstates near-well pressure because CO₂ is less viscous than brine, but is reasonable for far-field interference.",
-      "Wells are evaluated at the wellbore radius with a constant skin factor; wellbore storage, non-Darcy flow and CO₂-mobility effects are not modelled. The pressure kernel is either the single-phase (brine-equivalent) Theis solution or the three-zone CO₂–brine kernel; zone properties are taken at the average saturation behind the front, and the kernel treats the fronts as sharp.",
-      "A single straight boundary is represented by image wells; multiple faults, heterogeneity, dissolution and brine production are not modelled.",
+      "Homogeneous, confined, infinite-acting aquifer of constant thickness, with one permeability and porosity for all zones, constant temperature and viscosities; no leakage through the caprock.",
+      two
+        ? "The front radii use a representative-pressure approximation (properties at the bottom-hole pressure); this is not a spatially resolved coupled displacement/evaporation model, and the fronts are treated as sharp. The equations have not been fitted to simulation."
+        : `The single-phase ${fluid} model uses the slightly-compressible line-source solution with constant fluid properties; it does not model ${d.model === "co2" ? "CO₂ displacing brine" : "any CO₂"}.`,
+      "The multiwell section of the model superposes the single-well radial pressure profiles with representative properties at each well's own bottom-hole pressure; with interacting fronts or strongly pressure-dependent properties this is an approximation, and overlapping plumes are flagged rather than resolved. Image wells for a boundary are an addition of this analysis. After shut-in the zones are frozen (fixed-zone falloff).",
+      "Wells are evaluated at the wellbore radius with a constant skin factor; wellbore storage, non-Darcy flow, gravity override, dissolution and trapping are not modelled.",
+      "A single straight boundary is represented by image wells; multiple faults, heterogeneity and brine production are not modelled.",
       "The results are intended for screening and ranking of well layouts and should be confirmed with numerical reservoir simulation before engineering decisions are made.",
     ],
   });
@@ -191,9 +211,9 @@ export function buildBlocks(d: ReportData): Block[] {
     items: [
       "Buckley, S.E., Leverett, M.C., 1942. Mechanism of fluid displacement in sands. Transactions of the AIME, 146, 107–116.",
       "Earlougher, R.C., Jr., 1977. Advances in Well Test Analysis. SPE Monograph Series, Vol. 5. Society of Petroleum Engineers, Richardson, TX.",
-      "Hawkins, M.F., Jr., 1956. A note on the skin effect. Transactions of the AIME, 207, 356–357.",
       "Matthews, C.S., Russell, D.G., 1967. Pressure Buildup and Flow Tests in Wells. SPE Monograph Series, Vol. 1. Society of Petroleum Engineers, New York.",
-      "Theis, C.V., 1935. The relation between the lowering of the piezometric surface and the rate and duration of discharge of a well using ground-water storage. Transactions of the American Geophysical Union, 16(2), 519–524.",
+      "Peng, D.-Y., Robinson, D.B., 1976. A new two-constant equation of state. Industrial & Engineering Chemistry Fundamentals, 15(1), 59–64.",
+      "Wagner, W., Pruss, A., 1993. International equations for the saturation properties of ordinary water substance. Journal of Physical and Chemical Reference Data, 22(3), 783–787.",
       "Welge, H.J., 1952. A simplified method for computing oil recovery by gas or water drive. Transactions of the AIME, 195, 91–98.",
     ],
   });

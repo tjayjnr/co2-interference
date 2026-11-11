@@ -1,6 +1,6 @@
 import type { Point, Well } from "./physics";
 
-/** Editable well: coordinates may be local x/y (m) or lon/lat (deg); skin is typed text ("" = calculate). */
+/** Editable well: coordinates may be local x/y (m) or lon/lat (deg); skin is typed text ("" = 0). */
 export interface WellIn extends Well {
   skinText: string;
   lon?: number;
@@ -12,11 +12,11 @@ export interface PointIn extends Point {
   lat?: number;
 }
 
-const HEADER_LOCAL = "name,x_m,y_m,rate_Mtpa,start_yr,end_yr,skin,changes";
-const HEADER_GEO = "name,lon_deg,lat_deg,rate_Mtpa,start_yr,end_yr,skin,changes";
+const HEADER_LOCAL = "name,x_m,y_m,rate,start_yr,end_yr,skin,changes";
+const HEADER_GEO = "name,lon_deg,lat_deg,rate,start_yr,end_yr,skin,changes";
 
 export function wellsToCsv(wells: WellIn[], geo: boolean): string {
-  const rows = wells.map((w) => [w.name, geo ? w.lon ?? 0 : w.x, geo ? w.lat ?? 0 : w.y, w.rateMtpa, w.startYr, w.endYr, w.skinText, (w.changes ?? []).map((c) => `${c.yr}:${c.rateMtpa}`).join("|")].join(","));
+  const rows = wells.map((w) => [w.name, geo ? w.lon ?? 0 : w.x, geo ? w.lat ?? 0 : w.y, w.rate, w.startYr, w.endYr, w.skinText, (w.changes ?? []).map((c) => `${c.yr}:${c.rate}`).join("|")].join(","));
   return [geo ? HEADER_GEO : HEADER_LOCAL, ...rows].join("\n");
 }
 
@@ -34,9 +34,10 @@ export function toCsv(rows: (string | number)[][]): string {
 }
 
 /**
- * Parse a wells CSV. Local: name,x_m,y_m,rate_Mtpa,start_yr,end_yr[,skin].
- * Geographic (detected from a header containing "lon"): name,lon_deg,lat_deg,rate_Mtpa,start_yr,end_yr[,skin].
- * A blank skin means "calculate it". Optional last column "changes": rate changes as year:rate pairs separated by | (e.g. 8:0.5|15:0.2).
+ * Parse a wells CSV. Local: name,x_m,y_m,rate,start_yr,end_yr[,skin]. The rate is the surface rate of the pressure model:
+ * Mscf/day of CO2 (CO2 models) or STB/day of water (water model).
+ * Geographic (detected from a header containing "lon"): name,lon_deg,lat_deg,rate,start_yr,end_yr[,skin].
+ * A blank skin means 0. Optional last column "changes": rate changes as year:rate pairs separated by | (e.g. 8:0.5|15:0.2).
  * Header optional; , ; or tab delimited.
  */
 export function parseWellsCsv(text: string): { wells: WellIn[]; geo: boolean } {
@@ -61,7 +62,7 @@ export function parseWellsCsv(text: string): { wells: WellIn[]; geo: boolean } {
       .map((x) => {
         const [yr, q] = x.split(":").map(Number);
         if (!Number.isFinite(yr) || !Number.isFinite(q)) throw new Error(`Row ${i + 1}: rate changes must look like 8:0.5|15:0.2 (year:rate)`);
-        return { yr, rateMtpa: q };
+        return { yr, rate: q };
       });
     if (skinText !== "" && Number.isNaN(Number(skinText))) throw new Error(`Row ${i + 1}: skin must be a number or blank`);
     if (geo && (Math.abs(nums[1]) > 90 || Math.abs(nums[0]) > 180)) throw new Error(`Row ${i + 1}: longitude/latitude out of range`);
@@ -72,7 +73,7 @@ export function parseWellsCsv(text: string): { wells: WellIn[]; geo: boolean } {
       y: geo ? 0 : nums[1],
       lon: geo ? nums[0] : undefined,
       lat: geo ? nums[1] : undefined,
-      rateMtpa: nums[2],
+      rate: nums[2],
       startYr: nums[3],
       endYr: nums[4],
       skin: 0,

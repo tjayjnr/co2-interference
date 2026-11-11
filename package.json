@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --test tests/physics.test.mjs",
+    "test": "node --test tests/bhp.test.mjs tests/multiwell.test.mjs tests/field.test.mjs tests/physics.test.mjs",
     "manual": "node scripts/build-manual.mjs"
   },
   "dependencies": {
