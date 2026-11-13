@@ -10,7 +10,7 @@ import { downloadBlob, svgToPngDataUrl } from "@/lib/exportImage";
 import { injectedRateYears, limits, sourcesFor, timeGrid, type Boundary, type Point, type Well } from "@/lib/physics";
 import {
   BROWSER_PHASES, DEFAULT_INPUTS, DETAIL_FIELDS, calculateFirstYearDetail, calculateObservation, modelLabel, observationSchedule, outputFiles, parsePyFloat, pyFormat, pyStr,
-  isInt, pressureLimitSummary, referenceQuantities, runModel, summaryColumns, validate, withPressureLimit,
+  P_SC_PSIA, T_SC_F, coreyFrontQuantities, gasProperties, isInt, prState, pressureLimitSummary, runModel, summaryColumns, validate, waterProperties, withPressureLimit,
   type Inputs as BhpInputs, type LimitInput, type Row, type RunOutput,
 } from "@/lib/bhp";
 import { renderBhpPlot } from "@/lib/bhpPlot";
@@ -61,15 +61,14 @@ interface GeometryIn {
   matrix: string;
 }
 
-/** Fluid and rock-fluid inputs of the reference program (canonical units: cP, kg/m3, 1/MPa). */
+/** Fluid and rock-fluid inputs of the reference program (canonical units: cP, kg/m3, 1/MPa). CO2 viscosity, salinity,
+ * brine density at reservoir conditions and water compressibility are calculated by the program, not entered. */
 interface Fluids {
   muWater: number;
-  muGas: number;
+  /** measured brine density at standard conditions (60 °F, 14.696 psia); the salinity follows from it */
   brineDensityKgM3: number;
-  salt: number;
   swr: number;
   rockComp: number;
-  waterComp: number;
   krg0: number;
   krw0: number;
   krg1: number;
@@ -86,8 +85,8 @@ const DEFAULT_RES: Reservoir = {
 const DEFAULT_LIMIT: LimitIn = { mode: "fracture_fraction", maxBhpMPa: 4680 * PSI, fractureMPa: 5200 * PSI, fraction: 0.9 };
 const DEFAULT_GEOMETRY: GeometryIn = { mode: "constant", layout: "line", spacingM: 1000 * FT, method: "adjacent", adjacent: "", matrix: "" };
 const DEFAULT_FL: Fluids = {
-  muWater: B0.mu_water_cP, muGas: B0.mu_gas_cP, brineDensityKgM3: B0.brine_density_lb_ft3 * LB_FT3, salt: B0.salt_mass_fraction,
-  swr: B0.Swr, rockComp: B0.rock_compressibility_per_psi / PSI, waterComp: B0.water_compressibility_per_psi / PSI,
+  muWater: B0.mu_water_cP, brineDensityKgM3: B0.brine_standard_density_lb_ft3 * LB_FT3,
+  swr: B0.Swr, rockComp: B0.rock_compressibility_per_psi / PSI,
   krg0: B0.krg_endpoint, krw0: B0.krw_endpoint, krg1: B0.krg_zone1, ng: B0.corey_n_gas, nw: B0.corey_n_water,
   evaporation: B0.include_evaporation,
 };
@@ -99,18 +98,37 @@ function toBhp(r: Reservoir, f: Fluids, model: ModelKind, system: System = "sing
     ...B0,
     k_mD: r.permMd, h_ft: r.thicknessM / FT, rw_ft: system === "multi" ? B0.rw_ft : r.wellboreRadiusM / FT, porosity: r.porosity,
     initial_pressure_psia: r.initialMPa / PSI, temperature_F: (r.tempC * 9) / 5 + 32,
-    mu_water_cP: f.muWater, mu_gas_cP: f.muGas, brine_density_lb_ft3: f.brineDensityKgM3 / LB_FT3, salt_mass_fraction: f.salt,
-    Swr: f.swr, rock_compressibility_per_psi: f.rockComp * PSI, water_compressibility_per_psi: f.waterComp * PSI,
+    mu_water_cP: f.muWater, brine_standard_density_lb_ft3: f.brineDensityKgM3 / LB_FT3,
+    Swr: f.swr, rock_compressibility_per_psi: f.rockComp * PSI,
     krg_endpoint: f.krg0, krw_endpoint: f.krw0, krg_zone1: f.krg1, corey_n_gas: f.ng, corey_n_water: f.nw, skin: 0,
     phase_mode: model === "two" ? "two" : "single", single_phase_fluid: model === "water" ? "water" : "co2",
     include_evaporation: f.evaporation,
   };
 }
 
+/** The program's background properties at the initial pressure (calculated, never entered); null where not used. */
+interface BackgroundProps {
+  muGas: number | null; // cP
+  cw: number | null; // 1/psi
+  ppm: number | null; // salinity, mass ppm
+  rhoW: number | null; // brine density at initial pressure, lb/ft3
+  error: string | null;
+}
+function backgroundProps(b: BhpInputs): BackgroundProps {
+  try {
+    const water = b.phase_mode === "single" && b.single_phase_fluid === "water";
+    const w = b.phase_mode === "two" || water ? waterProperties(b.initial_pressure_psia, b) : null;
+    const muGas = water ? null : gasProperties(b.initial_pressure_psia, b.temperature_F, prState(P_SC_PSIA, T_SC_F).Z).mu_gas_cP;
+    return { muGas, cw: w ? w.cw_per_psi : null, ppm: w ? w.salinity_ppm : null, rhoW: w ? w.rho_water_lb_ft3 : null, error: null };
+  } catch (e) {
+    return { muGas: null, cw: null, ppm: null, rhoW: null, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 const MODEL_HELP: Record<ModelKind, string> = {
-  two: "Original three-zone model around each well: dry CO₂ next to the well, CO₂ + brine, then brine. CO₂ properties (Bg, cg, density) come from the Peng–Robinson equation of state for pure CO₂ at each well's bottom-hole pressure. Corey exponents must both be 3 (cubic) or both 2 (quadratic). Rates are in Mscf/day of CO₂.",
-  co2: "Initially CO₂-filled, homogeneous reservoir; relative permeability = 1. Bg is fixed at 0.0005690187 rb/scf; CO₂ density and cg are fixed at their Peng–Robinson values at the initial pressure and reservoir temperature. Rates are in Mscf/day of CO₂.",
-  water: "Initially water-filled reservoir; relative permeability = 1 and Bw fixed at 1.0 rb/STB. Water viscosity and compressibility are constants. Rates are in STB/day of water.",
+  two: "Original three-zone model around each well: dry CO₂ next to the well, CO₂ + brine, then brine. CO₂ properties (Bg, cg, density) come from the Peng–Robinson equation of state for pure CO₂ at each well's bottom-hole pressure; CO₂ viscosity, brine density and water compressibility are recalculated at every pressure trial, and the salinity follows from the standard brine density. Corey exponents must both be 3 (cubic) or both 2 (quadratic). Rates are in Mscf/day of CO₂.",
+  co2: "Initially CO₂-filled, homogeneous reservoir; relative permeability = 1. Bg is fixed at 0.0005690187 rb/scf; CO₂ density and cg are fixed at their Peng–Robinson values at the initial pressure and reservoir temperature. CO₂ viscosity is recalculated at every pressure trial from the live Peng–Robinson density. Rates are in Mscf/day of CO₂.",
+  water: "Initially water-filled reservoir; relative permeability = 1 and Bw fixed at 1.0 rb/STB. Water viscosity is an input; the brine density and water compressibility are calculated at every pressure trial from the temperature and the salinity (from the standard brine density). Rates are in STB/day of water.",
 };
 
 /** The program's default multiwell table: 4 wells, 150 Mscf/day, start year 0, radius 0.55 ft, skin 0 (1000 ft apart). */
@@ -649,7 +667,10 @@ export default function Page() {
   );
 
   // CO2 saturation (Buckley-Leverett plume around each injector, two-phase model only)
-  const sat: SatParams = useMemo(() => ({ swr: fl.swr, krgMax: fl.krg0, krwMax: fl.krw0, nw: fl.nw, ng: fl.ng, muCo2MPas: fl.muGas }), [fl]);
+  // CO2 viscosity of the plume model: the program's background value at the initial pressure
+  const bgApplied = useMemo(() => backgroundProps(bhpIn), [bhpIn]);
+  const muGasBg = bgApplied.muGas ?? 0.045;
+  const sat: SatParams = useMemo(() => ({ swr: fl.swr, krgMax: fl.krg0, krwMax: fl.krw0, nw: fl.nw, ng: fl.ng, muCo2MPas: muGasBg }), [fl, muGasBg]);
   const satModel = useMemo(() => makeSatModel(sat, fl.muWater), [sat, fl.muWater]);
   const satGeom = useMemo(() => ({ porosity: res.porosity, thicknessM: res.thicknessM, rwM: res.wellboreRadiusM }), [res]);
   const vols = useMemo(() => wells.map((w) => field.reservoirVolumeM3(w, tNow)), [wells, field, tNow]);
@@ -657,7 +678,9 @@ export default function Page() {
     () => (applied && two && wells.length ? satGrid(wells, vols, satGeom, satModel, extent) : null),
     [applied, two, wells, vols, satGeom, satModel, extent],
   );
-  const frontSg = useMemo(() => { try { return referenceQuantities(bhpIn).Sg_front ?? NaN; } catch { return NaN; } }, [bhpIn]);
+  const frontSg = useMemo(() => {
+    try { return coreyFrontQuantities((bhpIn.krg_endpoint * bhpIn.mu_water_cP) / (bhpIn.krw_endpoint * muGasBg), bhpIn.Swr, bhpIn.corey_n_gas, bhpIn.corey_n_water).Sg_front; } catch { return NaN; }
+  }, [bhpIn, muGasBg]);
   const plumes = useMemo(() => wells.map((w) => {
     const s = field.summary(w, tNow).s;
     return {
@@ -917,13 +940,14 @@ export default function Page() {
           ["Porosity, φ (every zone)", num(res.porosity), "–"],
           ["Wellbore radius, r_w", uv("length", res.wellboreRadiusM), un("length")],
           ["Initial absolute pressure, P_i", uv("pressure", res.initialMPa), un("pressure")],
-          ...(!water ? [["Reservoir temperature, T", uv("temp", res.tempC), un("temp")]] : []),
-          ...(!water ? [["Gas (CO₂) viscosity, μ_g", uv("viscosity", fl.muGas), un("viscosity")]] : []),
-          ...(model !== "co2" ? [["Water viscosity, μ_w", uv("viscosity", fl.muWater), un("viscosity")], [water ? "Water density at initial pressure, ρ_w" : "Brine density, ρ_b", uv("density", fl.brineDensityKgM3), un("density")]] : []),
+          ["Reservoir temperature, T", uv("temp", res.tempC), un("temp")],
+          ...(model !== "co2" ? [["Water viscosity, μ_w", uv("viscosity", fl.muWater), un("viscosity")], ["Brine density at 60 °F and 14.696 psia (standard)", uv("density", fl.brineDensityKgM3), un("density")]] : []),
           ["Rock compressibility, c_r", uv("compress", fl.rockComp), un("compress")],
-          ...(model !== "co2" ? [["Water compressibility, c_w", uv("compress", fl.waterComp), un("compress")]] : []),
+          ...(bgApplied.muGas !== null ? [["CO₂ viscosity at P_i (calculated: Fenghour 1998, live Peng–Robinson density)", uv("viscosity", bgApplied.muGas), un("viscosity")]] : []),
+          ...(bgApplied.ppm !== null ? [["Salinity, NaCl equivalent (calculated: McCain inverse of the standard density)", Math.round(bgApplied.ppm).toLocaleString("en-US"), "mass ppm"]] : []),
+          ...(bgApplied.rhoW !== null ? [["Brine density at P_i and T (calculated: Driesner 2007 + IAPWS-IF97)", uv("density", bgApplied.rhoW * LB_FT3), un("density")]] : []),
+          ...(bgApplied.cw !== null ? [["Water compressibility at P_i, c_w (calculated: (1/ρ)·dρ/dP)", uv("compress", bgApplied.cw / PSI), un("compress")]] : []),
           ...(two ? [
-            ["Salt mass fraction, X_s", num(fl.salt), "–"],
             ["Irreducible water saturation, S_wr", num(fl.swr), "–"],
             ["Gas end-point relative permeability, k_rg0", num(fl.krg0), "–"],
             ["Water end-point relative permeability, k_rw0", num(fl.krw0), "–"],
@@ -1114,7 +1138,8 @@ export default function Page() {
     ? [["mw", "Multiwell results"], ...satTab, ["map", "Pressure map"], ["series", "Time series"], ["bhp", "Well BHP"], ["matrix", "Interference matrix"], ["limits", "Limit check"], ["compare", "Compare boundaries"]]
     : [["bhp", "Program results"], ...satTab, ["map", "Pressure map"], ["series", "Time series"], ["limits", "Limit check"], ["compare", "Compare boundaries"]];
   const viewEff: View = view === "sat" && !two ? "map" : !multi && (view === "mw" || view === "matrix") ? "bhp" : view;
-  const showF = (n: keyof BhpInputs) => (modelL === "two" ? true : modelL === "co2" ? ["mu_gas_cP", "rock_compressibility_per_psi", "temperature_F"].includes(n) : ["mu_water_cP", "brine_density_lb_ft3", "rock_compressibility_per_psi", "water_compressibility_per_psi"].includes(n));
+  const showF = (n: keyof BhpInputs) => (modelL === "two" ? true : modelL === "co2" ? ["rock_compressibility_per_psi", "temperature_F"].includes(n) : ["mu_water_cP", "brine_standard_density_lb_ft3", "rock_compressibility_per_psi", "temperature_F"].includes(n));
+  const bgLive = backgroundProps(toBhp(resL, flL, modelL, systemL));
 
   return (
     <main className="app">
@@ -1212,15 +1237,12 @@ export default function Page() {
                 <NumField label="Porosity (every zone)" unit="frac" value={resL.porosity} onChange={setR("porosity")} step={0.01} min={0} />
                 {!multiL && uf("length", { label: "Well radius", value: resL.wellboreRadiusM, onChange: setR("wellboreRadiusM"), min: 0.01 })}
                 {uf("pressure", { label: "Initial absolute pressure", value: resL.initialMPa, onChange: setR("initialMPa"), min: 0 })}
-                {modelL !== "water" && uf("temp", { label: "Reservoir temperature", value: resL.tempC, onChange: setR("tempC") })}
+                {uf("temp", { label: "Reservoir temperature", value: resL.tempC, onChange: setR("tempC") })}
               </div>
               <div className="grid2" style={{ marginTop: 8 }}>
                 {showF("mu_water_cP") && uf("viscosity", { label: "Water viscosity", value: flL.muWater, onChange: setF("muWater"), min: 0 })}
-                {showF("mu_gas_cP") && uf("viscosity", { label: "Gas viscosity", value: flL.muGas, onChange: setF("muGas"), min: 0 })}
-                {showF("brine_density_lb_ft3") && uf("density", { label: modelL === "water" ? "Water density at initial pressure" : "Brine density", value: flL.brineDensityKgM3, onChange: setF("brineDensityKgM3"), min: 0 })}
-                {modelL === "two" && <NumField label="Salt mass fraction" unit="frac" value={flL.salt} onChange={setF("salt")} step={0.01} min={0} />}
+                {showF("brine_standard_density_lb_ft3") && uf("density", { label: "Brine density at 60 °F, 14.696 psia (standard)", value: flL.brineDensityKgM3, onChange: setF("brineDensityKgM3"), min: 0 })}
                 {showF("rock_compressibility_per_psi") && uf("compress", { label: "Rock compressibility", value: flL.rockComp, onChange: setF("rockComp"), min: 0 })}
-                {showF("water_compressibility_per_psi") && uf("compress", { label: "Water compressibility", value: flL.waterComp, onChange: setF("waterComp"), min: 0 })}
                 {modelL === "two" && (
                   <>
                     <NumField label="Irreducible water saturation Swr" unit="frac" value={flL.swr} onChange={setF("swr")} step={0.05} min={0} />
@@ -1230,6 +1252,17 @@ export default function Page() {
                     <NumField label="Gas Corey exponent ng" unit="3 or 2" value={flL.ng} onChange={setF("ng")} step={1} min={2} />
                     <NumField label="Water Corey exponent nw" unit="= ng" value={flL.nw} onChange={setF("nw")} step={1} min={2} />
                   </>
+                )}
+              </div>
+              <div className="bgprops" aria-label="Calculated in the background">
+                <b>Calculated in the background</b> (not inputs; updated at every pressure trial and in the shut-in solve)
+                {bgLive.error ? <p className="err">{bgLive.error}</p> : (
+                  <ul>
+                    {bgLive.muGas !== null && <li>CO₂ viscosity at P<sub>i</sub>: <b>{bgLive.muGas.toFixed(5)} cP</b> <small>(Fenghour 1998, live Peng–Robinson density)</small></li>}
+                    {bgLive.ppm !== null && <li>Salinity: <b>{Math.round(bgLive.ppm).toLocaleString("en-US")} ppm</b> NaCl equivalent <small>(McCain, from the standard brine density)</small></li>}
+                    {bgLive.rhoW !== null && <li>Brine density at P<sub>i</sub>, T: <b>{(bgLive.rhoW * LB_FT3).toFixed(2)} kg/m³</b> ({bgLive.rhoW.toFixed(3)} lb/ft³) <small>(Driesner 2007 + IAPWS-IF97)</small></li>}
+                    {bgLive.cw !== null && <li>Water compressibility at P<sub>i</sub>: <b>{bgLive.cw.toExponential(3)} 1/psi</b> ({(bgLive.cw / PSI).toExponential(3)} 1/MPa)</li>}
+                  </ul>
                 )}
               </div>
               <p className="hint">The zone diffusivities are calculated by the program (D = m / c* for each zone, from the zone mobilities and compressibilities); they are reported in all_calculations.csv and source_states.csv.{modelL === "two" ? " The relative-permeability inputs also give the CO₂ saturation map." : ""}{multiL ? " The well radius is entered for each well in the table below." : ""}</p>

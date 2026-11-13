@@ -241,3 +241,9 @@ table.matrix.compact th, table.matrix.compact td { padding: 3px 7px; font-size: 
 [data-group="wells"] table.edit th { white-space: nowrap; }
 td.calc { display: table-cell; white-space: nowrap; min-width: 54px; }
 [data-group="wells"] table.edit select { min-width: 74px; padding: 3px 4px; font-size: 12px; }
+
+/* background properties calculated by the program (CO2 viscosity, salinity, brine density, cw) */
+.bgprops { margin-top: 10px; padding: 8px 10px; border: 1px dashed var(--line, #c8d3da); border-radius: 6px; font-size: 12.5px; }
+.bgprops ul { margin: 4px 0 0; padding-left: 18px; }
+.bgprops li { margin: 2px 0; }
+.bgprops small { color: var(--muted, #667); }

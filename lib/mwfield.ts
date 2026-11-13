@@ -110,7 +110,7 @@ export class MultiwellField {
         const state = s.states[k];
         return state ? radialPressureFromState([Math.max(rFt, params.rw_ft)], state, params).pressure[0] : 0;
       }
-      return singlePhaseSourceProfile(t, well, [Math.max(rFt, 1e-9)], params, r.references[k])[0][0];
+      return singlePhaseSourceProfile(t, well, [Math.max(rFt, 1e-9)], params, r.references[k], null, s.trial[k])[0][0];
     }
     const tau = t - this.endpoint;
     if (p.phase_mode === "two") {
@@ -119,7 +119,7 @@ export class MultiwellField {
       const f = this.frozenOf(k);
       return f ? frozenAt(f, Math.max(rFt, params.rw_ft), tau) : 0;
     }
-    return singlePhaseSourceProfile(t, well, [Math.max(rFt, 1e-9)], params, r.references[k], this.endpoint)[0][0];
+    return singlePhaseSourceProfile(t, well, [Math.max(rFt, 1e-9)], params, r.references[k], this.endpoint, r.end_snapshot.trial[k])[0][0];
   }
 
   private excess(k: number, x: number, y: number, t: number): number {

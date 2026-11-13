@@ -75,24 +75,21 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Porosity (every zone)", "Pore volume fraction; the same in all zones.", "0.20"],
     ["Well radius", "Radius at which each well's own pressure is evaluated.", "0.55 ft"],
     ["Initial absolute pressure", "Initial reservoir pressure (absolute, psia in field units).", "3500 psia"],
-    ["Reservoir temperature", "Constant temperature; used for the Peng–Robinson CO₂ properties and the water vapour pressure. Not used by the water model.", "200 °F"],
+    ["Reservoir temperature", "Constant temperature; used for the Peng–Robinson CO₂ properties, the CO₂ viscosity, the brine density and compressibility and the water vapour pressure. Used by all three models.", "200 °F"],
   ]);
 
   b.push({ t: "h2", text: "4.2.1 Pressure model and fluid inputs" });
   p("The Pressure model section chooses the injection-BHP model used for every well. Only the inputs used by the chosen model are shown.");
   table("Table 2a. The three pressure models.", ["Model", "What it represents"], [
-    ["Two-phase CO₂–brine (default)", "Three zones around each well: dry CO₂ next to the well (if evaporation is included), CO₂ + brine, and brine. The gas front follows from the Corey relative permeabilities (both exponents 3, or both 2), the dry front from the evaporation of the residual brine, and the zone 2 saturation from the CO₂ mass balance. CO₂ density, compressibility and Bg come from the Peng–Robinson equation of state for pure CO₂ at each well's bottom-hole pressure, converged to 10⁻⁴ psi."],
-    ["Single-phase CO₂", "A CO₂-filled reservoir with relative permeability 1. Bg is fixed at 0.0005690187 rb/scf; CO₂ density and compressibility are fixed at the initial pressure."],
-    ["Single-phase water", "A water-filled reservoir with relative permeability 1 and Bw = 1.0 rb/STB. Rates are in STB/day."],
+    ["Two-phase CO₂–brine (default)", "Three zones around each well: dry CO₂ next to the well (if evaporation is included), CO₂ + brine, and brine. The gas front follows from the Corey relative permeabilities (both exponents 3, or both 2), the dry front from the evaporation of the residual brine, and the zone 2 saturation from the CO₂ mass balance. CO₂ density, compressibility and Bg come from the Peng–Robinson equation of state for pure CO₂ at each well's bottom-hole pressure, converged to 10⁻⁴ psi; the CO₂ viscosity, brine density and water compressibility are recalculated at the same pressure."],
+    ["Single-phase CO₂", "A CO₂-filled reservoir with relative permeability 1. Bg is fixed at 0.0005690187 rb/scf; CO₂ density and compressibility are fixed at the initial pressure. The CO₂ viscosity is recalculated at every pressure trial from the live Peng–Robinson density."],
+    ["Single-phase water", "A water-filled reservoir with relative permeability 1 and Bw = 1.0 rb/STB. The brine density and water compressibility are calculated at every pressure trial. Rates are in STB/day."],
   ]);
   table("Table 2b. Fluid and rock-fluid inputs.", ["Input", "Used by", "Default"], [
     ["Include evaporation?", "Two-phase. No sets the dry zone to zero (r_d = r_w).", "Yes"],
     ["Water viscosity", "Two-phase, water", "0.30 cP"],
-    ["Gas viscosity", "Two-phase, CO₂", "0.0432 cP"],
-    ["Brine density (water density at initial pressure)", "Two-phase, water", "63.9 lb/ft³"],
-    ["Salt mass fraction", "Two-phase (water activity of the brine)", "0.034"],
+    ["Brine density at 60 °F, 14.696 psia (standard)", "Two-phase, water. The measured density at standard conditions; the salinity follows from it. Do not enter a reservoir-condition density.", "63.878 lb/ft³"],
     ["Rock compressibility", "All models", "4.2×10⁻⁶ 1/psi"],
-    ["Water compressibility", "Two-phase, water", "3.5×10⁻⁶ 1/psi"],
     ["Irreducible water saturation Swr", "Two-phase. The maximum CO₂ saturation is 1 − Swr.", "0.55"],
     ["Gas end-point rel. perm. krg0", "Two-phase", "0.65"],
     ["Water end-point rel. perm. krw0", "Two-phase", "1.0"],
@@ -110,6 +107,13 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Maximum allowable BHP", "Absolute bottom-hole pressure that must not be exceeded.", "4680 psia"],
     ["Fracture pressure, Allowable fraction", "Allowable BHP = fraction × fracture pressure (absolute).", "5200 psia, 0.9 (4680 psia)"],
     ["Interference threshold", "Detection level for the map contour, the arrival times and the monitoring points; not a pass/fail limit.", "1 psi"],
+  ]);
+  p("Four properties are not inputs: the program calculates them in the background at every pressure trial, at each well's own bottom-hole pressure, and again in every cell of the shut-in solve. The box \"Calculated in the background\" under the fluid inputs shows their values at the initial pressure, and the result tables and CSV files report them at every time.");
+  table("Table 2c. Properties calculated in the background (not inputs).", ["Property", "How it is calculated", "Used by"], [
+    ["CO₂ viscosity", "Fenghour, Wakeham and Vesovic (1998) correlation from the reservoir temperature and the live Peng–Robinson CO₂ density at the pressure (no near-critical enhancement; near-critical states are rejected).", "Two-phase, CO₂"],
+    ["Salinity (NaCl equivalent)", "Positive root of the McCain standard-density relation ρ_sc = 62.368 + 0.438603 S + 0.00160074 S² (S in weight percent), from the brine density at 60 °F and 14.696 psia. Salt mass and mole fractions do not change with pressure; the salt concentration in kg/m³ does.", "Two-phase, water"],
+    ["Brine density", "Driesner (2007) liquid molar-volume mapping with the IAPWS-IF97 Region 1 liquid-water density, at the pressure, temperature and salt mass fraction (0.1–100 MPa, salt mass fraction 0–0.26).", "Two-phase, water"],
+    ["Water compressibility c_w", "c_w = (1/ρ)(dρ/dP) at fixed temperature and salt mass fraction, from the brine density by central differences.", "Two-phase, water"],
   ]);
 
   b.push({ t: "h2", text: "4.4 Interference threshold" });
@@ -306,8 +310,12 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     t: "refs",
     items: [
       "Buckley, S.E., Leverett, M.C., 1942. Mechanism of fluid displacement in sands. Transactions of the AIME, 146, 107–116.",
+      "Driesner, T., 2007. The system H₂O–NaCl. Part II: Correlations for molar volume, enthalpy, and isobaric heat capacity from 0 to 1000 °C, 1 to 5000 bar, and 0 to 1 X_NaCl. Geochimica et Cosmochimica Acta, 71(20), 4902–4919.",
       "Earlougher, R.C., Jr., 1977. Advances in Well Test Analysis. SPE Monograph Series, Vol. 5. Society of Petroleum Engineers, Richardson, TX.",
+      "Fenghour, A., Wakeham, W.A., Vesovic, V., 1998. The viscosity of carbon dioxide. Journal of Physical and Chemical Reference Data, 27(1), 31–44.",
+      "IAPWS, 2012. Revised Release on the IAPWS Industrial Formulation 1997 for the Thermodynamic Properties of Water and Steam (R7-97(2012)). International Association for the Properties of Water and Steam.",
       "Matthews, C.S., Russell, D.G., 1967. Pressure Buildup and Flow Tests in Wells. SPE Monograph Series, Vol. 1. Society of Petroleum Engineers, New York.",
+      "McCain, W.D., Jr., 1990. The Properties of Petroleum Fluids, 2nd ed. PennWell Books, Tulsa, OK.",
       "Peng, D.-Y., Robinson, D.B., 1976. A new two-constant equation of state. Industrial & Engineering Chemistry Fundamentals, 15(1), 59–64.",
       "Welge, H.J., 1952. A simplified method for computing oil recovery by gas or water drive. Transactions of the AIME, 195, 91–98.",
     ],

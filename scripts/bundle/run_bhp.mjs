@@ -24,8 +24,11 @@ const INPUTS = {
   include_evaporation: true,    // two-phase only
   k_mD: 50.0, h_ft: 20.0, porosity: 0.2,
   initial_pressure_psia: 3500.0, temperature_F: 200.0,
-  mu_water_cP: 0.3, mu_gas_cP: 0.0432, brine_density_lb_ft3: 63.9, salt_mass_fraction: 0.034, Swr: 0.55,
-  rock_compressibility_per_psi: 4.2e-6, water_compressibility_per_psi: 3.5e-6,
+  mu_water_cP: 0.3, Swr: 0.55,
+  // brine density measured at 60 F and 14.696 psia; the salinity follows from it. CO2 viscosity, brine density and
+  // water compressibility are calculated in the background at every pressure (not inputs).
+  brine_standard_density_lb_ft3: 63.878,
+  rock_compressibility_per_psi: 4.2e-6,
   krg_endpoint: 0.65, krw_endpoint: 1.0, krg_zone1: 0.65, corey_n_gas: 3.0, corey_n_water: 3.0,
 };
 const OBSERVATION = { period: 10.0, years: "0,0.5,1,5,10" }; // period 0 = no observation after shut-in

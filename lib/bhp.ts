@@ -1,13 +1,16 @@
 // Injection bottom-hole pressure: single-phase water, single-phase CO2, or two-phase CO2-brine.
 //
 // TypeScript translation of the reference Python model, reference/co2_bhp_model.py
-// (co2_bhp_water_first_year_detail(3).py). Function names, result keys, units, equations, messages and output files
+// (co2_bhp_multiwell (2).py with the background properties of co2_bhp_dynamic_properties.py). Function names, result keys, units, equations, messages and output files
 // follow the Python, so each part can be compared line by line. tests/bhp.test.mjs checks the outputs against files
 // written by the Python itself (tests/bhp-reference.json, from scripts/bhp-reference.py).
 //
 // Field units throughout: psia (absolute), ft, mD, cP, 1/psi, lb/ft3, Mscf/day (CO2) or STB/day (water), deg F, and
-// years of 365.25 days. CO2 properties come from the Peng-Robinson equation of state, as in the Python. The only numerical difference from the Python is the integrator of the shut-in diffusion
-// (scipy BDF there; L-stable implicit Euler with Richardson extrapolation here, agreeing to about 1e-3 psi).
+// years of 365.25 days. CO2 density and cg come from the Peng-Robinson equation of state, as in the Python. CO2 viscosity
+// (Fenghour 1998, live PR density), salinity (McCain inverse of the standard brine density), brine density and water
+// compressibility (Driesner 2007 + IAPWS-IF97) are calculated in the background at every trial pressure, never entered.
+// The only numerical difference from the Python is the integrator of the shut-in diffusion (scipy BDF there; L-stable
+// implicit Euler with Richardson extrapolation and Picard-closed steps here, agreeing to about 1e-3 psi).
 
 // ---------------------------------------------------------------------------------------------------------------
 // Constants supplied in the equation images; these are not fitted inputs.
@@ -146,12 +149,9 @@ export interface Inputs {
   initial_pressure_psia: number;
   temperature_F: number;
   mu_water_cP: number;
-  mu_gas_cP: number;
-  brine_density_lb_ft3: number;
-  salt_mass_fraction: number;
+  brine_standard_density_lb_ft3: number;
   Swr: number;
   rock_compressibility_per_psi: number;
-  water_compressibility_per_psi: number;
   krg_endpoint: number;
   krw_endpoint: number;
   krg_zone1: number;
@@ -176,12 +176,9 @@ export const DEFAULT_INPUTS: Inputs = {
   initial_pressure_psia: 3500.0,
   temperature_F: 200.0,
   mu_water_cP: 0.3,
-  mu_gas_cP: 0.0432,
-  brine_density_lb_ft3: 63.9,
-  salt_mass_fraction: 0.034,
+  brine_standard_density_lb_ft3: 63.878,
   Swr: 0.55,
   rock_compressibility_per_psi: 4.2e-6,
-  water_compressibility_per_psi: 3.5e-6,
   krg_endpoint: 0.65,
   krw_endpoint: 1.0,
   krg_zone1: 0.65,
@@ -202,7 +199,7 @@ export const PHASE_LABELS = {
   two: "Two-phase CO2-brine (original three-zone model)",
 };
 const TWO_PHASE_ONLY = new Set([
-  "mu_water_cP", "brine_density_lb_ft3", "salt_mass_fraction", "Swr", "water_compressibility_per_psi",
+  "mu_water_cP", "brine_standard_density_lb_ft3", "Swr",
   "krg_endpoint", "krw_endpoint", "krg_zone1", "corey_n_gas", "corey_n_water",
 ]);
 const OBSERVATION_INPUTS = new Set(["observation_period_years", "observation_years"]);
@@ -217,8 +214,8 @@ export function modelLabel(p: Inputs): string {
 /** Numerical inputs used by the chosen model; unused fields are hidden (Python `input_names_for_phase`). */
 export function inputNamesForPhase(phase: PhaseMode, fluid: SingleFluid = "co2"): (keyof Inputs)[] {
   if (phase === "single" && fluid === "water") {
-    return ["water_rate_stb_day", "k_mD", "h_ft", "rw_ft", "porosity", "initial_pressure_psia", "mu_water_cP",
-      "brine_density_lb_ft3", "rock_compressibility_per_psi", "water_compressibility_per_psi", "skin"];
+    return ["water_rate_stb_day", "k_mD", "h_ft", "rw_ft", "porosity", "initial_pressure_psia", "temperature_F", "mu_water_cP",
+      "brine_standard_density_lb_ft3", "rock_compressibility_per_psi", "skin"];
   }
   return (Object.keys(DEFAULT_INPUTS) as (keyof Inputs)[]).filter(
     (n) => !["phase_mode", "single_phase_fluid", "water_rate_stb_day", "water_Bw_rb_stb", "include_evaporation"].includes(n)
@@ -237,12 +234,9 @@ export const PROMPTS: Record<string, string> = {
   initial_pressure_psia: "Initial absolute pressure (psia)",
   temperature_F: "Constant reservoir temperature (deg F)",
   mu_water_cP: "Water viscosity (cP)",
-  mu_gas_cP: "Gas viscosity (cP)",
-  brine_density_lb_ft3: "Brine density (lb/ft^3)",
-  salt_mass_fraction: "Salt mass fraction",
+  brine_standard_density_lb_ft3: "Brine density at 60 F and 14.696 psia (lb/ft^3)",
   Swr: "Irreducible water saturation Swr",
   rock_compressibility_per_psi: "Rock compressibility (1/psi)",
-  water_compressibility_per_psi: "Water compressibility (1/psi)",
   krg_endpoint: "Gas endpoint relative permeability krg0",
   krw_endpoint: "Water endpoint relative permeability krw0",
   krg_zone1: "Zone 1 gas relative permeability krg1",
@@ -264,29 +258,31 @@ export function validate(p: Inputs): void {
     if (typeof v !== "number") fail(`${name} must be numeric.`);
     if (!Number.isFinite(v as number)) fail(`${name} must be finite.`);
   }
-  for (const name of ["q_Mscf_day", "k_mD", "h_ft", "rw_ft", "initial_pressure_psia", "mu_water_cP", "mu_gas_cP",
-    "brine_density_lb_ft3", "corey_n_gas", "corey_n_water", "water_rate_stb_day", "water_Bw_rb_stb"] as (keyof Inputs)[]) {
+  for (const name of ["q_Mscf_day", "k_mD", "h_ft", "rw_ft", "initial_pressure_psia", "mu_water_cP",
+    "brine_standard_density_lb_ft3", "corey_n_gas", "corey_n_water", "water_rate_stb_day", "water_Bw_rb_stb"] as (keyof Inputs)[]) {
     if (active.includes(name) && (p[name] as number) <= 0) fail(`${name} must be greater than zero.`);
   }
   if (!(p.porosity > 0 && p.porosity < 1)) fail("porosity must be strictly between 0 and 1.");
-  for (const name of ["salt_mass_fraction", "Swr"] as const) {
+  for (const name of ["Swr"] as const) {
     if (active.includes(name) && !(p[name] >= 0 && p[name] < 1)) fail(`${name} must satisfy 0 <= value < 1.`);
   }
   for (const name of ["krg_endpoint", "krw_endpoint", "krg_zone1"] as const) {
     if (active.includes(name) && !(p[name] > 0 && p[name] <= 1)) fail(`${name} must satisfy 0 < value <= 1.`);
   }
-  for (const name of ["rock_compressibility_per_psi", "water_compressibility_per_psi"] as const) {
+  for (const name of ["rock_compressibility_per_psi"] as const) {
     if (active.includes(name) && p[name] < 0) fail(`${name} cannot be negative.`);
   }
   if (p.phase_mode === "two" && !((p.corey_n_gas === 2 && p.corey_n_water === 2) || (p.corey_n_gas === 3 && p.corey_n_water === 3))) {
     fail("Set both Corey exponents to 3 for the cubic model, or both to 2 for the quadratic comparison. Other exponent pairs require a different front-saturation derivation.");
   }
-  if (isWaterMode(p)) {
-    if (!(p.water_compressibility_per_psi + p.rock_compressibility_per_psi > 0)) fail("Water plus rock compressibility must be positive.");
-    return;
-  }
   const tK = ((p.temperature_F + 459.67) * 5.0) / 9.0;
   if (tK <= 0) fail("Absolute reservoir temperature must be positive.");
+  if (p.phase_mode === "two" || isWaterMode(p)) waterProperties(p.initial_pressure_psia, p);
+  if (!isWaterMode(p)) {
+    const state = prState(p.initial_pressure_psia, p.temperature_F);
+    const rho = calculateCo2Density(p.initial_pressure_psia, p.temperature_F, state.Z);
+    co2Viscosity(p.temperature_F, rho);
+  }
   if (p.phase_mode === "two" && !(tK < WATER_TC_K)) fail("The supplied water-saturation equation requires 0 < absolute temperature < 647.096 K.");
 }
 
@@ -423,6 +419,181 @@ function cubicRealRoots(a: number, b: number, c: number): number[] {
   });
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Background properties (calculated, never entered): CO2 viscosity, salinity, brine density and water compressibility.
+// Fenghour et al. (1998), DOI 10.1063/1.556013, Eqs. 3--8, Tables 1 and 3.
+// Driesner (2007), DOI 10.1016/j.gca.2007.05.026, liquid molar-volume mapping.
+// IAPWS R7-97(2012), Eq. 7 and Tables 2--4 (liquid-water Region 1).
+// McCain standard-density equation (the relation supplied with the program).
+const IF97_REGION1: [number, number, number][] = [
+  [0, -2, 0.14632971213167], [0, -1, -0.84548187169114],
+  [0, 0, -3.756360367204], [0, 1, 3.3855169168385],
+  [0, 2, -0.95791963387872], [0, 3, 0.15772038513228],
+  [0, 4, -0.016616417199501], [0, 5, 0.00081214629983568],
+  [1, -9, 0.00028319080123804], [1, -7, -0.00060706301565874],
+  [1, -1, -0.018990068218419], [1, 0, -0.032529748770505],
+  [1, 1, -0.021841717175414], [1, 3, -0.00005283835796993],
+  [2, -3, -0.00047184321073267], [2, 0, -0.00030001780793026],
+  [2, 1, 0.000047661393906987], [2, 3, -0.0000044141845330846],
+  [2, 17, -7.2694996297594e-16], [3, -4, -0.000031679644845054],
+  [3, 0, -0.0000028270797985312], [3, 6, -8.5205128120103e-10],
+  [4, -5, -0.0000022425281908], [4, -2, -0.00000065171222895601],
+  [4, 10, -1.4341729937924e-13], [5, -8, -0.00000040516996860117],
+  [8, -11, -1.2734301741641e-9], [8, -6, -1.7424871230634e-10],
+  [21, -29, -6.8762131295531e-19], [23, -31, 1.4478307828521e-20],
+  [29, -38, 2.6335781662795e-23], [30, -39, -1.1947622640071e-23],
+  [31, -40, 1.8228094581404e-24], [32, -41, -9.3537087292458e-26],
+];
+
+const SALINITY_CACHE = new Map<number, Row>();
+
+/** Infer NaCl-equivalent composition from the standard brine density (60 F, 14.696 psia); S is weight percent. */
+export function salinityFromStandardDensity(rho_standard_lb_ft3: number): Row {
+  const cached = SALINITY_CACHE.get(rho_standard_lb_ft3);
+  if (cached) return { ...cached };
+  if (!Number.isFinite(rho_standard_lb_ft3) || rho_standard_lb_ft3 < 62.368) fail("Standard brine density must be at least 62.368 lb/ft3 for the supplied McCain relation.");
+  const delta = rho_standard_lb_ft3 - 62.368;
+  const wt_percent = (2.0 * delta) / (0.438603 + Math.sqrt(0.438603 ** 2 + 4 * 0.00160074 * delta));
+  const w = wt_percent / 100.0;
+  if (!(w >= 0 && w <= 0.26)) fail("The implemented aqueous-brine backend requires NaCl mass fraction 0--0.26.");
+  const mw_water = MW_WATER / 1000.0;
+  const moles_salt = w / MW_SALT_KG_MOL;
+  const moles_water = (1 - w) / mw_water;
+  const molality = w / (MW_SALT_KG_MOL * (1 - w));
+  const out: Row = {
+    salt_mass_fraction: w,
+    salinity_wt_percent: wt_percent,
+    salinity_ppm: w * 1e6,
+    x_NaCl: moles_salt / (moles_salt + moles_water),
+    salt_molality: molality,
+    water_activity: WATER_MOLES_KG / (WATER_MOLES_KG + 2 * molality),
+  };
+  SALINITY_CACHE.set(rho_standard_lb_ft3, out);
+  return { ...out };
+}
+
+/** IAPWS-IF97 Region 1 (compressed liquid) water density, kg/m3. */
+function water97LiquidDensity(P: number, T: number): number {
+  if (!Number.isFinite(P) || !Number.isFinite(T) || T < 273.15 || T > 623.15 || P < 1.0e5 || P > 1.0e8) {
+    fail("Brine backend requires 0.1--100 MPa and mapped liquid-water temperature 273.15--623.15 K.");
+  }
+  const tau_sat = 1 - T / WATER_TC_K;
+  let sum = 0;
+  for (let i = 0; i < WATER_A.length; i++) sum += WATER_A[i] * tau_sat ** WATER_POWERS[i];
+  const psat = WATER_PC_MPA * 1e6 * Math.exp((WATER_TC_K / T) * sum);
+  if (P < psat * (1 - 1e-7)) fail("The Driesner mapped-water state is not compressed liquid; this backend cannot evaluate it.");
+  const x = 7.1 - P / 16.53e6, y = 1386.0 / T - 1.222;
+  let gp = 0;
+  for (const [I, J, n] of IF97_REGION1) if (I) gp += -n * I * x ** (I - 1) * y ** J;
+  const density = 16.53e6 / (461.526 * T * gp);
+  if (!(density > 0) || !Number.isFinite(density)) fail("IAPWS liquid-water density is invalid.");
+  return density;
+}
+
+/** Driesner liquid molar-volume mapping backed by IF97 Region 1: [density kg/m3, mapped water temperature K]. */
+export function brineDensityKgM3(P: number, temperature_K: number, w: number): [number, number] {
+  if (!(w >= 0 && w <= 0.26)) fail("NaCl mass fraction must be between 0 and 0.26.");
+  if (!Number.isFinite(P) || P < 1e5 || P > 1e8) fail("The implemented brine backend supports 0.1--100 MPa.");
+  const pbar = P * 1e-5;
+  const p2 = pbar * pbar, p3 = pbar * pbar * pbar;
+  const mw = MW_WATER / 1000.0;
+  const x = w / MW_SALT_KG_MOL / (w / MW_SALT_KG_MOL + (1 - w) / mw);
+  const n11 = -54.2958 - 45.7623 * Math.exp(-9.44785e-4 * pbar);
+  const n21 = -2.6142 - 2.39092e-4 * pbar;
+  const n22 = 0.0356828 + 4.37235e-6 * pbar + 2.0566e-9 * p2;
+  const n1x1 = 330.47 + 0.942876 * Math.sqrt(pbar) + 0.0817193 * pbar - 2.47556e-8 * p2 + 3.45052e-10 * p3;
+  const n2x1 = -0.0370751 + 0.00237723 * Math.sqrt(pbar) + 5.42049e-5 * pbar + 5.84709e-9 * p2 - 5.99373e-13 * p3;
+  const n12 = -n1x1 - n11;
+  const n20 = 1 - n21 * Math.sqrt(n22);
+  const n23 = n2x1 - n20 - n21 * Math.sqrt(1 + n22);
+  const n1 = n1x1 + n11 * (1 - x) + n12 * (1 - x) ** 2;
+  const n2 = n20 + n21 * Math.sqrt(x + n22) + n23 * x;
+  const Tv = n1 + n2 * (temperature_K - 273.15) + 273.15;
+  const molar_mass = 1 / (w / MW_SALT_KG_MOL + (1 - w) / mw);
+  return [(water97LiquidDensity(P, Tv) * molar_mass) / mw, Tv];
+}
+
+/** Saline-water density and isothermal compressibility cw = (1/rho)(d rho/dP) at fixed T and salt kg/kg. */
+export function waterProperties(pressure_psia: number, p: Inputs): Row {
+  const P = pressure_psia * PA_PER_PSI;
+  const T = ((p.temperature_F + 459.67) * 5.0) / 9.0;
+  const salt = salinityFromStandardDensity(p.brine_standard_density_lb_ft3);
+  const w = salt.salt_mass_fraction;
+  const [rho, Tv] = brineDensityKgM3(P, T, w);
+  const h = Math.max(100.0, 1e-4 * P);
+  const lo = 1e5, hi = 1e8;
+  const forward = P - h < lo, backward = P + h > hi;
+  const rp = brineDensityKgM3(Math.min(P + h, hi), T, w)[0];
+  const rm = brineDensityKgM3(Math.max(P - h, lo), T, w)[0];
+  let derivative = (rp - rm) / (2 * h);
+  if (forward) derivative = (-3 * rho + 4 * rp - brineDensityKgM3(Math.min(P + 2 * h, hi), T, w)[0]) / (2 * h);
+  else if (backward) derivative = (3 * rho - 4 * rm + brineDensityKgM3(Math.max(P - 2 * h, lo), T, w)[0]) / (2 * h);
+  const cw = derivative / rho;
+  if (!(cw > 0) || !Number.isFinite(cw)) fail("Calculated brine isothermal compressibility is not positive and finite.");
+  return {
+    ...salt,
+    rho_brine_kg_m3: rho,
+    rho_water_lb_ft3: rho * KG_M3_TO_LB_FT3,
+    brine_equivalent_water_temperature_K: Tv,
+    cw_per_Pa: cw, cw_per_psi: cw * PA_PER_PSI,
+    cw_derivative_step_Pa: h,
+    salt_concentration_kg_m3: w * rho,
+    Bw_rb_stb: SINGLE_PHASE_WATER_BW_RB_STB,
+  };
+}
+
+/** Fenghour et al. (1998) CO2 viscosity from temperature and CO2 density (no critical enhancement). */
+export function co2Viscosity(temperature_F: number, rho_g_lb_ft3: number): Row {
+  const T = ((temperature_F + 459.67) * 5.0) / 9.0;
+  const rho = rho_g_lb_ft3 / KG_M3_TO_LB_FT3;
+  if (!(T >= 200 && T <= 1500) || rho < 0 || rho > 1400 || !Number.isFinite(rho)) fail("Fenghour viscosity requires 200--1500 K and CO2 density 0--1400 kg/m3.");
+  if (T > 300 && T < 310 && rho > 300 && rho < 600) fail("Near-critical CO2 requires a viscosity critical-enhancement model, which is not included.");
+  const ts = T / 251.196;
+  const a = [0.235156, -0.491266, 0.05211155, 0.05347906, -0.01537102];
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += a[i] * Math.log(ts) ** i;
+  const mu0 = (1.00697 * Math.sqrt(T)) / Math.exp(s);
+  const excess = 0.004071119 * rho + 7.198037e-5 * rho ** 2 + (2.411697e-17 * rho ** 6) / ts ** 3
+    + 2.971072e-23 * rho ** 8 - (1.627888e-23 * rho ** 8) / ts;
+  const mu = mu0 + excess;
+  if (!(mu > 0) || !Number.isFinite(mu)) fail("Calculated CO2 viscosity is invalid.");
+  return { mu_gas_cP: mu * 1e-3, mu_gas_Pa_s: mu * 1e-6, viscosity_density_kg_m3: rho };
+}
+
+/** Live PR cg and Fenghour viscosity at a cell pressure (Python `_live_co2_arrays`, one cell). */
+export function liveCo2(pressure_psia: number, temperature_F: number): { mu: number; cg: number } {
+  if (!(pressure_psia > 0) || !Number.isFinite(pressure_psia)) fail("Cell absolute pressures must be positive and finite.");
+  const st = prState(pressure_psia, temperature_F);
+  const rho = calculateCo2Density(pressure_psia, temperature_F, st.Z);
+  return { mu: co2Viscosity(temperature_F, rho).mu_gas_cP, cg: st.cg_per_psi };
+}
+
+/**
+ * Cell properties as smooth functions of pressure for the shut-in diffusion (many thousands of cell updates): values at
+ * nodes every 0.02 psi, computed once on first use and shared by all solves with the same fluid, linear in between
+ * (relative error below 1e-9, far inside the solver tolerance).
+ */
+const NODE_CACHE = new Map<string, Map<number, Float64Array>>();
+export function tabulatedProperty(key: string, m: number, fn: (pressure_psia: number) => number[], step = 0.02): (pressure_psia: number, out: Float64Array) => void {
+  let nodes = NODE_CACHE.get(key);
+  if (!nodes) { nodes = new Map(); NODE_CACHE.set(key, nodes); }
+  const cache = nodes;
+  const node = (k: number): Float64Array => {
+    let v = cache.get(k);
+    if (!v) {
+      if (cache.size > 400000) cache.clear();
+      v = Float64Array.from(fn(k * step));
+      cache.set(k, v);
+    }
+    return v;
+  };
+  return (P: number, out: Float64Array) => {
+    const u = P / step, k = Math.floor(u), f = u - k;
+    const x = node(k), y = node(k + 1);
+    for (let i = 0; i < m; i++) out[i] = x[i] + f * (y[i] - x[i]);
+  };
+}
+
 /** Solve the supplied PR cubic and select the lowest-fugacity real root. */
 export function prState(pressure_psia: number, temperature_F: number): Row {
   if (pressure_psia <= 0 || !Number.isFinite(pressure_psia)) fail("Peng-Robinson pressure must be finite and positive psia.");
@@ -469,6 +640,7 @@ export function gasProperties(pressure_psia: number, temperature_F: number, Zsc:
   const state = prState(pressure_psia, temperature_F);
   state.rho_g_lb_ft3 = calculateCo2Density(pressure_psia, temperature_F, state.Z);
   state.Bg_rb_scf = ((((state.Z / Zsc) * (temperature_F + 459.67)) / (T_SC_F + 459.67)) * P_SC_PSIA) / pressure_psia / FT3_PER_BBL;
+  Object.assign(state, co2Viscosity(temperature_F, state.rho_g_lb_ft3));
   return state;
 }
 
@@ -498,37 +670,39 @@ export function coreyFrontQuantities(M_lambda: number, Swr: number, n_gas = 3.0,
   };
 }
 
-/** Quantities fixed while temperature and operating inputs stay constant. */
+/** Initial mass references; transport properties are recalculated per trial. */
 function referenceTwoPhaseQuantities(p: Inputs): Row {
   const Zsc = prState(P_SC_PSIA, T_SC_F).Z;
   const initial = gasProperties(p.initial_pressure_psia, p.temperature_F, Zsc);
+  const water = waterProperties(p.initial_pressure_psia, p);
   const rho_sc = initial.rho_g_lb_ft3 * initial.Bg_rb_scf * FT3_PER_BBL;
   const TK = initial.temperature_K;
   const tau = 1 - TK / WATER_TC_K;
-  const saturation_sum = WATER_A.reduce((s, a, i) => s + a * tau ** WATER_POWERS[i], 0);
-  const Psat_MPa = WATER_PC_MPA * Math.exp((WATER_TC_K / TK) * saturation_sum);
-  const ms = p.salt_mass_fraction / (MW_SALT_KG_MOL * (1 - p.salt_mass_fraction));
-  const aw = WATER_MOLES_KG / (WATER_MOLES_KG + 2 * ms);
-  const M_lambda = (p.krg_endpoint * p.mu_water_cP) / (p.krw_endpoint * p.mu_gas_cP);
-  const front = coreyFrontQuantities(M_lambda, p.Swr, p.corey_n_gas, p.corey_n_water);
+  const psat = WATER_PC_MPA * Math.exp((WATER_TC_K / TK) * WATER_A.reduce((t, a, i) => t + a * tau ** WATER_POWERS[i], 0));
   return {
     Zsc, initial_Bg_rb_scf: initial.Bg_rb_scf,
     initial_gas_density_calculated_lb_ft3: initial.rho_g_lb_ft3,
-    rho_sc_lb_scf: rho_sc, salt_molality: ms, water_activity: aw,
-    water_Psat_psia: (Psat_MPa * 1e6) / PA_PER_PSI,
-    M_lambda, ...front,
-    reference_mobility_mD_cP: (p.k_mD * p.krg_zone1) / p.mu_gas_cP,
+    initial_mu_gas_cP: initial.mu_gas_cP,
+    initial_cw_per_psi: water.cw_per_psi,
+    initial_water_density_lb_ft3: water.rho_water_lb_ft3,
+    rho_sc_lb_scf: rho_sc, water_Psat_psia: (psat * 1e6) / PA_PER_PSI,
     q_sc_scf_day: p.q_Mscf_day * 1000.0,
     time_coefficient_years: TIME_COEFFICIENT_YEARS,
   };
 }
 
 /** Evaluate the supplied annual equations at one trial property pressure. */
-function calculateTwoPhaseYear(year: number, property_pressure: number, p: Inputs, c: Row): Row {
-  // 1. Current pressure-dependent Bg, cg and density.
-  const gas = gasProperties(property_pressure, p.temperature_F, c.Zsc);
+function calculateTwoPhaseYear(year: number, property_pressure: number, p: Inputs, c0: Row): Row {
+  // 1. Current pressure-dependent Bg, cg, density, viscosity and brine properties.
+  const gas = gasProperties(property_pressure, p.temperature_F, c0.Zsc);
   const Bg = gas.Bg_rb_scf, cg = gas.cg_per_psi;
   const rho_g = gas.rho_g_lb_ft3;
+  const mu_g = gas.mu_gas_cP;
+  const water = waterProperties(property_pressure, p);
+  const cw = water.cw_per_psi;
+  const salt = water.salt_mass_fraction;
+  const M_lambda = (p.krg_endpoint * p.mu_water_cP) / (p.krw_endpoint * mu_g);
+  const c: Row = { ...c0, ...coreyFrontQuantities(M_lambda, p.Swr, p.corey_n_gas, p.corey_n_water), M_lambda, reference_mobility_mD_cP: (p.k_mD * p.krg_zone1) / mu_g };
   // 2. Cumulative injected volume, evaluated at the current property pressure.
   const t_days = year * DAYS_PER_YEAR;
   const Vsc = c.q_sc_scf_day * t_days;
@@ -537,10 +711,10 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
   // 3. Water vapor and evaporation, with the cancelled factor omitted.
   let yw = 0.0, ceq = 0.0, alpha_d = 0.0;
   if (p.include_evaporation) {
-    yw = (c.water_activity * c.water_Psat_psia) / property_pressure;
+    yw = (water.water_activity * c.water_Psat_psia) / property_pressure;
     if (!(yw >= 0 && yw < 1)) fail("The supplied water-vapor expression gives yw outside [0,1).");
     ceq = ((MW_WATER / MW_CO2) * yw) / (1 - yw);
-    alpha_d = (rho_g * ceq) / (p.brine_density_lb_ft3 * (1 - p.salt_mass_fraction) * p.Swr + rho_g * ceq * (1 - p.Swr));
+    alpha_d = (rho_g * ceq) / (water.rho_water_lb_ft3 * (1 - salt) * p.Swr + rho_g * ceq * (1 - p.Swr));
   }
   // 4. Front radii measured from the well center.
   const area_factor = Math.PI * p.porosity * p.h_ft;
@@ -563,14 +737,14 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
   const krw2 = p.krw_endpoint * (1 - x2) ** p.corey_n_water;
   // 6. Zone mobilities and total compressibilities.
   const mobilities = [
-    (p.k_mD * p.krg_zone1) / p.mu_gas_cP,
-    p.k_mD * (krg2 / p.mu_gas_cP + krw2 / p.mu_water_cP),
+    (p.k_mD * p.krg_zone1) / mu_g,
+    p.k_mD * (krg2 / mu_g + krw2 / p.mu_water_cP),
     p.k_mD / p.mu_water_cP, // supplied Zone 3 krw = 1
   ];
   const total_c = [
     cg + p.rock_compressibility_per_psi,
-    Sg2 * cg + Sw2 * p.water_compressibility_per_psi + p.rock_compressibility_per_psi,
-    p.water_compressibility_per_psi + p.rock_compressibility_per_psi,
+    Sg2 * cg + Sw2 * cw + p.rock_compressibility_per_psi,
+    cw + p.rock_compressibility_per_psi,
   ];
   if (total_c.some((v) => v <= 0)) fail("Every zone total compressibility must be positive.");
   const m = mobilities.map((v) => v / c.reference_mobility_mD_cP);
@@ -578,7 +752,7 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
   const D = m.map((mi, i) => mi / c_star[i]);
   // 7. Dimensionless time and interface/well arguments.
   const rdD = rd / p.rw_ft, rgD = rg / p.rw_ft;
-  const tD = (TIME_COEFFICIENT_YEARS * p.k_mD * p.krg_zone1 * year) / (p.mu_gas_cP * p.porosity * p.rw_ft ** 2 * total_c[0]);
+  const tD = (TIME_COEFFICIENT_YEARS * p.k_mD * p.krg_zone1 * year) / (mu_g * p.porosity * p.rw_ft ** 2 * total_c[0]);
   const uw = 1 / (4 * (p.include_evaporation ? D[0] : D[1]) * tD);
   let u1d = rdD ** 2 / (4 * D[0] * tD);
   let u2d = rdD ** 2 / (4 * D[1] * tD);
@@ -608,7 +782,7 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
   const pD_gas = p.include_evaporation ? a1 + b1 * E1w : a2 + b2 * E1w;
   const pD_intrinsic = pD_gas / p.krg_zone1;
   const q_reservoir = c.q_sc_scf_day * Bg;
-  const delta_p = ((PRESSURE_COEFFICIENT * p.mu_gas_cP * q_reservoir) / (p.k_mD * p.h_ft)) * (pD_intrinsic + p.skin);
+  const delta_p = ((PRESSURE_COEFFICIENT * mu_g * q_reservoir) / (p.k_mD * p.h_ft)) * (pD_intrinsic + p.skin);
   const BHP = p.initial_pressure_psia + delta_p;
   const annual_gain = BHP - property_pressure;
   if (BHP <= 0 || !Number.isFinite(BHP)) fail("The calculated BHP is non-positive or non-finite.");
@@ -622,7 +796,7 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
   if (Math.max(Math.abs(dry_error), Math.abs(gas_error)) > 1e-9 * Math.max(1, Math.abs(pD_gas))) fail("Interface pressure continuity failed.");
   const result: Row = {
     year, P_used_psia: property_pressure, t_days,
-    ...gas, ...c,
+    ...c, ...gas, ...water,
     rho_g_lb_ft3: rho_g, Vsc_scf: Vsc,
     Vr_rb, Vr_ft3,
     yw, ceq, alpha_d_evaporation: alpha_d,
@@ -655,48 +829,42 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
   return result;
 }
 
-/** Constant-cw water referenced to initial pressure (no CO2 EOS). */
-export function waterProperties(pressure_psia: number, p: Inputs): Row {
-  if (!Number.isFinite(pressure_psia) || pressure_psia <= 0) fail("Water properties require positive absolute pressure.");
-  const exponent = p.water_compressibility_per_psi * (pressure_psia - p.initial_pressure_psia);
-  return {
-    rho_water_lb_ft3: p.brine_density_lb_ft3 * Math.exp(exponent),
-    Bw_rb_stb: SINGLE_PHASE_WATER_BW_RB_STB,
-    cw_per_psi: p.water_compressibility_per_psi,
-  };
-}
-
-/** Set constants for the selected phase without using inactive inputs. */
+/** Set initial inventory references, without freezing transport properties. */
 export function referenceQuantities(p: Inputs): Row {
   if (p.phase_mode === "two") return { ...referenceTwoPhaseQuantities(p), phase_count: 2, single_fluid_code: 0 };
   if (isWaterMode(p)) {
+    const water = waterProperties(p.initial_pressure_psia, p);
     return {
       phase_count: 1, single_fluid_code: 2,
       reference_mobility_mD_cP: p.k_mD / p.mu_water_cP,
       initial_Bw_rb_stb: SINGLE_PHASE_WATER_BW_RB_STB,
-      initial_water_density_lb_ft3: p.brine_density_lb_ft3,
+      initial_water_density_lb_ft3: water.rho_water_lb_ft3,
+      initial_cw_per_psi: water.cw_per_psi,
       q_water_stb_day: p.water_rate_stb_day,
-      water_mass_per_stb_lb: p.brine_density_lb_ft3 * SINGLE_PHASE_WATER_BW_RB_STB * FT3_PER_BBL,
+      water_mass_per_stb_lb: p.brine_standard_density_lb_ft3 * FT3_PER_BBL,
       time_coefficient_years: TIME_COEFFICIENT_YEARS,
     };
   }
   const Zsc = prState(P_SC_PSIA, T_SC_F).Z;
-  const initial = prState(p.initial_pressure_psia, p.temperature_F);
+  const initial = gasProperties(p.initial_pressure_psia, p.temperature_F, Zsc);
   return {
     phase_count: 1, single_fluid_code: 1, Zsc,
     initial_Bg_rb_scf: SINGLE_PHASE_CO2_BG_RB_SCF,
     initial_cg_per_psi: initial.cg_per_psi,
-    initial_gas_density_calculated_lb_ft3: calculateCo2Density(p.initial_pressure_psia, p.temperature_F, initial.Z),
+    initial_gas_density_calculated_lb_ft3: initial.rho_g_lb_ft3,
+    initial_mu_gas_cP: initial.mu_gas_cP,
     rho_sc_lb_scf: calculateCo2Density(P_SC_PSIA, T_SC_F, Zsc),
-    reference_mobility_mD_cP: p.k_mD / p.mu_gas_cP,
     q_sc_scf_day: p.q_Mscf_day * 1000.0,
     time_coefficient_years: TIME_COEFFICIENT_YEARS,
   };
 }
 
 /** Homogeneous, CO2-filled, infinite-acting radial E1 approximation. */
-function calculateSinglePhaseYear(year: number, property_pressure: number, p: Inputs, c: Row): Row {
-  const gas = prState(property_pressure, p.temperature_F);
+function calculateSinglePhaseYear(year: number, property_pressure: number, p: Inputs, c0: Row): Row {
+  // Viscosity uses a separate live PR density at every trial; Bg, cg and inventory density stay fixed.
+  const gas = gasProperties(property_pressure, p.temperature_F, c0.Zsc);
+  const mu_g = gas.mu_gas_cP;
+  const c: Row = { ...c0, reference_mobility_mD_cP: p.k_mD / mu_g };
   gas.cg_per_psi = c.initial_cg_per_psi;
   gas.rho_g_lb_ft3 = c.initial_gas_density_calculated_lb_ft3;
   gas.Bg_rb_scf = c.initial_Bg_rb_scf;
@@ -705,18 +873,18 @@ function calculateSinglePhaseYear(year: number, property_pressure: number, p: In
   const t_days = year * DAYS_PER_YEAR;
   const Vsc = c.q_sc_scf_day * t_days;
   const Vr_rb = Vsc * gas.Bg_rb_scf;
-  const tD = (TIME_COEFFICIENT_YEARS * p.k_mD * year) / (p.mu_gas_cP * p.porosity * p.rw_ft ** 2 * ct);
+  const tD = (TIME_COEFFICIENT_YEARS * p.k_mD * year) / (mu_g * p.porosity * p.rw_ft ** 2 * ct);
   const uw = 1.0 / (4.0 * tD);
   const E1w = exp1(uw);
   const pD = 0.5 * E1w;
   const q_reservoir = c.q_sc_scf_day * gas.Bg_rb_scf;
-  const delta_p = ((PRESSURE_COEFFICIENT * p.mu_gas_cP * q_reservoir) / (p.k_mD * p.h_ft)) * (pD + p.skin);
+  const delta_p = ((PRESSURE_COEFFICIENT * mu_g * q_reservoir) / (p.k_mD * p.h_ft)) * (pD + p.skin);
   const bhp = p.initial_pressure_psia + delta_p;
   const result: Row = {
     year, P_used_psia: property_pressure, t_days,
     ...gas, ...c, Vsc_scf: Vsc, Vr_rb,
     Vr_ft3: Vr_rb * FT3_PER_BBL, Minj_lb: c.rho_sc_lb_scf * Vsc,
-    krg_single_phase: 1.0, Lambda1_mD_cP: p.k_mD / p.mu_gas_cP,
+    krg_single_phase: 1.0, Lambda1_mD_cP: p.k_mD / mu_g,
     ct1_per_psi: ct, m1: 1.0, c1_star: 1.0, D1: 1.0,
     tD, uw, E1w,
     pD_gas_reference: pD, pD_intrinsic_reference: pD,
@@ -731,7 +899,7 @@ function calculateSinglePhaseYear(year: number, property_pressure: number, p: In
 /** Single-phase water in an initially water-filled infinite reservoir. */
 function calculateSinglePhaseWaterYear(year: number, property_pressure: number, p: Inputs, c: Row): Row {
   const water = waterProperties(property_pressure, p);
-  const ct = p.water_compressibility_per_psi + p.rock_compressibility_per_psi;
+  const ct = water.cw_per_psi + p.rock_compressibility_per_psi;
   const t_days = year * DAYS_PER_YEAR;
   const q_reservoir = p.water_rate_stb_day * water.Bw_rb_stb;
   const tD = (TIME_COEFFICIENT_YEARS * p.k_mD * year) / (p.mu_water_cP * p.porosity * p.rw_ft ** 2 * ct);
@@ -842,6 +1010,9 @@ export function runModel(p: Inputs, years: number): { results: Row[]; constants:
 
 export const SUMMARY_FIELDS = [
   "year", "phase_count", "single_fluid_code", "P_used_psia",
+  "mu_gas_cP", "mu_gas_Pa_s", "viscosity_density_kg_m3", "cw_per_Pa",
+  "rho_brine_kg_m3", "salt_mass_fraction", "salinity_wt_percent", "salinity_ppm",
+  "x_NaCl", "salt_molality", "water_activity", "salt_concentration_kg_m3",
   "Bw_rb_stb", "cw_per_psi", "rho_water_lb_ft3", "rho_water_at_BHP_lb_ft3", "Bg_rb_scf", "cg_per_psi", "rho_g_lb_ft3",
   "rho_g_at_BHP_lb_ft3",
   "corey_n_gas", "corey_n_water", "sf_normalized", "Sg_front",
@@ -862,7 +1033,7 @@ export function calculateFirstYearDetail(annual_results: Row[], p: Inputs, const
     initial_gas = waterProperties(p.initial_pressure_psia, p);
     initial_gas.rho_water_at_BHP_lb_ft3 = initial_gas.rho_water_lb_ft3;
   } else if (p.phase_mode === "single") {
-    initial_gas = prState(p.initial_pressure_psia, p.temperature_F);
+    initial_gas = gasProperties(p.initial_pressure_psia, p.temperature_F, constants.Zsc);
     initial_gas.cg_per_psi = constants.initial_cg_per_psi;
     initial_gas.rho_g_lb_ft3 = constants.initial_gas_density_calculated_lb_ft3;
     initial_gas.rho_g_at_BHP_lb_ft3 = constants.initial_gas_density_calculated_lb_ft3;
@@ -870,6 +1041,7 @@ export function calculateFirstYearDetail(annual_results: Row[], p: Inputs, const
   } else {
     initial_gas = gasProperties(p.initial_pressure_psia, p.temperature_F, constants.Zsc);
     initial_gas.rho_g_at_BHP_lb_ft3 = initial_gas.rho_g_lb_ft3;
+    Object.assign(initial_gas, waterProperties(p.initial_pressure_psia, p));
   }
   const detailed: Row[] = [{
     year: 0.0, t_days: 0.0, phase_count: constants.phase_count,
@@ -975,123 +1147,184 @@ function triSolve(l: Float64Array, d: Float64Array, u: Float64Array, rhs: Float6
   for (let i = n - 2; i >= 0; i--) rhs[i] -= cp[i] * rhs[i + 1];
 }
 
-/** Diffuse the final pressure profile at zero well flow with frozen properties (Python `calculate_observation`). */
+/** Cell mobility (mD/cP) and total compressibility (1/psi) at the cells' current excess pressures. */
+export type CellProperties = (excess: Float64Array) => { mobility: Float64Array; ct: Float64Array };
+
+/**
+ * Live cell properties of the frozen zones (Python `calculate_observation` rhs): viscosity and storage are recalculated
+ * at each cell's absolute pressure (initial + excess); zone geometry and saturations stay as at shut-in.
+ * `zone` per cell: 0 dry (gas), 1 two-phase, 2 brine.
+ */
+export function liveCellProperties(p: Inputs, zone: number[], frozen: Row): CellProperties {
+  const n = zone.length;
+  const mobility = new Float64Array(n), ct = new Float64Array(n), v = new Float64Array(3);
+  const cr = p.rock_compressibility_per_psi;
+  const fluid = `${p.temperature_F}|${p.brine_standard_density_lb_ft3}`;
+  if (isWaterMode(p)) {
+    const cw = tabulatedProperty(`w|${fluid}`, 1, (P) => [waterProperties(P, p).cw_per_psi]);
+    return (excess) => {
+      for (let i = 0; i < n; i++) { cw(p.initial_pressure_psia + excess[i], v); mobility[i] = p.k_mD / p.mu_water_cP; ct[i] = v[0] + cr; }
+      return { mobility, ct };
+    };
+  }
+  if (p.phase_mode === "single") {
+    // Retain the requested fixed initial cg in this single-phase branch.
+    const mu = tabulatedProperty(`g|${p.temperature_F}`, 1, (P) => [liveCo2(P, p.temperature_F).mu]);
+    return (excess) => {
+      for (let i = 0; i < n; i++) { mu(p.initial_pressure_psia + excess[i], v); mobility[i] = p.k_mD / v[0]; ct[i] = frozen.ct1_per_psi; }
+      return { mobility, ct };
+    };
+  }
+  const props = tabulatedProperty(`gw|${fluid}`, 3, (P) => {
+    const g = liveCo2(P, p.temperature_F);
+    return [g.mu, g.cg, waterProperties(P, p).cw_per_psi];
+  });
+  return (excess) => {
+    for (let i = 0; i < n; i++) {
+      props(p.initial_pressure_psia + excess[i], v);
+      const mu = v[0], cg = v[1], cw = v[2];
+      const z = zone[i];
+      mobility[i] = z === 0 ? (p.k_mD * p.krg_zone1) / mu : z === 1 ? p.k_mD * (frozen.krg2 / mu + frozen.krw2 / p.mu_water_cP) : p.k_mD / p.mu_water_cP;
+      ct[i] = z === 0 ? cg + cr : z === 1 ? frozen.Sg2 * cg + frozen.Sw2 * cw + cr : cw + cr;
+    }
+    return { mobility, ct };
+  };
+}
+
+/**
+ * Zero-flow radial diffusion with pressure-dependent cell properties (the shut-in solve of the program):
+ * dP/dt = net flux / (phi ct V); zero flux at the well face, zero excess at the outer edge.
+ * Time integration: L-stable implicit Euler with Richardson extrapolation on the given step times (first = 0), each
+ * implicit step closed by Picard iteration on the cell properties (the Python uses scipy BDF with rtol 2e-7; the two
+ * agree to about 1e-3 psi). Returns the profile at every step time.
+ */
+// Picard passes per implicit step: the properties vary slowly, and a second pass changes the shut-in BHP by < 1e-6 psi.
+const PICARD_MAX = 2;
+export function diffuseRadial(faces: number[], centers: Float64Array, outer: number, porosity: number,
+  y0: Float64Array, cell: CellProperties, stepTimes: number[]): Float64Array[] {
+  const n = centers.length;
+  const geometry = new Float64Array(n), rl = new Float64Array(Math.max(n - 1, 0)), rr = new Float64Array(Math.max(n - 1, 0));
+  for (let i = 0; i < n; i++) geometry[i] = (faces[i + 1] ** 2 - faces[i] ** 2) / 2;
+  for (let i = 0; i < n - 1; i++) {
+    rl[i] = Math.log(faces[i + 1] / centers[i]);
+    rr[i] = Math.log(centers[i + 1] / faces[i + 1]);
+  }
+  const outerLog = Math.log(outer / centers[n - 1]);
+  const g = new Float64Array(Math.max(n - 1, 0)), S = new Float64Array(n);
+  const lower = new Float64Array(Math.max(n - 1, 0)), upper = new Float64Array(Math.max(n - 1, 0)), diag = new Float64Array(n);
+  const step = (y: Float64Array, h: number): Float64Array => {
+    let x = Float64Array.from(y);
+    for (let it = 0; it < PICARD_MAX; it++) {
+      const { mobility, ct } = cell(x);
+      for (let i = 0; i < n; i++) S[i] = porosity * ct[i] * geometry[i];
+      for (let i = 0; i < n - 1; i++) g[i] = TIME_COEFFICIENT_YEARS / (rl[i] / mobility[i] + rr[i] / mobility[i + 1]);
+      for (let i = 0; i < n; i++) diag[i] = S[i];
+      for (let i = 0; i < n - 1; i++) {
+        diag[i] += h * g[i];
+        diag[i + 1] += h * g[i];
+        lower[i] = -h * g[i];
+        upper[i] = -h * g[i];
+      }
+      diag[n - 1] += (h * TIME_COEFFICIENT_YEARS * mobility[n - 1]) / outerLog;
+      const rhs = new Float64Array(n);
+      for (let i = 0; i < n; i++) rhs[i] = S[i] * y[i];
+      triSolve(lower, diag, upper, rhs);
+      let change = 0, size = 1;
+      for (let i = 0; i < n; i++) { change = Math.max(change, Math.abs(rhs[i] - x[i])); size = Math.max(size, Math.abs(rhs[i])); }
+      x = rhs;
+      if (change <= 1e-10 * size) break;
+    }
+    return x;
+  };
+  const profiles: Float64Array[] = [Float64Array.from(y0)];
+  let y = profiles[0];
+  for (let k = 1; k < stepTimes.length; k++) {
+    const h = stepTimes[k] - stepTimes[k - 1];
+    const coarse = step(y, h), fine = step(step(y, h / 2), h / 2);
+    const next = new Float64Array(n);
+    for (let i = 0; i < n; i++) next[i] = 2 * fine[i] - coarse[i];
+    profiles.push(next);
+    y = next;
+  }
+  return profiles;
+}
+
+/** Nonlinear zero-flow pressure diffusion with live transport/storage (Python `calculate_observation`). */
 export function calculateObservation(final: Row, p: Inputs, make_plot = true): Observation | null {
   const { period, offsets } = observationSchedule(p.observation_period_years, p.observation_years);
   if (!offsets.length) return null;
-  // Mobility is in mD/cP, storage in 1/psi, and the radial grid is in ft.
   const active_zones = p.phase_mode === "two" ? [1, 2, 3] : [1];
-  const mobility = active_zones.map((z) => final[`Lambda${z}_mD_cP`]);
-  const storage = active_zones.map((z) => p.porosity * final[`ct${z}_per_psi`]);
-  const diffusivity = mobility.map((mo, i) => (TIME_COEFFICIENT_YEARS * mo) / storage[i]);
-  // Keep the fixed-pressure outer edge well beyond the diffusing disturbance.
+  const final_mobility = active_zones.map((z) => final[`Lambda${z}_mD_cP`]);
+  const final_storage = active_zones.map((z) => p.porosity * final[`ct${z}_per_psi`]);
+  const diffusivity = final_mobility.map((mo, i) => (TIME_COEFFICIENT_YEARS * mo) / final_storage[i]);
   const outer_front = p.phase_mode === "two" ? final.rg_ft : p.rw_ft;
   const outer_radius = outer_front + 12 * Math.sqrt(Math.max(...diffusivity) * (final.year + period));
-  const zone_edges = p.phase_mode === "two" ? [p.rw_ft, final.rd_ft, final.rg_ft, outer_radius] : [p.rw_ft, outer_radius];
+  const edges = p.phase_mode === "two" ? [p.rw_ft, final.rd_ft, final.rg_ft, outer_radius] : [p.rw_ft, outer_radius];
   const faces: number[] = [p.rw_ft];
   const zones: number[] = [];
-  for (let zone = 0; zone < zone_edges.length - 1; zone++) {
-    const inner = zone_edges[zone], outer = zone_edges[zone + 1];
+  for (let zone = 0; zone < edges.length - 1; zone++) {
+    const inner = edges[zone], outer = edges[zone + 1];
     if (outer > inner) {
-      const cells = Math.ceil(Math.log(outer / inner) / 0.04);
-      faces.push(...geomspace(inner, outer, cells + 1).slice(1));
-      for (let k = 0; k < cells; k++) zones.push(zone);
+      const count = Math.ceil(Math.log(outer / inner) / 0.04);
+      faces.push(...geomspace(inner, outer, count + 1).slice(1));
+      for (let k = 0; k < count; k++) zones.push(zone);
     }
   }
   const n = zones.length;
   const centers = new Float64Array(n);
-  const cell_storage = new Float64Array(n);
-  const cell_mobility = new Float64Array(n);
-  for (let i = 0; i < n; i++) {
-    centers[i] = Math.sqrt(faces[i] * faces[i + 1]);
-    cell_storage[i] = (storage[zones[i]] * (faces[i + 1] ** 2 - faces[i] ** 2)) / 2;
-    cell_mobility[i] = mobility[zones[i]];
-  }
-  // Integrate the cylindrical flow resistance from each cell center to the shared face.
-  const lower = new Float64Array(Math.max(n - 1, 0));
-  const upper = new Float64Array(Math.max(n - 1, 0));
-  const diagonal = new Float64Array(n);
-  for (let i = 0; i < n - 1; i++) {
-    const interface_resistance = Math.log(faces[i + 1] / centers[i]) / cell_mobility[i] + Math.log(centers[i + 1] / faces[i + 1]) / cell_mobility[i + 1];
-    const conductance = TIME_COEFFICIENT_YEARS / interface_resistance;
-    lower[i] = conductance / cell_storage[i + 1];
-    upper[i] = conductance / cell_storage[i];
-    diagonal[i + 1] -= lower[i];
-    diagonal[i] -= upper[i];
-  }
-  // Inner face flux is zero. The far edge has zero excess pressure.
-  diagonal[n - 1] -= (TIME_COEFFICIENT_YEARS * cell_mobility[n - 1]) / (Math.log(outer_radius / centers[n - 1]) * cell_storage[n - 1]);
+  for (let i = 0; i < n; i++) centers[i] = Math.sqrt(faces[i] * faces[i + 1]);
 
-  let scale: number, offsets_a: number[], coefficients_b: number[], ratios_D: number[], well_dimensionless_pressure: number;
+  let scale: number, aa: number[], bb: number[], DD: number[], well_pD: number;
   if (p.phase_mode === "two") {
-    scale = (PRESSURE_COEFFICIENT * p.mu_gas_cP * final.q_reservoir_rb_day) / (p.k_mD * p.h_ft * p.krg_zone1);
-    offsets_a = [final.a1, final.a2, final.a3];
-    coefficients_b = [final.b1, final.b2, final.b3];
-    ratios_D = [final.D1, final.D2, final.D3];
-    well_dimensionless_pressure = final.pD_gas_reference;
+    scale = (PRESSURE_COEFFICIENT * final.mu_gas_cP * final.q_reservoir_rb_day) / (p.k_mD * p.h_ft * p.krg_zone1);
+    aa = [final.a1, final.a2, final.a3];
+    bb = [final.b1, final.b2, final.b3];
+    DD = [final.D1, final.D2, final.D3];
+    well_pD = final.pD_gas_reference;
   } else {
-    const viscosity = isWaterMode(p) ? p.mu_water_cP : p.mu_gas_cP;
+    const viscosity = isWaterMode(p) ? p.mu_water_cP : final.mu_gas_cP;
     scale = (PRESSURE_COEFFICIENT * viscosity * final.q_reservoir_rb_day) / (p.k_mD * p.h_ft);
-    offsets_a = [0.0];
-    coefficients_b = [0.5];
-    ratios_D = [1.0];
-    well_dimensionless_pressure = final.pD_intrinsic_reference;
+    aa = [0.0];
+    bb = [0.5];
+    DD = [1.0];
+    well_pD = final.pD_intrinsic_reference;
   }
   const y0 = new Float64Array(n);
   for (let i = 0; i < n; i++) {
     const z = zones[i];
-    const argument = (centers[i] / p.rw_ft) ** 2 / (4 * ratios_D[z] * final.tD);
-    y0[i] = scale * (offsets_a[z] + coefficients_b[z] * exp1(argument));
+    const argument = (centers[i] / p.rw_ft) ** 2 / (4 * DD[z] * final.tD);
+    y0[i] = scale * (aa[z] + bb[z] * exp1(argument));
   }
+  // zones here are 0 dry, 1 two-phase, 2 brine (two-phase) or 0 (single phase)
+  const cell = liveCellProperties(p, zones, final);
 
   let times = [0.0, period, ...offsets.map((o) => o.v)];
-  if (make_plot) {
-    const first_plot_year = Math.min(period / 100, 1 / (DAYS_PER_YEAR * 86400));
-    times.push(...geomspace(first_plot_year, period, 90));
-  }
+  if (make_plot) times.push(...geomspace(Math.min(period / 100, 1 / (DAYS_PER_YEAR * 86400)), period, 90));
   times = uniqueSorted(times);
-  // Time integration of d(excess)/dt = operator @ excess: L-stable implicit Euler with Richardson extrapolation on
-  // geometric steps that hit every requested time (the Python uses scipy's BDF with rtol 2e-7).
   const tiny = Math.min(period / 100, 1 / (DAYS_PER_YEAR * 86400)) / 10;
   const grid = new Set<number>(times);
   const steps = 700;
   for (let k = 0; k <= steps; k++) grid.add(tiny * (period / tiny) ** (k / steps));
   const stepTimes = [...grid].filter((t) => t >= 0 && t <= period).sort((a, b) => a - b);
-  const ieStep = (y: Float64Array, h: number): Float64Array => {
-    const x = Float64Array.from(y);
-    triSolve(lower.map((v) => -h * v), diagonal.map((v) => 1 - h * v), upper.map((v) => -h * v), x);
-    return x;
-  };
-  const wellAt = new Map<number, number>();
-  let y = y0;
-  let tPrev = 0;
-  for (const t of stepTimes) {
-    if (t > tPrev) {
-      const h = t - tPrev;
-      const coarse = ieStep(y, h);
-      const fine = ieStep(ieStep(y, h / 2), h / 2);
-      const next = new Float64Array(n);
-      for (let i = 0; i < n; i++) next[i] = 2 * fine[i] - coarse[i];
-      y = next;
-      tPrev = t;
-    }
-    wellAt.set(t, y[0]);
-  }
+  const profiles = diffuseRadial(faces, centers, outer_radius, p.porosity, y0, cell, stepTimes);
+  const wellAt = new Map<number, number>(stepTimes.map((t, k) => [t, profiles[k][0]]));
   if (![...wellAt.values()].every(Number.isFinite)) fail("Shut-in pressure solve failed: non-finite pressure.");
-  // The first cell approximates the zero-flow well pressure at positive time.
-  // At shut-in itself the analytical formation pressure is available at rw.
-  const well_excess = times.map((t) => (t === 0 ? scale * well_dimensionless_pressure : (wellAt.get(t) as number)));
+  const well_excess = times.map((t) => (t === 0 ? scale * well_pD : (wellAt.get(t) as number)));
   const byTime = new Map(times.map((t, i) => [t, well_excess[i]]));
   const finalYearInt = isInt(final, "year");
   const rows: Row[] = offsets.map((o) => {
     const buildup = byTime.get(o.v) as number;
     const bhp = p.initial_pressure_psia + buildup;
+    const properties: Row = {};
+    if (isWaterMode(p) || p.phase_mode === "two") Object.assign(properties, waterProperties(bhp, p));
+    if (!isWaterMode(p)) Object.assign(properties, co2Viscosity(p.temperature_F, calculateCo2Density(bhp, p.temperature_F)));
     const row: Row = {
       years_after_shut_in: o.v,
       elapsed_year: final.year + o.v,
       BHP_psia: bhp,
       total_delta_p_psi: buildup,
       falloff_from_flowing_BHP_psi: final.BHP_psia - bhp,
+      ...properties,
       ...(isWaterMode(p)
         ? { q_water_stb_day: 0.0, cumulative_injected_water_stb: final.Vwater_stb }
         : { q_sc_scf_day: 0.0, cumulative_injected_CO2_scf: final.Vsc_scf }),
@@ -1327,6 +1560,9 @@ export const LIMIT_FIELDS = ["max_allowable_BHP_psia", "pressure_limit_status", 
 
 export const DETAIL_FIELDS = [
   "year", "phase_count", "single_fluid_code", "t_days",
+  "mu_gas_cP", "mu_gas_Pa_s", "viscosity_density_kg_m3", "cw_per_Pa",
+  "rho_brine_kg_m3", "salt_mass_fraction", "salinity_wt_percent", "salinity_ppm",
+  "x_NaCl", "salt_molality", "water_activity", "salt_concentration_kg_m3",
   "Bw_rb_stb", "cw_per_psi", "rho_water_lb_ft3", "rho_water_at_BHP_lb_ft3", "P_used_psia", "BHP_psia", "total_delta_p_psi",
   "rho_g_lb_ft3", "rho_g_at_BHP_lb_ft3", "Bg_rb_scf", "cg_per_psi",
   "rd_ft", "dry_zone_thickness_ft", "Vp1_ft3", "Mg1_lb", "rg_ft",
@@ -1372,6 +1608,16 @@ export function inputsUsed(out: RunOutput): string {
     maximum_pressure_iterations: new PyInt(MAX_PRESSURE_ITERATIONS),
     pressure_residual: "P_used_psia - BHP_psia",
     pressure_evaluations: "number of annual-equation evaluations in the within-year solve",
+    gas_viscosity: "Fenghour-Wakeham-Vesovic 1998 background correlation using live PR density at every trial pressure; not an input",
+    water_compressibility: "cw=(d rho_brine/dP at fixed T and salt kg/kg)/rho_brine; not an input",
+    brine_density: "Driesner 2007 liquid molar-volume mapping backed by IAPWS-IF97 Region 1",
+    salinity: "NaCl-equivalent salt kg/kg inferred from measured standard brine density with the supplied McCain inverse; not an input",
+    salinity_pressure_convention: "Salt kg/kg and mole fraction are conserved under compression; salt kg/m3 changes with density. No salt transport or precipitation is solved.",
+    brine_reference_density_basis: "60 F and 14.696 psia; do not enter a reservoir-condition density",
+    brine_backend_limits: "0.1--100 MPa; mapped liquid-water temperature 273.15--623.15 K; salt kg/kg 0--0.26",
+    gas_viscosity_reference: "https://doi.org/10.1063/1.556013",
+    brine_density_reference: "https://doi.org/10.1016/j.gca.2007.05.026",
+    water_density_reference: "https://iapws.org/public/documents/UWTF-/IF97-Rev.pdf",
     gas_density: "calculated from rho = p*M/(Z*R*T); not an input",
     gas_density_timing: "rho_g_lb_ft3 uses converged P_used_psia; rho_g_at_BHP_lb_ft3 uses BHP_psia; pressures agree within tolerance",
     vapor_correction: "blue-cancelled factor omitted",
@@ -1400,7 +1646,7 @@ export function inputsUsed(out: RunOutput): string {
     method,
   };
   if (observation) {
-    method.observation = "Zero-flow radial pressure diffusion with zone geometry, mobility, and storage frozen at shut-in. Observation times are years after shut-in. Year zero reports formation pressure after removal of flowing skin.";
+    method.observation = "Nonlinear zero-flow radial pressure diffusion with zone geometry and saturations frozen at shut-in. Cell viscosity and storage are updated at local pressure. Observation times are years after shut-in. Year zero reports formation pressure after removal of flowing skin.";
     saved.observation_report_years = observation.rows.map((r) => (isInt(r, "years_after_shut_in") ? new PyInt(r.years_after_shut_in) : r.years_after_shut_in));
   }
   if (p.phase_mode === "single") {
@@ -1422,22 +1668,22 @@ export function inputsUsed(out: RunOutput): string {
       relative_permeability: "1.0 for single-phase water",
       total_compressibility: "water compressibility + rock compressibility",
       pressure_reference: "intrinsic k; pD = 0.5*E1(1/(4*tD))",
-      water_density: "rho_w(Pi)*exp(cw*(P-Pi))",
+      water_density: "Driesner liquid-brine density at current trial pressure, temperature and derived salt mass fraction",
       water_Bw: "fixed at exactly 1.0 rb/STB for all times and pressures",
       surface_rate_unit: "STB/day", reservoir_rate: "q_water*1.0 (rb/day)",
       first_year_sampling: "241 logarithmically spaced samples from 1 second to 1 day, plus exact 1-minute and 1-hour checkpoints; every 6 hours after day 1; exact year-1 endpoint",
       pressure_axis: "Shared BHP range with rounded ticks anchored at initial pressure and padding around the full water curve",
       full_period_time_tick_interval_years: n <= 4 ? new PyInt(1) : n <= 30 ? new PyInt(2) : "automatic integer-year ticks",
-      limitation: "slightly-compressible radial E1 approximation with constant water viscosity and cw",
+      limitation: "representative-pressure E1 approximation with calculated cw; fixed water viscosity and the retained fixed Bw=1 convention",
     });
   } else if (p.phase_mode === "single") {
     Object.assign(method, {
       gas_formation_volume_factor: `Fixed at ${pyFormat(constants.initial_Bg_rb_scf, ".10f")} rb/scf`,
       gas_density: "Fixed at the Peng-Robinson value at the initial pressure and reservoir temperature",
-      gas_density_timing: "Both density columns report the fixed initial density",
+      gas_density_timing: "Both inventory-density columns report the fixed initial density; viscosity_density_kg_m3 is the live density used for viscosity",
       total_compressibility: "Fixed initial cg + rock compressibility",
       reservoir_rate: "q_sc_scf_day * initial_Bg_rb_scf (rb/day)",
-      limitation: "E1 slightly-compressible kernel with fixed Bg, cg and CO2 density",
+      limitation: "representative-pressure E1 kernel with fixed Bg, cg and inventory density, but viscosity updated from separate live PR density",
     });
   }
   saved.active_input_names = inputNamesForPhase(p.phase_mode, p.single_phase_fluid);
@@ -1477,6 +1723,9 @@ export const SUMMARY_COLUMNS: [string, string, string][] = [
   ["Year", "year", ".0f"],
   ["Years after shut-in", "years_after_shut_in", ".10g"],
   ["Elapsed year", "elapsed_year", ".10g"],
+  ["CO2 viscosity (cP)", "mu_gas_cP", ".7f"],
+  ["Derived salinity (mass ppm)", "salinity_ppm", ".4f"],
+  ["Salt concentration (kg/m3)", "salt_concentration_kg_m3", ".7f"],
   ["Water density at pressure used (lb/ft3)", "rho_water_lb_ft3", ".6f"],
   ["Water density at BHP (lb/ft3)", "rho_water_at_BHP_lb_ft3", ".6f"],
   ["Bw (rb/STB)", "Bw_rb_stb", ".8f"],

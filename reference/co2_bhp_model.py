@@ -253,6 +253,7 @@ import json
 import math
 import sys
 from dataclasses import asdict, dataclass, fields, replace
+from functools import lru_cache
 from pathlib import Path
 # In Jupyter, run %pip install ipywidgets in a separate cell if needed.
 try:
@@ -316,12 +317,9 @@ class Inputs:
     initial_pressure_psia: float = 3500.0
     temperature_F: float = 200.0
     mu_water_cP: float = 0.30
-    mu_gas_cP: float = 0.0432
-    brine_density_lb_ft3: float = 63.9
-    salt_mass_fraction: float = 0.034
+    brine_standard_density_lb_ft3: float = 63.878
     Swr: float = 0.55
     rock_compressibility_per_psi: float = 4.2e-6
-    water_compressibility_per_psi: float = 3.5e-6
     krg_endpoint: float = 0.65
     krw_endpoint: float = 1.00
     krg_zone1: float = 0.65
@@ -358,21 +356,21 @@ class Inputs:
                 raise ValueError(f"{name} must be finite.")
         for name in (
             "q_Mscf_day", "k_mD", "h_ft", "rw_ft", "initial_pressure_psia",
-            "mu_water_cP", "mu_gas_cP",
-            "brine_density_lb_ft3", "corey_n_gas", "corey_n_water",
+            "mu_water_cP",
+            "brine_standard_density_lb_ft3", "corey_n_gas", "corey_n_water",
             "water_rate_stb_day", "water_Bw_rb_stb",
         ):
             if name in active_names and getattr(self, name) <= 0:
                 raise ValueError(f"{name} must be greater than zero.")
         if not 0 < self.porosity < 1:
             raise ValueError("porosity must be strictly between 0 and 1.")
-        for name in ("salt_mass_fraction", "Swr"):
+        for name in ("Swr",):
             if name in active_names and not 0 <= getattr(self, name) < 1:
                 raise ValueError(f"{name} must satisfy 0 <= value < 1.")
         for name in ("krg_endpoint", "krw_endpoint", "krg_zone1"):
             if name in active_names and not 0 < getattr(self, name) <= 1:
                 raise ValueError(f"{name} must satisfy 0 < value <= 1.")
-        for name in ("rock_compressibility_per_psi", "water_compressibility_per_psi"):
+        for name in ("rock_compressibility_per_psi",):
             if name in active_names and getattr(self, name) < 0:
                 raise ValueError(f"{name} cannot be negative.")
         if self.phase_mode == "two" and (self.corey_n_gas, self.corey_n_water) not in ((2.0, 2.0), (3.0, 3.0)):
@@ -381,13 +379,15 @@ class Inputs:
                 "to 2 for the quadratic comparison. Other exponent pairs "
                 "require a different front-saturation derivation."
             )
-        if is_water_mode(self):
-            if self.water_compressibility_per_psi + self.rock_compressibility_per_psi <= 0:
-                raise ValueError("Water plus rock compressibility must be positive.")
-            return
         temperature_K = (self.temperature_F + 459.67) * 5.0 / 9.0
         if temperature_K <= 0:
             raise ValueError("Absolute reservoir temperature must be positive.")
+        if self.phase_mode == "two" or is_water_mode(self):
+            water_properties(self.initial_pressure_psia, self)
+        if not is_water_mode(self):
+            state = pr_state(self.initial_pressure_psia, self.temperature_F)
+            rho = calculate_co2_density(self.initial_pressure_psia, self.temperature_F, state["Z"])
+            co2_viscosity(self.temperature_F, rho)
         if self.phase_mode == "two" and not temperature_K < WATER_TC_K:
             raise ValueError(
                 "The supplied water-saturation equation requires "
@@ -400,8 +400,8 @@ PHASE_LABELS = {
     "two": "Two-phase CO2-brine (original three-zone model)",
 }
 TWO_PHASE_ONLY = frozenset({
-    "mu_water_cP", "brine_density_lb_ft3", "salt_mass_fraction", "Swr",
-    "water_compressibility_per_psi", "krg_endpoint", "krw_endpoint",
+    "mu_water_cP", "brine_standard_density_lb_ft3", "Swr",
+    "krg_endpoint", "krw_endpoint",
     "krg_zone1", "corey_n_gas", "corey_n_water",
 })
 OBSERVATION_INPUTS = {"observation_period_years", "observation_years"}
@@ -423,9 +423,9 @@ def input_names_for_phase(phase, single_fluid="co2"):
         raise ValueError("Select single/two phases and water/co2 for single phase.")
     water_names = (
         "water_rate_stb_day", "k_mD", "h_ft", "rw_ft",
-        "porosity", "initial_pressure_psia", "mu_water_cP",
-        "brine_density_lb_ft3", "rock_compressibility_per_psi",
-        "water_compressibility_per_psi", "skin",
+        "porosity", "initial_pressure_psia", "temperature_F", "mu_water_cP",
+        "brine_standard_density_lb_ft3", "rock_compressibility_per_psi",
+        "skin",
     )
     if phase == "single" and single_fluid == "water":
         return water_names
@@ -448,12 +448,9 @@ PROMPTS = {
     "initial_pressure_psia": "Initial absolute pressure (psia)",
     "temperature_F": "Constant reservoir temperature (deg F)",
     "mu_water_cP": "Water viscosity (cP)",
-    "mu_gas_cP": "Gas viscosity (cP)",
-    "brine_density_lb_ft3": "Brine density (lb/ft^3)",
-    "salt_mass_fraction": "Salt mass fraction",
+    "brine_standard_density_lb_ft3": "Brine density at 60 F and 14.696 psia (lb/ft^3)",
     "Swr": "Irreducible water saturation Swr",
     "rock_compressibility_per_psi": "Rock compressibility (1/psi)",
-    "water_compressibility_per_psi": "Water compressibility (1/psi)",
     "krg_endpoint": "Gas endpoint relative permeability krg0",
     "krw_endpoint": "Water endpoint relative permeability krw0",
     "krg_zone1": "Zone 1 gas relative permeability krg1",
@@ -461,6 +458,243 @@ PROMPTS = {
     "corey_n_water": "Water Corey exponent (must match gas exponent)",
     "skin": "Skin factor",
 }
+
+
+# Background-property references:
+# Fenghour et al. (1998), DOI 10.1063/1.556013, Eqs. 3--8, Tables 1 and 3.
+# Driesner (2007), DOI 10.1016/j.gca.2007.05.026, liquid molar-volume mapping;
+# independently checkable implementation: MOOSE BrineFluidProperties::rho_from_p_T_X.
+# IAPWS R7-97(2012), Eq. 7 and Tables 2--4 (liquid-water Region 1).
+# McCain standard-density equation is the relation supplied with this request.
+_IF97_REGION1 = (
+    (0,-2,.14632971213167), (0,-1,-.84548187169114),
+    (0,0,-3.7563603672040), (0,1,3.3855169168385),
+    (0,2,-.95791963387872), (0,3,.15772038513228),
+    (0,4,-.016616417199501), (0,5,.00081214629983568),
+    (1,-9,.00028319080123804), (1,-7,-.00060706301565874),
+    (1,-1,-.018990068218419), (1,0,-.032529748770505),
+    (1,1,-.021841717175414), (1,3,-.000052838357969930),
+    (2,-3,-.00047184321073267), (2,0,-.00030001780793026),
+    (2,1,.000047661393906987), (2,3,-.0000044141845330846),
+    (2,17,-7.2694996297594e-16), (3,-4,-.000031679644845054),
+    (3,0,-.0000028270797985312), (3,6,-8.5205128120103e-10),
+    (4,-5,-.0000022425281908000), (4,-2,-.00000065171222895601),
+    (4,10,-1.4341729937924e-13), (5,-8,-.00000040516996860117),
+    (8,-11,-1.2734301741641e-9), (8,-6,-1.7424871230634e-10),
+    (21,-29,-6.8762131295531e-19), (23,-31,1.4478307828521e-20),
+    (29,-38,2.6335781662795e-23), (30,-39,-1.1947622640071e-23),
+    (31,-40,1.8228094581404e-24), (32,-41,-9.3537087292458e-26),
+)
+
+
+def _number(value):
+    """Return a float for scalar properties and an ndarray for cell properties."""
+    value = np.asarray(value, dtype=float)
+    return float(value) if value.ndim == 0 else value
+
+
+@lru_cache(maxsize=64)
+def salinity_from_standard_density(rho_standard_lb_ft3):
+    """Infer NaCl-equivalent composition from the supplied standard density.
+
+    rho_sc=62.368+0.438603*S+0.00160074*S^2, where S is WEIGHT PERCENT.
+    The stable positive-root expression avoids subtraction at low salinity.
+    This equation must never be applied to pressure-compressed reservoir density.
+    """
+    if not math.isfinite(rho_standard_lb_ft3) or rho_standard_lb_ft3 < 62.368:
+        raise ValueError("Standard brine density must be at least 62.368 lb/ft3 for the supplied McCain relation.")
+    delta = rho_standard_lb_ft3 - 62.368
+    wt_percent = 2.0*delta / (
+        .438603 + math.sqrt(.438603**2 + 4*.00160074*delta)
+    )
+    w = wt_percent / 100.0
+    if not 0 <= w <= .26:
+        raise ValueError("The implemented aqueous-brine backend requires NaCl mass fraction 0--0.26.")
+    mw_water = MW_WATER/1000.0
+    moles_salt = w/MW_SALT_KG_MOL
+    moles_water = (1-w)/mw_water
+    molality = w/(MW_SALT_KG_MOL*(1-w))
+    return {
+        "salt_mass_fraction": w,
+        "salinity_wt_percent": wt_percent,
+        "salinity_ppm": w*1e6,
+        "x_NaCl": moles_salt/(moles_salt+moles_water),
+        "salt_molality": molality,
+        "water_activity": WATER_MOLES_KG/(WATER_MOLES_KG+2*molality),
+    }
+
+
+def _water97_liquid_density(pressure_Pa, temperature_K):
+    """IAPWS-IF97 Region 1 density, kg/m3; scalar or broadcast arrays.
+
+    v=R*T*gamma_pi/pstar, with R=461.526 J/(kg K), pstar=16.53 MPa.
+    This is only the compressed-liquid region, not the full IF97 formulation.
+    """
+    P, T = np.broadcast_arrays(np.asarray(pressure_Pa, float), np.asarray(temperature_K, float))
+    if (not np.isfinite(P).all() or not np.isfinite(T).all()
+            or np.any(T < 273.15) or np.any(T > 623.15)
+            or np.any(P < 1.0e5) or np.any(P > 1.0e8)):
+        raise ValueError("Brine backend requires 0.1--100 MPa and mapped liquid-water temperature 273.15--623.15 K.")
+    tau_sat = 1-T/WATER_TC_K
+    psat = WATER_PC_MPA*1e6*np.exp(
+        WATER_TC_K/T*sum(a*tau_sat**power for a,power in zip(WATER_A,WATER_POWERS))
+    )
+    if np.any(P < psat*(1-1e-7)):
+        raise ValueError("The Driesner mapped-water state is not compressed liquid; this backend cannot evaluate it.")
+    x, y = 7.1-P/16.53e6, 1386.0/T-1.222
+    gp = np.zeros_like(P)
+    for I,J,n in _IF97_REGION1:
+        if I:
+            gp += -n*I*x**(I-1)*y**J
+    density = 16.53e6/(461.526*T*gp)
+    if np.any(density <= 0) or not np.isfinite(density).all():
+        raise ValueError("IAPWS liquid-water density is invalid.")
+    return _number(density)
+
+
+def brine_density_kg_m3(pressure_Pa, temperature_K, salt_mass_fraction):
+    """Driesner liquid molar-volume mapping, backed by IF97 Region 1.
+
+    P is converted to bar; composition is converted to NaCl MOLE fraction.
+    rho_brine = rho_water(P,Tv) * M_brine/M_water. No CO2 dissolution.
+    Returns density and the mapped water temperature used by the correlation.
+    """
+    w = float(salt_mass_fraction)
+    if not 0 <= w <= .26:
+        raise ValueError("NaCl mass fraction must be between 0 and 0.26.")
+    P = np.asarray(pressure_Pa, float)
+    if not np.isfinite(P).all() or np.any(P < 1e5) or np.any(P > 1e8):
+        raise ValueError("The implemented brine backend supports 0.1--100 MPa.")
+    pbar = P*1e-5
+    p2, p3 = pbar*pbar, pbar*pbar*pbar
+    mw = MW_WATER/1000.0
+    x = (w/MW_SALT_KG_MOL)/(w/MW_SALT_KG_MOL+(1-w)/mw)
+    n11 = -54.2958-45.7623*np.exp(-9.44785e-4*pbar)
+    n21 = -2.6142-2.39092e-4*pbar
+    n22 = .0356828+4.37235e-6*pbar+2.0566e-9*p2
+    n1x1 = 330.47+.942876*np.sqrt(pbar)+.0817193*pbar-2.47556e-8*p2+3.45052e-10*p3
+    n2x1 = -.0370751+.00237723*np.sqrt(pbar)+5.42049e-5*pbar+5.84709e-9*p2-5.99373e-13*p3
+    n12 = -n1x1-n11
+    n20 = 1-n21*np.sqrt(n22)
+    n23 = n2x1-n20-n21*np.sqrt(1+n22)
+    n1 = n1x1+n11*(1-x)+n12*(1-x)**2
+    n2 = n20+n21*np.sqrt(x+n22)+n23*x
+    Tv = n1+n2*(temperature_K-273.15)+273.15
+    molar_mass = 1/(w/MW_SALT_KG_MOL+(1-w)/mw)
+    rho = np.asarray(_water97_liquid_density(P,Tv))*molar_mass/mw
+    return _number(rho), _number(Tv)
+
+
+def water_properties(pressure_psia, p):
+    """Calculated saline-water density and isothermal compressibility.
+
+    cw=(1/rho)*(d rho/dP)|T,w. Central differences hold composition fixed.
+    A one-sided second-order stencil is used only at a pressure-domain edge.
+    The previous fixed Bw=1 convention is deliberately retained separately.
+    """
+    P = np.asarray(pressure_psia,float)*PA_PER_PSI
+    T = (p.temperature_F+459.67)*5.0/9.0
+    salt = salinity_from_standard_density(p.brine_standard_density_lb_ft3)
+    w = salt["salt_mass_fraction"]
+    rho, Tv = brine_density_kg_m3(P,T,w)
+    rho = np.asarray(rho)
+    h = np.maximum(100.0,1e-4*P)
+    lo, hi = 1e5,1e8
+    forward, backward = P-h < lo, P+h > hi
+    # Clipped side points allow one vectorized evaluation; one-sided entries
+    # are replaced below, so clipped central stencils are never used as cw.
+    rp = np.asarray(brine_density_kg_m3(np.minimum(P+h,hi),T,w)[0])
+    rm = np.asarray(brine_density_kg_m3(np.maximum(P-h,lo),T,w)[0])
+    derivative = (rp-rm)/(2*h)
+    if np.any(forward):
+        r2 = np.asarray(brine_density_kg_m3(np.minimum(P+2*h,hi),T,w)[0])
+        derivative = np.where(forward,(-3*rho+4*rp-r2)/(2*h),derivative)
+    if np.any(backward):
+        r2 = np.asarray(brine_density_kg_m3(np.maximum(P-2*h,lo),T,w)[0])
+        derivative = np.where(backward,(3*rho-4*rm+r2)/(2*h),derivative)
+    cw = derivative/rho
+    if np.any(cw <= 0) or not np.isfinite(cw).all():
+        raise ValueError("Calculated brine isothermal compressibility is not positive and finite.")
+    return {
+        **salt,
+        "rho_brine_kg_m3": _number(rho),
+        "rho_water_lb_ft3": _number(rho*KG_M3_TO_LB_FT3),
+        "brine_equivalent_water_temperature_K": _number(Tv),
+        "cw_per_Pa": _number(cw), "cw_per_psi": _number(cw*PA_PER_PSI),
+        "cw_derivative_step_Pa": _number(h),
+        "salt_concentration_kg_m3": _number(w*rho),
+        "Bw_rb_stb": SINGLE_PHASE_WATER_BW_RB_STB,
+    }
+
+
+def co2_viscosity(temperature_F, rho_g_lb_ft3):
+    """Fenghour et al. (1998) background viscosity, scalar or arrays.
+
+    T[K], rho[kg/m3] give microPa.s; divide by 1000 for cP. The critical
+    enhancement is not included; near-critical states are rejected explicitly.
+    """
+    T = (temperature_F+459.67)*5.0/9.0
+    rho = np.asarray(rho_g_lb_ft3,float)/KG_M3_TO_LB_FT3
+    if not 200 <= T <= 1500 or np.any(rho < 0) or np.any(rho > 1400) or not np.isfinite(rho).all():
+        raise ValueError("Fenghour viscosity requires 200--1500 K and CO2 density 0--1400 kg/m3.")
+    if 300 < T < 310 and np.any((rho > 300)&(rho < 600)):
+        raise ValueError("Near-critical CO2 requires a viscosity critical-enhancement model, which is not included.")
+    ts = T/251.196
+    a = (.235156,-.491266,.05211155,.05347906,-.01537102)
+    mu0 = 1.00697*math.sqrt(T)/math.exp(sum(ai*math.log(ts)**i for i,ai in enumerate(a)))
+    excess = (.004071119*rho+7.198037e-5*rho**2+2.411697e-17*rho**6/ts**3
+              +2.971072e-23*rho**8-1.627888e-23*rho**8/ts)
+    mu = mu0+excess
+    if np.any(mu <= 0) or not np.isfinite(mu).all():
+        raise ValueError("Calculated CO2 viscosity is invalid.")
+    return {
+        "mu_gas_cP": _number(mu*1e-3), "mu_gas_Pa_s": _number(mu*1e-6),
+        "viscosity_density_kg_m3": _number(rho),
+    }
+
+
+def _live_co2_arrays(pressure_psia, temperature_F):
+    """Vectorized PR density/cg and Fenghour viscosity for evolving grid cells.
+
+    Cardano real roots are filtered by Z>B and lowest fugacity, as in pr_state.
+    The scalar annual calculation continues to use the existing np.roots solver.
+    """
+    P = np.asarray(pressure_psia,float)
+    T = (temperature_F+459.67)*5.0/9.0
+    if np.any(P <= 0) or not np.isfinite(P).all():
+        raise ValueError("Cell absolute pressures must be positive and finite.")
+    Tr, Pr = T/CO2_TC_K,P*PA_PER_PSI/CO2_PC_PA
+    kappa = .37464+1.54226*CO2_OMEGA-.26992*CO2_OMEGA**2
+    alpha = (1+kappa*(1-math.sqrt(Tr)))**2
+    A, B = .45724*alpha*Pr/Tr**2,.07780*Pr/Tr
+    ca, cb, cc = B-1,A-2*B-3*B**2,-A*B+B**2+B**3
+    u, v = cb-ca*ca/3,2*ca**3/27-ca*cb/3+cc
+    disc = (v/2)**2+(u/3)**3
+    root = np.sqrt(np.maximum(disc,0))
+    single = np.cbrt(-v/2+root)+np.cbrt(-v/2-root)-ca/3
+    q = np.maximum(-u/3,1e-100)  # prevent underflow in unused three-root branches
+    angle = np.arccos(np.clip(-v/(2*q**1.5),-1,1))
+    candidates = np.stack([
+        np.where(disc < 0,2*np.sqrt(q)*np.cos((angle+2*math.pi*j)/3)-ca/3,single)
+        for j in range(3)
+    ])
+    valid = candidates > B
+    z = np.where(valid,candidates,B+1)
+    sqrt2 = math.sqrt(2)
+    log_phi = z-1-np.log(z-B)-A/(2*sqrt2*B)*np.log1p(2*sqrt2*B/(z+(1-sqrt2)*B))
+    log_phi = np.where(valid,log_phi,np.inf)
+    indices = np.argmin(log_phi,axis=0)
+    Z = np.take_along_axis(candidates,np.expand_dims(indices,0),axis=0)[0]
+    if not np.isfinite(np.min(log_phi,axis=0)).all():
+        raise ValueError("No admissible PR cell root.")
+    FZ = 3*Z**2+2*(B-1)*Z+A-2*B-3*B**2
+    N = B*Z**2+(A-2*B-6*B**2)*Z-2*A*B+2*B**2+3*B**3
+    cg = 1/P+N/(P*FZ*Z)
+    rho = P*PA_PER_PSI*(MW_CO2/1000)/(Z*R_UNIVERSAL_J_MOL_K*T)
+    mu = co2_viscosity(temperature_F,rho*KG_M3_TO_LB_FT3)["mu_gas_cP"]
+    if np.any(cg <= 0) or not np.isfinite(cg).all():
+        raise ValueError("Calculated cell gas compressibility is invalid.")
+    return np.asarray(mu),cg
 
 
 def pr_state(pressure_psia, temperature_F):
@@ -540,6 +774,7 @@ def gas_properties(pressure_psia, temperature_F, Zsc):
         state["Z"] / Zsc * (temperature_F + 459.67) / (T_SC_F + 459.67)
         * P_SC_PSIA / pressure_psia / FT3_PER_BBL
     )
+    state.update(co2_viscosity(temperature_F,state["rho_g_lb_ft3"]))
     return state
 
 
@@ -588,29 +823,24 @@ def corey_front_quantities(M_lambda, Swr, n_gas=3.0, n_water=3.0):
 
 
 def reference_two_phase_quantities(p):
-    """Quantities fixed while temperature and operating inputs stay constant."""
-    Zsc = pr_state(P_SC_PSIA, T_SC_F)["Z"]
-    initial = gas_properties(p.initial_pressure_psia, p.temperature_F, Zsc)
-    rho_sc = initial["rho_g_lb_ft3"] * initial["Bg_rb_scf"] * FT3_PER_BBL
+    """Initial mass references; transport properties are recalculated per trial."""
+    Zsc = pr_state(P_SC_PSIA,T_SC_F)["Z"]
+    initial = gas_properties(p.initial_pressure_psia,p.temperature_F,Zsc)
+    water = water_properties(p.initial_pressure_psia,p)
+    rho_sc = initial["rho_g_lb_ft3"]*initial["Bg_rb_scf"]*FT3_PER_BBL
     TK = initial["temperature_K"]
-    tau = 1 - TK/WATER_TC_K
-    saturation_sum = sum(a * tau**power for a, power in zip(WATER_A, WATER_POWERS))
-    Psat_MPa = WATER_PC_MPA * math.exp(WATER_TC_K/TK * saturation_sum)
-    ms = p.salt_mass_fraction / (MW_SALT_KG_MOL * (1-p.salt_mass_fraction))
-    aw = WATER_MOLES_KG / (WATER_MOLES_KG + 2*ms)
-    M_lambda = p.krg_endpoint * p.mu_water_cP / (p.krw_endpoint*p.mu_gas_cP)
-    front = corey_front_quantities(
-        M_lambda, p.Swr, p.corey_n_gas, p.corey_n_water
-    )
+    tau = 1-TK/WATER_TC_K
+    psat = WATER_PC_MPA*math.exp(WATER_TC_K/TK*sum(
+        a*tau**power for a,power in zip(WATER_A,WATER_POWERS)))
     return {
-        "Zsc": Zsc, "initial_Bg_rb_scf": initial["Bg_rb_scf"],
-        "initial_gas_density_calculated_lb_ft3": initial["rho_g_lb_ft3"],
-        "rho_sc_lb_scf": rho_sc, "salt_molality": ms, "water_activity": aw,
-        "water_Psat_psia": Psat_MPa*1e6/PA_PER_PSI,
-        "M_lambda": M_lambda, **front,
-        "reference_mobility_mD_cP": p.k_mD*p.krg_zone1/p.mu_gas_cP,
-        "q_sc_scf_day": p.q_Mscf_day*1000.0,
-        "time_coefficient_years": TIME_COEFFICIENT_YEARS,
+        "Zsc":Zsc,"initial_Bg_rb_scf":initial["Bg_rb_scf"],
+        "initial_gas_density_calculated_lb_ft3":initial["rho_g_lb_ft3"],
+        "initial_mu_gas_cP":initial["mu_gas_cP"],
+        "initial_cw_per_psi":water["cw_per_psi"],
+        "initial_water_density_lb_ft3":water["rho_water_lb_ft3"],
+        "rho_sc_lb_scf":rho_sc,"water_Psat_psia":psat*1e6/PA_PER_PSI,
+        "q_sc_scf_day":p.q_Mscf_day*1000.0,
+        "time_coefficient_years":TIME_COEFFICIENT_YEARS,
     }
 
 
@@ -620,6 +850,13 @@ def calculate_two_phase_year(year, property_pressure, p, c):
     gas = gas_properties(property_pressure, p.temperature_F, c["Zsc"])
     Bg, cg = gas["Bg_rb_scf"], gas["cg_per_psi"]
     rho_g = gas["rho_g_lb_ft3"]
+    mu_g = gas["mu_gas_cP"]
+    water = water_properties(property_pressure,p)
+    cw = water["cw_per_psi"]
+    salt = water["salt_mass_fraction"]
+    M_lambda = p.krg_endpoint*p.mu_water_cP/(p.krw_endpoint*mu_g)
+    c = dict(c, **corey_front_quantities(M_lambda,p.Swr,p.corey_n_gas,p.corey_n_water),
+             M_lambda=M_lambda,reference_mobility_mD_cP=p.k_mD*p.krg_zone1/mu_g)
 
     # 2. Cumulative injected volume, evaluated at the current property pressure.
     t_days = year*DAYS_PER_YEAR
@@ -629,12 +866,12 @@ def calculate_two_phase_year(year, property_pressure, p, c):
 
     # 3. Water vapor and evaporation, with the cancelled factor omitted.
     if p.include_evaporation:
-        yw = c["water_activity"] * c["water_Psat_psia"] / property_pressure
+        yw = water["water_activity"] * c["water_Psat_psia"] / property_pressure
         if not 0 <= yw < 1:
             raise ValueError("The supplied water-vapor expression gives yw outside [0,1).")
         ceq = MW_WATER/MW_CO2 * yw/(1-yw)
         alpha_d = rho_g*ceq / (
-            p.brine_density_lb_ft3*(1-p.salt_mass_fraction)*p.Swr
+            water["rho_water_lb_ft3"]*(1-salt)*p.Swr
             + rho_g*ceq*(1-p.Swr)
         )
     else:
@@ -671,14 +908,14 @@ def calculate_two_phase_year(year, property_pressure, p, c):
 
     # 6. Zone mobilities and total compressibilities.
     mobilities = [
-        p.k_mD*p.krg_zone1/p.mu_gas_cP,
-        p.k_mD*(krg2/p.mu_gas_cP+krw2/p.mu_water_cP),
+        p.k_mD*p.krg_zone1/mu_g,
+        p.k_mD*(krg2/mu_g+krw2/p.mu_water_cP),
         p.k_mD/p.mu_water_cP,  # supplied Zone 3 krw = 1
     ]
     total_c = [
         cg+p.rock_compressibility_per_psi,
-        Sg2*cg+Sw2*p.water_compressibility_per_psi+p.rock_compressibility_per_psi,
-        p.water_compressibility_per_psi+p.rock_compressibility_per_psi,
+        Sg2*cg+Sw2*cw+p.rock_compressibility_per_psi,
+        cw+p.rock_compressibility_per_psi,
     ]
     if any(value <= 0 for value in total_c):
         raise ValueError("Every zone total compressibility must be positive.")
@@ -689,7 +926,7 @@ def calculate_two_phase_year(year, property_pressure, p, c):
     # 7. Dimensionless time and interface/well arguments.
     rdD, rgD = rd/p.rw_ft, rg/p.rw_ft
     tD = TIME_COEFFICIENT_YEARS*p.k_mD*p.krg_zone1*year / (
-        p.mu_gas_cP*p.porosity*p.rw_ft**2*total_c[0]
+        mu_g*p.porosity*p.rw_ft**2*total_c[0]
     )
     uw = 1/(4*(D[0] if p.include_evaporation else D[1])*tD)
     u1d = rdD**2/(4*D[0]*tD)
@@ -721,7 +958,7 @@ def calculate_two_phase_year(year, property_pressure, p, c):
     pD_gas = (a1+b1*E1w if p.include_evaporation else a2+b2*E1w)
     pD_intrinsic = pD_gas/p.krg_zone1
     q_reservoir = c["q_sc_scf_day"]*Bg
-    delta_p = PRESSURE_COEFFICIENT*p.mu_gas_cP*q_reservoir / (p.k_mD*p.h_ft) * (
+    delta_p = PRESSURE_COEFFICIENT*mu_g*q_reservoir / (p.k_mD*p.h_ft) * (
         pD_intrinsic+p.skin
     )
     BHP = p.initial_pressure_psia+delta_p
@@ -743,7 +980,7 @@ def calculate_two_phase_year(year, property_pressure, p, c):
 
     result = {
         "year": year, "P_used_psia": property_pressure, "t_days": t_days,
-        **gas, **c,
+        **c, **gas, **water,
         "rho_g_lb_ft3": rho_g, "Vsc_scf": Vsc,
         "Vr_rb": Vr_rb, "Vr_ft3": Vr_ft3,
         "yw": yw, "ceq": ceq, "alpha_d_evaporation": alpha_d,
@@ -777,50 +1014,33 @@ def calculate_two_phase_year(year, property_pressure, p, c):
     return result
 
 
-def water_properties(pressure_psia, p):
-    """Constant-cw water referenced to initial pressure (no CO2 EOS).
-
-    rho_w(P)=rho_w(Pi)*exp(cw*(P-Pi));
-    Bw(P)=1.0 rb/STB at every pressure by the requested modeling convention.
-    cw remains in density and storage; viscosities remain supplied constants.
-    """
-    if not math.isfinite(pressure_psia) or pressure_psia <= 0:
-        raise ValueError("Water properties require positive absolute pressure.")
-    exponent = p.water_compressibility_per_psi*(pressure_psia-p.initial_pressure_psia)
-    return {
-        "rho_water_lb_ft3": p.brine_density_lb_ft3*math.exp(exponent),
-        "Bw_rb_stb": SINGLE_PHASE_WATER_BW_RB_STB,
-        "cw_per_psi": p.water_compressibility_per_psi,
-    }
-
-
 def reference_quantities(p):
-    """Set constants for the selected phase without using inactive inputs."""
+    """Set initial inventory references, without freezing transport properties."""
     if p.phase_mode == "two":
-        return {**reference_two_phase_quantities(p), "phase_count": 2, "single_fluid_code": 0}
+        return {**reference_two_phase_quantities(p),"phase_count":2,"single_fluid_code":0}
     if is_water_mode(p):
+        water = water_properties(p.initial_pressure_psia,p)
         return {
-            "phase_count": 1, "single_fluid_code": 2,
-            "reference_mobility_mD_cP": p.k_mD/p.mu_water_cP,
-            "initial_Bw_rb_stb": SINGLE_PHASE_WATER_BW_RB_STB,
-            "initial_water_density_lb_ft3": p.brine_density_lb_ft3,
-            "q_water_stb_day": p.water_rate_stb_day,
-            "water_mass_per_stb_lb": p.brine_density_lb_ft3*SINGLE_PHASE_WATER_BW_RB_STB*FT3_PER_BBL,
-            "time_coefficient_years": TIME_COEFFICIENT_YEARS,
+            "phase_count":1,"single_fluid_code":2,
+            "reference_mobility_mD_cP":p.k_mD/p.mu_water_cP,
+            "initial_Bw_rb_stb":SINGLE_PHASE_WATER_BW_RB_STB,
+            "initial_water_density_lb_ft3":water["rho_water_lb_ft3"],
+            "initial_cw_per_psi":water["cw_per_psi"],
+            "q_water_stb_day":p.water_rate_stb_day,
+            "water_mass_per_stb_lb":p.brine_standard_density_lb_ft3*FT3_PER_BBL,
+            "time_coefficient_years":TIME_COEFFICIENT_YEARS,
         }
-    Zsc = pr_state(P_SC_PSIA, T_SC_F)["Z"]
-    initial = pr_state(p.initial_pressure_psia, p.temperature_F)
+    Zsc = pr_state(P_SC_PSIA,T_SC_F)["Z"]
+    initial = gas_properties(p.initial_pressure_psia,p.temperature_F,Zsc)
     return {
-        "phase_count": 1, "single_fluid_code": 1, "Zsc": Zsc,
-        "initial_Bg_rb_scf": SINGLE_PHASE_CO2_BG_RB_SCF,
-        "initial_cg_per_psi": initial["cg_per_psi"],
-        "initial_gas_density_calculated_lb_ft3": calculate_co2_density(
-            p.initial_pressure_psia, p.temperature_F, initial["Z"]
-        ),
-        "rho_sc_lb_scf": calculate_co2_density(P_SC_PSIA, T_SC_F, Zsc),
-        "reference_mobility_mD_cP": p.k_mD/p.mu_gas_cP,
-        "q_sc_scf_day": p.q_Mscf_day*1000.0,
-        "time_coefficient_years": TIME_COEFFICIENT_YEARS,
+        "phase_count":1,"single_fluid_code":1,"Zsc":Zsc,
+        "initial_Bg_rb_scf":SINGLE_PHASE_CO2_BG_RB_SCF,
+        "initial_cg_per_psi":initial["cg_per_psi"],
+        "initial_gas_density_calculated_lb_ft3":initial["rho_g_lb_ft3"],
+        "initial_mu_gas_cP":initial["mu_gas_cP"],
+        "rho_sc_lb_scf":calculate_co2_density(P_SC_PSIA,T_SC_F,Zsc),
+        "q_sc_scf_day":p.q_Mscf_day*1000.0,
+        "time_coefficient_years":TIME_COEFFICIENT_YEARS,
     }
 
 
@@ -830,9 +1050,12 @@ def calculate_single_phase_year(year, property_pressure, p, c):
     krg=1, ct=cg+cr, tD=C*k*t/(mu_g*phi*rw^2*ct), u=1/(4*tD).
     dP=141.2*mu_g*q_res/(k*h)*(0.5*E1(u)+skin), field units.
     Bg is fixed, and cg and density are fixed at the initial reservoir state.
-    The shared pressure solver also reports PR diagnostics at the trial pressure.
+    Viscosity is calculated using a separate live PR density at every trial;
+    fixed inventory properties do not supply the viscosity density.
     """
-    gas = pr_state(property_pressure, p.temperature_F)
+    gas = gas_properties(property_pressure,p.temperature_F,c["Zsc"])
+    mu_g = gas["mu_gas_cP"]
+    c = dict(c,reference_mobility_mD_cP=p.k_mD/mu_g)
     gas["cg_per_psi"] = c["initial_cg_per_psi"]
     gas["rho_g_lb_ft3"] = c["initial_gas_density_calculated_lb_ft3"]
     gas["Bg_rb_scf"] = c["initial_Bg_rb_scf"]
@@ -843,13 +1066,13 @@ def calculate_single_phase_year(year, property_pressure, p, c):
     Vsc = c["q_sc_scf_day"]*t_days
     Vr_rb = Vsc*gas["Bg_rb_scf"]
     tD = TIME_COEFFICIENT_YEARS*p.k_mD*year / (
-        p.mu_gas_cP*p.porosity*p.rw_ft**2*ct
+        mu_g*p.porosity*p.rw_ft**2*ct
     )
     uw = 1.0/(4.0*tD)
     E1w = float(exp1(uw))
     pD = 0.5*E1w
     q_reservoir = c["q_sc_scf_day"]*gas["Bg_rb_scf"]
-    delta_p = PRESSURE_COEFFICIENT*p.mu_gas_cP*q_reservoir / (
+    delta_p = PRESSURE_COEFFICIENT*mu_g*q_reservoir / (
         p.k_mD*p.h_ft
     )*(pD+p.skin)
     bhp = p.initial_pressure_psia + delta_p
@@ -857,7 +1080,7 @@ def calculate_single_phase_year(year, property_pressure, p, c):
         "year": year, "P_used_psia": property_pressure, "t_days": t_days,
         **gas, **c, "Vsc_scf": Vsc, "Vr_rb": Vr_rb,
         "Vr_ft3": Vr_rb*FT3_PER_BBL, "Minj_lb": c["rho_sc_lb_scf"]*Vsc,
-        "krg_single_phase": 1.0, "Lambda1_mD_cP": p.k_mD/p.mu_gas_cP,
+        "krg_single_phase": 1.0, "Lambda1_mD_cP": p.k_mD/mu_g,
         "ct1_per_psi": ct, "m1": 1.0, "c1_star": 1.0, "D1": 1.0,
         "tD": tD, "uw": uw, "E1w": E1w,
         "pD_gas_reference": pD, "pD_intrinsic_reference": pD,
@@ -877,7 +1100,7 @@ def calculate_single_phase_water_year(year, property_pressure, p, c):
     Uses the same radial E1 kernel and pressure iteration as the CO2 option.
     """
     water = water_properties(property_pressure, p)
-    ct = p.water_compressibility_per_psi + p.rock_compressibility_per_psi
+    ct = water["cw_per_psi"] + p.rock_compressibility_per_psi
     t_days = year*DAYS_PER_YEAR
     q_reservoir = p.water_rate_stb_day*water["Bw_rb_stb"]
     tD = TIME_COEFFICIENT_YEARS*p.k_mD*year / (
@@ -1015,6 +1238,9 @@ def run_model(p, years):
 
 SUMMARY_FIELDS = [
     "year", "phase_count", "single_fluid_code", "P_used_psia",
+    "mu_gas_cP", "mu_gas_Pa_s", "viscosity_density_kg_m3", "cw_per_Pa",
+    "rho_brine_kg_m3", "salt_mass_fraction", "salinity_wt_percent", "salinity_ppm",
+    "x_NaCl", "salt_molality", "water_activity", "salt_concentration_kg_m3",
     "Bw_rb_stb", "cw_per_psi", "rho_water_lb_ft3", "rho_water_at_BHP_lb_ft3", "Bg_rb_scf", "cg_per_psi", "rho_g_lb_ft3",
     "rho_g_at_BHP_lb_ft3",
     "corey_n_gas", "corey_n_water", "sf_normalized", "Sg_front",
@@ -1040,7 +1266,7 @@ def calculate_first_year_detail(annual_results, p, constants):
         initial_gas = water_properties(p.initial_pressure_psia, p)
         initial_gas["rho_water_at_BHP_lb_ft3"] = initial_gas["rho_water_lb_ft3"]
     elif p.phase_mode == "single":
-        initial_gas = pr_state(p.initial_pressure_psia, p.temperature_F)
+        initial_gas = gas_properties(p.initial_pressure_psia,p.temperature_F,constants["Zsc"])
         initial_gas.update(
             cg_per_psi=constants["initial_cg_per_psi"],
             rho_g_lb_ft3=constants["initial_gas_density_calculated_lb_ft3"],
@@ -1050,6 +1276,7 @@ def calculate_first_year_detail(annual_results, p, constants):
     else:
         initial_gas = gas_properties(p.initial_pressure_psia, p.temperature_F, constants["Zsc"])
         initial_gas["rho_g_at_BHP_lb_ft3"] = initial_gas["rho_g_lb_ft3"]
+        initial_gas.update(water_properties(p.initial_pressure_psia,p))
     detailed = [{
         "year": 0.0, "t_days": 0.0, "phase_count": constants["phase_count"],
         "single_fluid_code": constants["single_fluid_code"],
@@ -1124,118 +1351,116 @@ def observation_schedule(period, selected):
 
 
 def calculate_observation(final, p, make_plot=True):
-    """Diffuse the final pressure profile at zero well flow with frozen properties."""
-    period, offsets = observation_schedule(p.observation_period_years, p.observation_years)
+    """Nonlinear zero-flow pressure diffusion with live transport/storage.
+
+    The supplied final zones and saturations remain frozen. Each RHS call
+    recalculates cell viscosity and cw at local absolute pressure. This is a
+    fixed-front approximation, without post-shut-in saturation redistribution.
+    """
+    period, offsets = observation_schedule(p.observation_period_years,p.observation_years)
     if not offsets:
         return None
-
-    # Mobility is in mD/cP, storage in 1/psi, and the radial grid is in ft.
-    active_zones = (1, 2, 3) if p.phase_mode == "two" else (1,)
-    mobility = np.array([final[f"Lambda{zone}_mD_cP"] for zone in active_zones])
-    storage = p.porosity * np.array([final[f"ct{zone}_per_psi"] for zone in active_zones])
-    diffusivity = TIME_COEFFICIENT_YEARS * mobility / storage
-    # Keep the fixed-pressure outer edge well beyond the diffusing disturbance.
+    active_zones = (1,2,3) if p.phase_mode == "two" else (1,)
+    final_mobility = np.array([final[f"Lambda{z}_mD_cP"] for z in active_zones])
+    final_storage = p.porosity*np.array([final[f"ct{z}_per_psi"] for z in active_zones])
+    diffusivity = TIME_COEFFICIENT_YEARS*final_mobility/final_storage
     outer_front = final["rg_ft"] if p.phase_mode == "two" else p.rw_ft
-    outer_radius = outer_front + 12 * math.sqrt(max(diffusivity) * (final["year"] + period))
-    zone_edges = ((p.rw_ft, final["rd_ft"], final["rg_ft"], outer_radius)
-                  if p.phase_mode == "two" else (p.rw_ft, outer_radius))
-    faces = [p.rw_ft]
-    zones = []
-    for zone, (inner, outer) in enumerate(zip(zone_edges, zone_edges[1:])):
+    outer_radius = outer_front+12*math.sqrt(max(diffusivity)*(final["year"]+period))
+    edges = ((p.rw_ft,final["rd_ft"],final["rg_ft"],outer_radius)
+             if p.phase_mode == "two" else (p.rw_ft,outer_radius))
+    faces, zones = [p.rw_ft],[]
+    for zone,(inner,outer) in enumerate(zip(edges,edges[1:])):
         if outer > inner:
-            cells = math.ceil(math.log(outer / inner) / 0.04)
-            faces.extend(np.geomspace(inner, outer, cells + 1)[1:])
-            zones.extend([zone] * cells)
-    faces = np.asarray(faces)
-    zones = np.asarray(zones, dtype=int)
-    centers = np.sqrt(faces[:-1] * faces[1:])
-    cell_storage = storage[zones] * (faces[1:]**2 - faces[:-1]**2) / 2
-    cell_mobility = mobility[zones]
-
-    # Integrate the cylindrical flow resistance from each cell center to the
-    # shared face. The same face flux enters one cell and leaves the other.
-    interface_resistance = (
-        np.log(faces[1:-1] / centers[:-1]) / cell_mobility[:-1]
-        + np.log(centers[1:] / faces[1:-1]) / cell_mobility[1:]
-    )
-    conductance = TIME_COEFFICIENT_YEARS / interface_resistance
-    lower = conductance / cell_storage[1:]
-    upper = conductance / cell_storage[:-1]
-    diagonal = np.zeros(len(centers))
-    diagonal[1:] -= lower
-    diagonal[:-1] -= upper
-    # Inner face flux is zero. The far edge has zero excess pressure.
-    diagonal[-1] -= (
-        TIME_COEFFICIENT_YEARS * cell_mobility[-1]
-        / (math.log(outer_radius / centers[-1]) * cell_storage[-1])
-    )
-    operator = diags([lower, diagonal, upper], [-1, 0, 1], format="csc")
+            count = math.ceil(math.log(outer/inner)/.04)
+            faces.extend(np.geomspace(inner,outer,count+1)[1:])
+            zones.extend([zone]*count)
+    faces, zones = np.asarray(faces),np.asarray(zones,dtype=int)
+    centers = np.sqrt(faces[:-1]*faces[1:])
+    geometry = (faces[1:]**2-faces[:-1]**2)/2
+    resistance_left = np.log(faces[1:-1]/centers[:-1])
+    resistance_right = np.log(centers[1:]/faces[1:-1])
+    outer_log = math.log(outer_radius/centers[-1])
 
     if p.phase_mode == "two":
-        scale = (
-            PRESSURE_COEFFICIENT * p.mu_gas_cP * final["q_reservoir_rb_day"]
-            / (p.k_mD * p.h_ft * p.krg_zone1)
-        )
-        offsets_a = np.array([final[f"a{zone}"] for zone in (1, 2, 3)])
-        coefficients_b = np.array([final[f"b{zone}"] for zone in (1, 2, 3)])
-        ratios_D = np.array([final[f"D{zone}"] for zone in (1, 2, 3)])
-        well_dimensionless_pressure = final["pD_gas_reference"]
+        scale = PRESSURE_COEFFICIENT*final["mu_gas_cP"]*final["q_reservoir_rb_day"]/(p.k_mD*p.h_ft*p.krg_zone1)
+        aa = np.array([final[f"a{z}"] for z in (1,2,3)])
+        bb = np.array([final[f"b{z}"] for z in (1,2,3)])
+        DD = np.array([final[f"D{z}"] for z in (1,2,3)])
+        well_pD = final["pD_gas_reference"]
     else:
-        viscosity = p.mu_water_cP if is_water_mode(p) else p.mu_gas_cP
-        scale = (
-            PRESSURE_COEFFICIENT * viscosity * final["q_reservoir_rb_day"]
-            / (p.k_mD * p.h_ft)
-        )
-        offsets_a = np.array([0.0])
-        coefficients_b = np.array([0.5])
-        ratios_D = np.array([1.0])
-        well_dimensionless_pressure = final["pD_intrinsic_reference"]
-    arguments = (centers / p.rw_ft)**2 / (4 * ratios_D[zones] * final["tD"])
-    initial_excess = scale * (offsets_a[zones] + coefficients_b[zones] * exp1(arguments))
+        viscosity = p.mu_water_cP if is_water_mode(p) else final["mu_gas_cP"]
+        scale = PRESSURE_COEFFICIENT*viscosity*final["q_reservoir_rb_day"]/(p.k_mD*p.h_ft)
+        aa,bb,DD = np.array([0.]),np.array([.5]),np.array([1.])
+        well_pD = final["pD_intrinsic_reference"]
+    arguments = (centers/p.rw_ft)**2/(4*DD[zones]*final["tD"])
+    initial_excess = scale*(aa[zones]+bb[zones]*exp1(arguments))
 
-    times = [0.0, period, *offsets]
+    def rhs(_time,excess):
+        pressures = p.initial_pressure_psia+excess
+        if is_water_mode(p):
+            water = water_properties(pressures,p)
+            mobility = np.full_like(excess,p.k_mD/p.mu_water_cP)
+            ct = np.asarray(water["cw_per_psi"])+p.rock_compressibility_per_psi
+        elif p.phase_mode == "single":
+            mu,_ = _live_co2_arrays(pressures,p.temperature_F)
+            mobility = p.k_mD/mu
+            # Retain the requested fixed initial cg in this single-phase branch.
+            ct = np.full_like(excess,final["ct1_per_psi"])
+        else:
+            mu,cg = _live_co2_arrays(pressures,p.temperature_F)
+            cw = np.asarray(water_properties(pressures,p)["cw_per_psi"])
+            mobility = np.where(zones==0,p.k_mD*p.krg_zone1/mu,
+                       np.where(zones==1,p.k_mD*(final["krg2"]/mu+final["krw2"]/p.mu_water_cP),
+                                p.k_mD/p.mu_water_cP))
+            ct = np.where(zones==0,cg+p.rock_compressibility_per_psi,
+                 np.where(zones==1,final["Sg2"]*cg+final["Sw2"]*cw+p.rock_compressibility_per_psi,
+                          cw+p.rock_compressibility_per_psi))
+        resistance = resistance_left/mobility[:-1]+resistance_right/mobility[1:]
+        flux_to_left = TIME_COEFFICIENT_YEARS*np.diff(excess)/resistance
+        net = np.zeros_like(excess)
+        net[:-1] += flux_to_left
+        net[1:] -= flux_to_left
+        net[-1] -= TIME_COEFFICIENT_YEARS*mobility[-1]*excess[-1]/outer_log
+        return net/(p.porosity*ct*geometry)
+
+    times = [0.,period,*offsets]
     if make_plot:
-        first_plot_year = min(period / 100, 1 / (DAYS_PER_YEAR * 86400))
-        times.extend(np.geomspace(first_plot_year, period, 90))
+        times.extend(np.geomspace(min(period/100,1/(DAYS_PER_YEAR*86400)),period,90))
     times = np.unique(times)
-    solution = solve_ivp(
-        lambda _time, excess: operator @ excess,
-        (0.0, period), initial_excess, method="BDF", jac=operator,
-        t_eval=times, rtol=2e-7, atol=1e-8,
-    )
+    count = len(centers)
+    sparsity = diags([np.ones(count-1),np.ones(count),np.ones(count-1)],[-1,0,1],format="csc")
+    solution = solve_ivp(rhs,(0.,period),initial_excess,method="BDF",
+                         jac_sparsity=sparsity,t_eval=times,rtol=2e-7,atol=1e-8)
     if not solution.success or not np.isfinite(solution.y).all():
         raise ValueError(f"Shut-in pressure solve failed: {solution.message}")
     well_excess = solution.y[0].copy()
-    # The first cell approximates the zero-flow well pressure at positive time.
-    # At shut-in itself the analytical formation pressure is available at rw.
-    well_excess[0] = scale * well_dimensionless_pressure
-    pressure_by_time = dict(zip(times.tolist(), well_excess.tolist()))
+    well_excess[0] = scale*well_pD
+    pressure_by_time = dict(zip(times.tolist(),well_excess.tolist()))
     rows = []
     for offset in offsets:
         buildup = pressure_by_time[offset]
-        bhp = p.initial_pressure_psia + buildup
+        bhp = p.initial_pressure_psia+buildup
+        properties = {}
+        if is_water_mode(p) or p.phase_mode == "two":
+            properties.update(water_properties(bhp,p))
+        if not is_water_mode(p):
+            live_density = calculate_co2_density(bhp,p.temperature_F)
+            properties.update(co2_viscosity(p.temperature_F,live_density))
         rows.append({
-            "years_after_shut_in": offset,
-            "elapsed_year": final["year"] + offset,
-            "BHP_psia": bhp,
-            "total_delta_p_psi": buildup,
-            "falloff_from_flowing_BHP_psi": final["BHP_psia"] - bhp,
-            **({"q_water_stb_day": 0.0,
-                "cumulative_injected_water_stb": final["Vwater_stb"]}
+            "years_after_shut_in":offset,"elapsed_year":final["year"]+offset,
+            "BHP_psia":bhp,"total_delta_p_psi":buildup,
+            "falloff_from_flowing_BHP_psi":final["BHP_psia"]-bhp,
+            **properties,
+            **({"q_water_stb_day":0.,"cumulative_injected_water_stb":final["Vwater_stb"]}
                if is_water_mode(p) else
-               {"q_sc_scf_day": 0.0,
-                "cumulative_injected_CO2_scf": final["Vsc_scf"]}),
-            **({"rd_ft": final["rd_ft"], "rg_ft": final["rg_ft"],
-                "dry_zone_thickness_ft": final["dry_zone_thickness_ft"],
-                "Vp1_ft3": final["Vp1_ft3"], "Mg1_lb": final["Mg1_lb"]}
+               {"q_sc_scf_day":0.,"cumulative_injected_CO2_scf":final["Vsc_scf"]}),
+            **({"rd_ft":final["rd_ft"],"rg_ft":final["rg_ft"],
+                "dry_zone_thickness_ft":final["dry_zone_thickness_ft"],
+                "Vp1_ft3":final["Vp1_ft3"],"Mg1_lb":final["Mg1_lb"]}
                if p.phase_mode == "two" else {}),
         })
-    return {
-        "rows": rows,
-        "elapsed_years": final["year"] + times,
-        "bhp_psia": p.initial_pressure_psia + well_excess,
-    }
-
+    return {"rows":rows,"elapsed_years":final["year"]+times,
+            "bhp_psia":p.initial_pressure_psia+well_excess}
 
 def save_results(results, p, constants, output_dir, make_plot=True, *, observation=None, pressure_limit=None):
     water_mode = is_water_mode(p)
@@ -1257,6 +1482,9 @@ def save_results(results, p, constants, output_dir, make_plot=True, *, observati
             writer.writerows(results)
     detail_fields = [
         "year", "phase_count", "single_fluid_code", "t_days",
+        "mu_gas_cP", "mu_gas_Pa_s", "viscosity_density_kg_m3", "cw_per_Pa",
+        "rho_brine_kg_m3", "salt_mass_fraction", "salinity_wt_percent", "salinity_ppm",
+        "x_NaCl", "salt_molality", "water_activity", "salt_concentration_kg_m3",
         "Bw_rb_stb", "cw_per_psi", "rho_water_lb_ft3", "rho_water_at_BHP_lb_ft3", "P_used_psia", "BHP_psia", "total_delta_p_psi",
         "rho_g_lb_ft3", "rho_g_at_BHP_lb_ft3", "Bg_rb_scf", "cg_per_psi",
         "rd_ft", "dry_zone_thickness_ft", "Vp1_ft3", "Mg1_lb", "rg_ft",
@@ -1295,6 +1523,16 @@ def save_results(results, p, constants, output_dir, make_plot=True, *, observati
             "maximum_pressure_iterations": MAX_PRESSURE_ITERATIONS,
             "pressure_residual": "P_used_psia - BHP_psia",
             "pressure_evaluations": "number of annual-equation evaluations in the within-year solve",
+            "gas_viscosity": "Fenghour-Wakeham-Vesovic 1998 background correlation using live PR density at every trial pressure; not an input",
+            "water_compressibility": "cw=(d rho_brine/dP at fixed T and salt kg/kg)/rho_brine; not an input",
+            "brine_density": "Driesner 2007 liquid molar-volume mapping backed by IAPWS-IF97 Region 1",
+            "salinity": "NaCl-equivalent salt kg/kg inferred from measured standard brine density with the supplied McCain inverse; not an input",
+            "salinity_pressure_convention": "Salt kg/kg and mole fraction are conserved under compression; salt kg/m3 changes with density. No salt transport or precipitation is solved.",
+            "brine_reference_density_basis": "60 F and 14.696 psia; do not enter a reservoir-condition density",
+            "brine_backend_limits": "0.1--100 MPa; mapped liquid-water temperature 273.15--623.15 K; salt kg/kg 0--0.26",
+            "gas_viscosity_reference": "https://doi.org/10.1063/1.556013",
+            "brine_density_reference": "https://doi.org/10.1016/j.gca.2007.05.026",
+            "water_density_reference": "https://iapws.org/public/documents/UWTF-/IF97-Rev.pdf",
             "gas_density": "calculated from rho = p*M/(Z*R*T); not an input",
             "gas_density_timing": "rho_g_lb_ft3 uses converged P_used_psia; rho_g_at_BHP_lb_ft3 uses BHP_psia; pressures agree within tolerance",
             "vapor_correction": "blue-cancelled factor omitted",
@@ -1316,8 +1554,8 @@ def save_results(results, p, constants, output_dir, make_plot=True, *, observati
     }
     if observation is not None:
         saved_inputs["method"]["observation"] = (
-            "Zero-flow radial pressure diffusion with zone geometry, mobility, and "
-            "storage frozen at shut-in. Observation times are years after shut-in. "
+            "Nonlinear zero-flow radial pressure diffusion with zone geometry and saturations "
+            "frozen at shut-in. Cell viscosity and storage are updated at local pressure. Observation times are years after shut-in. "
             "Year zero reports formation pressure after removal of flowing skin."
         )
         saved_inputs["observation_report_years"] = [
@@ -1346,7 +1584,7 @@ def save_results(results, p, constants, output_dir, make_plot=True, *, observati
             "relative_permeability": "1.0 for single-phase water",
             "total_compressibility": "water compressibility + rock compressibility",
             "pressure_reference": "intrinsic k; pD = 0.5*E1(1/(4*tD))",
-            "water_density": "rho_w(Pi)*exp(cw*(P-Pi))",
+            "water_density": "Driesner liquid-brine density at current trial pressure, temperature and derived salt mass fraction",
             "water_Bw": "fixed at exactly 1.0 rb/STB for all times and pressures",
             "surface_rate_unit": "STB/day", "reservoir_rate": "q_water*1.0 (rb/day)",
             "first_year_sampling": "241 logarithmically spaced samples from 1 second to 1 day, plus exact 1-minute and 1-hour checkpoints; every 6 hours after day 1; exact year-1 endpoint",
@@ -1354,16 +1592,16 @@ def save_results(results, p, constants, output_dir, make_plot=True, *, observati
             "full_period_time_tick_interval_years": (
                 1 if len(results) <= 4 else 2 if len(results) <= 30 else "automatic integer-year ticks"
             ),
-            "limitation": "slightly-compressible radial E1 approximation with constant water viscosity and cw",
+            "limitation": "representative-pressure E1 approximation with calculated cw; fixed water viscosity and the retained fixed Bw=1 convention",
         })
     elif p.phase_mode == "single":
         saved_inputs["method"].update({
             "gas_formation_volume_factor": f"Fixed at {constants['initial_Bg_rb_scf']:.10f} rb/scf",
             "gas_density": "Fixed at the Peng-Robinson value at the initial pressure and reservoir temperature",
-            "gas_density_timing": "Both density columns report the fixed initial density",
+            "gas_density_timing": "Both inventory-density columns report the fixed initial density; viscosity_density_kg_m3 is the live density used for viscosity",
             "total_compressibility": "Fixed initial cg + rock compressibility",
             "reservoir_rate": "q_sc_scf_day * initial_Bg_rb_scf (rb/day)",
-            "limitation": "E1 slightly-compressible kernel with fixed Bg, cg and CO2 density",
+            "limitation": "representative-pressure E1 kernel with fixed Bg, cg and inventory density, but viscosity updated from separate live PR density",
         })
     saved_inputs["active_input_names"] = list(input_names_for_phase(p.phase_mode, p.single_phase_fluid))
     (output_dir/"inputs_used.json").write_text(
@@ -1749,6 +1987,9 @@ def _notebook_summary_html(results):
         ("Year", "year", ".0f"),
         ("Years after shut-in", "years_after_shut_in", ".10g"),
         ("Elapsed year", "elapsed_year", ".10g"),
+        ("CO2 viscosity (cP)", "mu_gas_cP", ".7f"),
+        ("Derived salinity (mass ppm)", "salinity_ppm", ".4f"),
+        ("Salt concentration (kg/m3)", "salt_concentration_kg_m3", ".7f"),
         ("Water density at pressure used (lb/ft3)", "rho_water_lb_ft3", ".6f"),
         ("Water density at BHP (lb/ft3)", "rho_water_at_BHP_lb_ft3", ".6f"),
         ("Bw (rb/STB)", "Bw_rb_stb", ".8f"),
@@ -2177,8 +2418,7 @@ def show_single_well_input_form(display_form=True):
         children.extend(observation_rows)
         for name in input_names_for_phase(phase, fluid):
             labels[name].value = (
-                "Water density at initial pressure (lb/ft^3)"
-                if fluid == "water" and name == "brine_density_lb_ft3" else PROMPTS[name]
+                PROMPTS[name]
             )
             children.extend([labels[name], entries[name]])
         grid.children = tuple(children)
@@ -2410,7 +2650,10 @@ MULTIWELL_METHOD = (
     "their PR properties are iterated at the total source-well BHP. This is a "
     "representative-property multiphase superposition approximation, not a "
     "coupled multidimensional displacement solution. Single-phase schedules "
-    "use constant-property time and space superposition."
+    "use time and space superposition with the background viscosity / cw at "
+    "each source's trial BHP. CO2 viscosity (Fenghour), brine density and cw "
+    "(Driesner + IAPWS-IF97) and salinity (McCain inverse of the standard "
+    "brine density) are calculated, never entered."
 )
 
 
@@ -2884,20 +3127,30 @@ def radial_pressure_from_state(radius_ft, state, p):
         index = zones-1
         arguments = (radii/p.rw_ft)**2/(4*D[index]*state["tD"])
         pD = (a[index]+b[index]*exp1(arguments))/p.krg_zone1
-        viscosity = p.mu_gas_cP
+        viscosity = state["mu_gas_cP"]
     else:
         zones = np.ones(radii.shape, dtype=int)
         pD = 0.5*exp1((radii/p.rw_ft)**2/(4*state["tD"]))
-        viscosity = p.mu_water_cP if is_water_mode(p) else p.mu_gas_cP
+        viscosity = p.mu_water_cP if is_water_mode(p) else state["mu_gas_cP"]
     prefactor = PRESSURE_COEFFICIENT*viscosity*state["q_reservoir_rb_day"]/(p.k_mD*p.h_ft)
     return prefactor*pD, zones, pD
 
 
-def _single_phase_source_profile(year, well, radii, p, constants, *, stop_year=None):
-    """Exact time superposition for the adopted constant-property E1 kernel."""
+def _single_phase_source_profile(year, well, radii, p, constants, *, stop_year=None,
+                                 property_pressure=None):
+    """Exact time superposition for the adopted E1 kernel.
+
+    Water cw and CO2 viscosity are the background properties at the source
+    well's property pressure (its trial BHP); the other kernel inputs are fixed.
+    """
     water = is_water_mode(p)
-    viscosity = p.mu_water_cP if water else p.mu_gas_cP
-    ct = (p.water_compressibility_per_psi if water else constants["initial_cg_per_psi"])
+    pressure = p.initial_pressure_psia if property_pressure is None else float(property_pressure)
+    if water:
+        viscosity = p.mu_water_cP
+        ct = water_properties(pressure, p)["cw_per_psi"]
+    else:
+        viscosity = gas_properties(pressure, p.temperature_F, constants["Zsc"])["mu_gas_cP"]
+        ct = constants["initial_cg_per_psi"]
     ct += p.rock_compressibility_per_psi
     B = 1.0 if water else SINGLE_PHASE_CO2_BG_RB_SCF
     rate_conversion = 1.0 if water else 1000.0
@@ -2935,15 +3188,16 @@ def _evaluate_multiwell(year, trial, p, wells, source_parameters, constants, dis
             if age > 0 and well.rate > 0:
                 state = calculate_year(age, float(trial[i]), parameters, reference)
                 C[:, i], zones[:, i], _ = radial_pressure_from_state(distances[:, i], state, parameters)
-                skin[i] = (PRESSURE_COEFFICIENT*p.mu_gas_cP*state["q_reservoir_rb_day"]
+                skin[i] = (PRESSURE_COEFFICIENT*state["mu_gas_cP"]*state["q_reservoir_rb_day"]
                            /(p.k_mD*p.h_ft)*well.skin)
                 states[i] = state
             elif age == 0 and well.rate > 0 and well.skin:
-                Bg = gas_properties(float(trial[i]), p.temperature_F, reference["Zsc"])["Bg_rb_scf"]
-                skin[i] = PRESSURE_COEFFICIENT*p.mu_gas_cP*well.rate*1000*Bg*well.skin/(p.k_mD*p.h_ft)
+                gas = gas_properties(float(trial[i]), p.temperature_F, reference["Zsc"])
+                skin[i] = PRESSURE_COEFFICIENT*gas["mu_gas_cP"]*well.rate*1000*gas["Bg_rb_scf"]*well.skin/(p.k_mD*p.h_ft)
         else:
             C[:, i], skin[i] = _single_phase_source_profile(
-                year, well, distances[:, i], parameters, reference)
+                year, well, distances[:, i], parameters, reference,
+                property_pressure=float(trial[i]))
             cumulative = well.cumulative_rate_days(year)
             if age > 0 and cumulative > 0:
                 equivalent_rate = cumulative/(age*DAYS_PER_YEAR)
@@ -2983,8 +3237,7 @@ def solve_multiwell_time(year, previous, p, wells, source_parameters, constants,
         if np.max(np.abs(residual)) < PRESSURE_TOLERANCE_PSI:
             break
         if p.phase_mode == "single":
-            # Pressure kernels are constant-property. A second evaluation only
-            # updates reported water-density / diagnostic property fields.
+            # Only the background viscosity / cw depend on the trial pressure.
             trial = snapshot["bhp"]
         else:
             trial = 0.5*trial+0.5*snapshot["bhp"]
@@ -3179,22 +3432,37 @@ def _frozen_source_observation(state, p, radii, offsets):
             zones.extend([zone]*cells)
     faces, zones = np.asarray(faces), np.asarray(zones, dtype=int)
     centers = np.sqrt(faces[:-1]*faces[1:])
-    cell_storage = storage[zones]*(faces[1:]**2-faces[:-1]**2)/2
-    cell_mobility = mobility[zones]
-    resistance = (np.log(faces[1:-1]/centers[:-1])/cell_mobility[:-1]
-                  +np.log(centers[1:]/faces[1:-1])/cell_mobility[1:])
-    conductance = TIME_COEFFICIENT_YEARS/resistance
-    lower, upper = conductance/cell_storage[1:], conductance/cell_storage[:-1]
-    diagonal = np.zeros(len(centers))
-    diagonal[1:] -= lower
-    diagonal[:-1] -= upper
-    diagonal[-1] -= TIME_COEFFICIENT_YEARS*cell_mobility[-1]/(
-        math.log(outer/centers[-1])*cell_storage[-1])
-    operator = diags([lower, diagonal, upper], [-1, 0, 1], format="csc")
+    geometry = (faces[1:]**2-faces[:-1]**2)/2
+    resistance_left = np.log(faces[1:-1]/centers[:-1])
+    resistance_right = np.log(centers[1:]/faces[1:-1])
+    outer_log = math.log(outer/centers[-1])
+    physical = zones if p.include_evaporation else zones+1  # 0 dry, 1 two-phase, 2 brine
+
+    def rhs(_time, excess):
+        # Live cell viscosity and storage at initial pressure + this source's excess.
+        pressures = p.initial_pressure_psia+excess
+        mu, cg = _live_co2_arrays(pressures, p.temperature_F)
+        cw = np.asarray(water_properties(pressures, p)["cw_per_psi"])
+        mobility = np.where(physical==0, p.k_mD*p.krg_zone1/mu,
+                   np.where(physical==1, p.k_mD*(state["krg2"]/mu+state["krw2"]/p.mu_water_cP),
+                            p.k_mD/p.mu_water_cP))
+        ct = np.where(physical==0, cg+p.rock_compressibility_per_psi,
+             np.where(physical==1, state["Sg2"]*cg+state["Sw2"]*cw+p.rock_compressibility_per_psi,
+                      cw+p.rock_compressibility_per_psi))
+        resistance = resistance_left/mobility[:-1]+resistance_right/mobility[1:]
+        flux_to_left = TIME_COEFFICIENT_YEARS*np.diff(excess)/resistance
+        net = np.zeros_like(excess)
+        net[:-1] += flux_to_left
+        net[1:] -= flux_to_left
+        net[-1] -= TIME_COEFFICIENT_YEARS*mobility[-1]*excess[-1]/outer_log
+        return net/(p.porosity*ct*geometry)
+
     profile, _, _ = radial_pressure_from_state(centers, state, p)
     times = sorted({0.0, *(float(t) for t in offsets)})
-    solution = solve_ivp(lambda _t, pressure: operator@pressure, (0, period), profile,
-                         method="BDF", jac=operator, t_eval=times, rtol=2e-7, atol=1e-8)
+    count = len(centers)
+    sparsity = diags([np.ones(count-1), np.ones(count), np.ones(count-1)], [-1, 0, 1], format="csc")
+    solution = solve_ivp(rhs, (0, period), profile, method="BDF", jac_sparsity=sparsity,
+                         t_eval=times, rtol=2e-7, atol=1e-8)
     if not solution.success or not np.isfinite(solution.y).all():
         raise ValueError("Multiwell shut-in diffusion failed: "+solution.message)
     samples = np.column_stack([
@@ -3224,7 +3492,8 @@ def calculate_multiwell_observation(result, *, detail=True):
             for j, offset in enumerate(times):
                 matrices[j, :, i], _ = _single_phase_source_profile(
                     result["years"]+offset, well, radii, parameters, constants,
-                    stop_year=result["years"])
+                    stop_year=result["years"],
+                    property_pressure=result["end_snapshot"]["trial"][i])
     rows, pairs, plot_rows = [], [], []
     for j, offset in enumerate(times):
         for m, well in enumerate(wells):
@@ -3249,10 +3518,10 @@ def calculate_multiwell_observation(result, *, detail=True):
                                   "receiving_well": well.name, "source_well": source.name,
                                   "is_self": m == i, "delta_p_psi": float(C[m, i])})
     return {"rows": rows, "contributions": pairs, "detail": plot_rows,
-            "method": ("Fixed-zone zero-flow radial diffusion of each final source profile; "
+            "method": ("Fixed-zone zero-flow radial diffusion of each final source profile with live cell viscosity and storage; "
                        "spatial superposition; all field wells stop at the project endpoint."
                        if p.phase_mode == "two" else
-                       "Constant-property E1 time/space superposition; all wells stop at endpoint.")}
+                       "E1 time/space superposition with background properties at each source's endpoint BHP; all wells stop at endpoint.")}
 
 
 def _write_multiwell_csv(path, rows, fallback_fields=None):

@@ -36,3 +36,8 @@ Units are field units, as in the Python program: psia, ft, mD, cP, 1/psi, lb/ft3
 Differences from the Python (both tiny): after shut-in the pressures agree to about 0.003 psi (a different time
 integrator from scipy BDF), and a pairwise-matrix layout is drawn with the third well above the x axis (numpy's
 eigenvector signs are arbitrary; all distances and pressures are the same).
+
+Background properties (calculated, never entered): CO2 viscosity (Fenghour 1998, from the live Peng-Robinson density),
+salinity (McCain inverse of the brine density at 60 F and 14.696 psia), brine density (Driesner 2007 + IAPWS-IF97) and
+water compressibility cw = (1/rho)(d rho/dP). They are recalculated at every pressure trial and in the shut-in solve.
+The only related input is brine_standard_density_lb_ft3 (default 63.878 lb/ft3).

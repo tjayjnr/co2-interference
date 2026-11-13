@@ -2,7 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { expint1, limits, rateSteps, rateAt, injectedRateYears, timeGrid, sourcesFor } from "../lib/physics.ts";
-import { DEFAULT_INPUTS, coreyFrontQuantities } from "../lib/bhp.ts";
+import { DEFAULT_INPUTS, coreyFrontQuantities, gasProperties, prState, P_SC_PSIA, T_SC_F } from "../lib/bhp.ts";
 import { UNITS, PRESETS, findUnit, toCanon, fromCanon, CO2_T_PER_MSCF } from "../lib/units.ts";
 import { project, unproject, centroid } from "../lib/geo.ts";
 import { parseWellsCsv, wellsToCsv } from "../lib/csv.ts";
@@ -73,9 +73,11 @@ test("CO2 saturation: profile conserves volume and its front matches the program
   for (let i = 0; i < n; i++) integral += satProfile(m, (i + 0.5) * dx) * dx;
   assert.ok(Math.abs(integral - 1) < 0.01);
   const p = DEFAULT_INPUTS;
+  // CO2 viscosity is calculated in the background (Fenghour, live PR density), not entered
+  const mu = gasProperties(p.initial_pressure_psia, p.temperature_F, prState(P_SC_PSIA, T_SC_F).Z).mu_gas_cP;
   for (const k of [3, 2]) {
-    const s = makeSatModel({ swr: p.Swr, krgMax: p.krg_endpoint, krwMax: p.krw_endpoint, nw: k, ng: k, muCo2MPas: p.mu_gas_cP }, p.mu_water_cP);
-    const f = coreyFrontQuantities((p.krg_endpoint * p.mu_water_cP) / (p.krw_endpoint * p.mu_gas_cP), p.Swr, k, k);
+    const s = makeSatModel({ swr: p.Swr, krgMax: p.krg_endpoint, krwMax: p.krw_endpoint, nw: k, ng: k, muCo2MPas: mu }, p.mu_water_cP);
+    const f = coreyFrontQuantities((p.krg_endpoint * p.mu_water_cP) / (p.krw_endpoint * mu), p.Swr, k, k);
     close(s.xiFront, f.gas_front_factor, 2e-3);
     close(s.sf, f.Sg_front, 2e-3);
   }

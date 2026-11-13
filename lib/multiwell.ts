@@ -14,7 +14,7 @@
 import {
   BhpError, DAYS_PER_YEAR, MAX_PRESSURE_ITERATIONS, PRESSURE_COEFFICIENT, PRESSURE_TOLERANCE_PSI, PyInt,
   SINGLE_PHASE_CO2_BG_RB_SCF, TIME_COEFFICIENT_YEARS, calculateCo2Density, calculateYear, copyRow,
-  dictCsv, exp1, gasProperties, geomspace, isWaterMode, markInt, observationSchedule, parsePyFloat, pressureFailureSummary,
+  diffuseRadial, dictCsv, exp1, gasProperties, geomspace, isWaterMode, liveCellProperties, markInt, observationSchedule, parsePyFloat, pressureFailureSummary,
   pressureLimitSpec, pressureStatus, pyFormat, pyJson, referenceQuantities, validate, waterProperties,
   type Inputs, type LimitInput, type PressureLimit, type Row,
 } from "./bhp.ts";
@@ -29,7 +29,10 @@ export const MULTIWELL_METHOD =
   "their PR properties are iterated at the total source-well BHP. This is a " +
   "representative-property multiphase superposition approximation, not a " +
   "coupled multidimensional displacement solution. Single-phase schedules " +
-  "use constant-property time and space superposition.";
+  "use time and space superposition with the background viscosity / cw at " +
+  "each source's trial BHP. CO2 viscosity (Fenghour), brine density and cw " +
+  "(Driesner + IAPWS-IF97) and salinity (McCain inverse of the standard " +
+  "brine density) are calculated, never entered.";
 
 // ---------------------------------------------------------------------------------------------------------------
 // Wells
@@ -314,21 +317,40 @@ export function radialPressureFromState(radii: number[], state: Row, p: Inputs):
       const argument = (r / p.rw_ft) ** 2 / (4 * state[`D${z}`] * state.tD);
       return (state[`a${z}`] + state[`b${z}`] * exp1(argument)) / p.krg_zone1;
     });
-    viscosity = p.mu_gas_cP;
+    viscosity = state.mu_gas_cP;
   } else {
     zones = radii.map(() => 1);
     pD = radii.map((r) => 0.5 * exp1((r / p.rw_ft) ** 2 / (4 * state.tD)));
-    viscosity = isWaterMode(p) ? p.mu_water_cP : p.mu_gas_cP;
+    viscosity = isWaterMode(p) ? p.mu_water_cP : state.mu_gas_cP;
   }
   const prefactor = (PRESSURE_COEFFICIENT * viscosity * state.q_reservoir_rb_day) / (p.k_mD * p.h_ft);
   return { pressure: pD.map((v) => prefactor * v), zones, pD };
 }
 
-/** `_single_phase_source_profile`: exact time superposition for the adopted constant-property E1 kernel. */
-export function singlePhaseSourceProfile(year: number, well: MWell, radii: number[], p: Inputs, constants: Row, stopYear: number | null = null): [number[], number] {
+const KERNEL_PROPS = new Map<string, number>();
+/** Background property of the single-phase kernel at a pressure: water cw, or CO2 viscosity (memoised for the maps). */
+function kernelProperty(p: Inputs, constants: Row, pressure: number): number {
   const water = isWaterMode(p);
-  const viscosity = water ? p.mu_water_cP : p.mu_gas_cP;
-  const ct = (water ? p.water_compressibility_per_psi : constants.initial_cg_per_psi) + p.rock_compressibility_per_psi;
+  const key = `${water ? "w" : "g"}|${pressure}|${p.temperature_F}|${p.brine_standard_density_lb_ft3}`;
+  let v = KERNEL_PROPS.get(key);
+  if (v === undefined) {
+    v = water ? waterProperties(pressure, p).cw_per_psi : gasProperties(pressure, p.temperature_F, constants.Zsc).mu_gas_cP;
+    if (KERNEL_PROPS.size > 20000) KERNEL_PROPS.clear();
+    KERNEL_PROPS.set(key, v as number);
+  }
+  return v as number;
+}
+
+/**
+ * `_single_phase_source_profile`: exact time superposition for the adopted E1 kernel. Water cw and CO2 viscosity are
+ * the background properties at the source well's property pressure (its trial BHP); the other kernel inputs are fixed.
+ */
+export function singlePhaseSourceProfile(year: number, well: MWell, radii: number[], p: Inputs, constants: Row, stopYear: number | null = null,
+  propertyPressure: number | null = null): [number[], number] {
+  const water = isWaterMode(p);
+  const pressure = propertyPressure === null ? p.initial_pressure_psia : propertyPressure;
+  const viscosity = water ? p.mu_water_cP : kernelProperty(p, constants, pressure);
+  const ct = (water ? kernelProperty(p, constants, pressure) : constants.initial_cg_per_psi) + p.rock_compressibility_per_psi;
   const B = water ? 1.0 : SINGLE_PHASE_CO2_BG_RB_SCF;
   const rateConversion = water ? 1.0 : 1000.0;
   const scale = (PRESSURE_COEFFICIENT * viscosity * B * rateConversion) / (p.k_mD * p.h_ft);
@@ -405,16 +427,16 @@ function evaluateMultiwell(year: number, trial: number[], c: Ctx): Omit<Snapshot
         const r = radialPressureFromState(column(i), state, parameters);
         r.pressure.forEach((v, m) => { C[m][i] = v; zones[m][i] = r.zones[m]; });
         for (const img of c.images?.[i] ?? []) radialPressureFromState(img.d, state, parameters).pressure.forEach((v, m) => { C[m][i] += img.sign * v; });
-        skin[i] = ((PRESSURE_COEFFICIENT * p.mu_gas_cP * state.q_reservoir_rb_day) / (p.k_mD * p.h_ft)) * well.skin;
+        skin[i] = ((PRESSURE_COEFFICIENT * state.mu_gas_cP * state.q_reservoir_rb_day) / (p.k_mD * p.h_ft)) * well.skin;
         states[i] = state;
       } else if (age === 0 && well.rate > 0 && well.skin) {
-        const Bg = gasProperties(trial[i], p.temperature_F, reference.Zsc).Bg_rb_scf;
-        skin[i] = (PRESSURE_COEFFICIENT * p.mu_gas_cP * well.rate * 1000 * Bg * well.skin) / (p.k_mD * p.h_ft);
+        const gas = gasProperties(trial[i], p.temperature_F, reference.Zsc);
+        skin[i] = (PRESSURE_COEFFICIENT * gas.mu_gas_cP * well.rate * 1000 * gas.Bg_rb_scf * well.skin) / (p.k_mD * p.h_ft);
       }
     } else {
-      const [profile, s] = singlePhaseSourceProfile(year, well, column(i), parameters, reference);
+      const [profile, s] = singlePhaseSourceProfile(year, well, column(i), parameters, reference, null, trial[i]);
       profile.forEach((v, m) => { C[m][i] = v; });
-      for (const img of c.images?.[i] ?? []) singlePhaseSourceProfile(year, well, img.d, parameters, reference)[0].forEach((v, m) => { C[m][i] += img.sign * v; });
+      for (const img of c.images?.[i] ?? []) singlePhaseSourceProfile(year, well, img.d, parameters, reference, null, trial[i])[0].forEach((v, m) => { C[m][i] += img.sign * v; });
       skin[i] = s;
       const cumulative = cumulativeRateDays(well, year);
       if (age > 0 && cumulative > 0) {
@@ -724,7 +746,7 @@ export function solveAt(result: MultiwellResult, year: number, previous?: number
 // ---------------------------------------------------------------------------------------------------------------
 // After all wells stop (post-shut-in observation)
 
-/** Fixed-zone radial diffusion of one source's final profile: the grid and operator of `_frozen_source_observation`. */
+/** Fixed-zone radial diffusion of one source's final profile (`_frozen_source_observation`), live cell properties. */
 export interface FrozenSource {
   centers: number[];
   logCenters: number[];
@@ -752,52 +774,18 @@ export function frozenSourceSolution(state: Row, p: Inputs, radii: number[], hit
   }
   const n = zones.length;
   const centers = Array.from({ length: n }, (_, i) => Math.sqrt(faces[i] * faces[i + 1]));
-  const cellStorage = zones.map((z, i) => (storage[z] * (faces[i + 1] ** 2 - faces[i] ** 2)) / 2);
-  const cellMobility = zones.map((z) => mobility[z]);
-  const lower = new Float64Array(Math.max(n - 1, 0)), upper = new Float64Array(Math.max(n - 1, 0)), diagonal = new Float64Array(n);
-  for (let i = 0; i < n - 1; i++) {
-    const resistance = Math.log(faces[i + 1] / centers[i]) / cellMobility[i] + Math.log(centers[i + 1] / faces[i + 1]) / cellMobility[i + 1];
-    const conductance = TIME_COEFFICIENT_YEARS / resistance;
-    lower[i] = conductance / cellStorage[i + 1];
-    upper[i] = conductance / cellStorage[i];
-    diagonal[i + 1] -= lower[i];
-    diagonal[i] -= upper[i];
-  }
-  diagonal[n - 1] -= (TIME_COEFFICIENT_YEARS * cellMobility[n - 1]) / (Math.log(outer / centers[n - 1]) * cellStorage[n - 1]);
   const profile = Float64Array.from(radialPressureFromState(centers, state, p).pressure);
-  // Time integration: L-stable implicit Euler with Richardson extrapolation on a fine geometric step sequence that
-  // lands exactly on every requested time (the Python uses scipy BDF; both agree to about 1e-3 psi).
+  // live cell viscosity and storage at initial pressure + this source's own excess (zones: 0 dry, 1 two-phase, 2 brine)
+  const physical = zones.map((z) => (p.include_evaporation ? z : z + 1));
+  const cell = liveCellProperties(p, physical, state);
+  // Time integration on a fine geometric step sequence that lands exactly on every requested time.
   const first = Math.min(period / 100, 1 / (DAYS_PER_YEAR * 86400)) / 10;
   const steps = 700;
   const set = new Set<number>(hits.filter((t) => t > 0));
   for (let k = 0; k <= steps; k++) set.add(first * (period / first) ** (k / steps));
   if (dense) for (let k = 1; k <= dense; k++) set.add((period * k) / dense);
   const times = [0, ...[...set].filter((t) => t > 0 && t <= period).sort((a, b) => a - b)];
-  const solve = (h: number, y: Float64Array) => {
-    const x = Float64Array.from(y);
-    const cp = new Float64Array(n);
-    let den = 1 - h * diagonal[0];
-    cp[0] = n > 1 ? (-h * upper[0]) / den : 0;
-    x[0] /= den;
-    for (let i = 1; i < n; i++) {
-      const l = -h * lower[i - 1];
-      den = 1 - h * diagonal[i] - l * cp[i - 1];
-      if (i < n - 1) cp[i] = (-h * upper[i]) / den;
-      x[i] = (x[i] - l * x[i - 1]) / den;
-    }
-    for (let i = n - 2; i >= 0; i--) x[i] -= cp[i] * x[i + 1];
-    return x;
-  };
-  const profiles: Float64Array[] = [profile];
-  let y = profile;
-  for (let k = 1; k < times.length; k++) {
-    const h = times[k] - times[k - 1];
-    const coarse = solve(h, y), fine = solve(h / 2, solve(h / 2, y));
-    const next = new Float64Array(n);
-    for (let i = 0; i < n; i++) next[i] = 2 * fine[i] - coarse[i];
-    profiles.push(next);
-    y = next;
-  }
+  const profiles = diffuseRadial(faces, Float64Array.from(centers), outer, p.porosity, profile, cell, times);
   return { centers, logCenters: centers.map(Math.log), times, profiles };
 }
 
@@ -873,8 +861,8 @@ export function calculateMultiwellObservation(result: MultiwellResult, detail = 
       }
     } else {
       times.forEach((offset, j) => {
-        const [profile] = singlePhaseSourceProfile(result.years + offset, well, radii, parameters, constants, result.years);
-        for (const img of result.images?.[i] ?? []) singlePhaseSourceProfile(result.years + offset, well, img.d, parameters, constants, result.years)[0].forEach((v, m) => { profile[m] += img.sign * v; });
+        const [profile] = singlePhaseSourceProfile(result.years + offset, well, radii, parameters, constants, result.years, end.trial[i]);
+        for (const img of result.images?.[i] ?? []) singlePhaseSourceProfile(result.years + offset, well, img.d, parameters, constants, result.years, end.trial[i])[0].forEach((v, m) => { profile[m] += img.sign * v; });
         profile.forEach((v, m) => { matrices[j][m][i] = v; });
       });
     }
@@ -911,8 +899,8 @@ export function calculateMultiwellObservation(result: MultiwellResult, detail = 
   return {
     rows, contributions: pairs, detail: plotRows,
     method: p.phase_mode === "two"
-      ? "Fixed-zone zero-flow radial diffusion of each final source profile; spatial superposition; all field wells stop at the project endpoint."
-      : "Constant-property E1 time/space superposition; all wells stop at endpoint.",
+      ? "Fixed-zone zero-flow radial diffusion of each final source profile with live cell viscosity and storage; spatial superposition; all field wells stop at the project endpoint."
+      : "E1 time/space superposition with background properties at each source's endpoint BHP; all wells stop at endpoint.",
   };
 }
 

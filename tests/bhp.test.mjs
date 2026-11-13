@@ -131,10 +131,35 @@ test("validation and observation schedule", () => {
 
 test("table columns follow _notebook_summary_html", () => {
   const two = runModel({ ...DEFAULT_INPUTS }, 1).results;
-  assert.deepEqual(summaryColumns(two).map((c) => c[1]).slice(0, 4), ["year", "P_used_psia", "rho_g_lb_ft3", "rho_g_at_BHP_lb_ft3"]);
+  assert.deepEqual(summaryColumns(two).map((c) => c[1]).slice(0, 5), ["year", "mu_gas_cP", "salinity_ppm", "salt_concentration_kg_m3", "rho_water_lb_ft3"]);
   const co2 = runModel({ ...DEFAULT_INPUTS, phase_mode: "single" }, 1).results;
   const cols = summaryColumns(co2);
   assert.ok(cols.some(([l]) => l === "Fixed CO2 density at Pi (lb/ft3)"));
   assert.ok(!cols.some(([, k]) => k === "rho_g_at_BHP_lb_ft3"));
   assert.ok(csvText(DETAIL_FIELDS, []).startsWith("year,phase_count"));
+});
+
+test("background properties are calculated (not inputs) and match the Python", async () => {
+  const b = await import("../lib/bhp.ts");
+  for (const gone of ["mu_gas_cP", "water_compressibility_per_psi", "salt_mass_fraction", "brine_density_lb_ft3"]) {
+    assert.ok(!(gone in b.DEFAULT_INPUTS), `${gone} is no longer an input`);
+  }
+  assert.equal(b.DEFAULT_INPUTS.brine_standard_density_lb_ft3, 63.878);
+  const near = (a, e, rel = 1e-12) => assert.ok(Math.abs(a - e) <= rel * Math.abs(e), `${a} vs ${e}`);
+  // values printed by reference/co2_bhp_model.py
+  const w = b.waterProperties(3500, b.DEFAULT_INPUTS);
+  near(w.salinity_ppm, 34005.45609907303);
+  near(w.rho_water_lb_ft3, 62.190297675579785);
+  near(w.cw_per_psi, 2.9410944094676516e-06, 1e-9);
+  near(b.gasProperties(3500, 200, b.prState(b.P_SC_PSIA, b.T_SC_F).Z).mu_gas_cP, 0.04524240026351626, 1e-10);
+  const w2 = b.waterProperties(5000, { ...b.DEFAULT_INPUTS, brine_standard_density_lb_ft3: 66.0, temperature_F: 150 });
+  near(w2.salinity_ppm, 80446.46244539539);
+  near(w2.rho_water_lb_ft3, 65.42979180006385);
+  near(w2.cw_per_psi, 2.5921706359501734e-06, 1e-9);
+  near(b.co2Viscosity(120, 40).mu_gas_cP, 0.04950898047563166);
+  // salinity does not change with pressure; density and cw do
+  const w3 = b.waterProperties(4500, b.DEFAULT_INPUTS);
+  assert.equal(w3.salt_mass_fraction, w.salt_mass_fraction);
+  assert.ok(w3.rho_water_lb_ft3 > w.rho_water_lb_ft3 && w3.cw_per_psi < w.cw_per_psi);
+  assert.throws(() => b.salinityFromStandardDensity(62.0), /at least 62.368/);
 });

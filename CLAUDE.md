@@ -16,9 +16,13 @@ https://co2-interference.vercel.app · repo: github.com/tjayjnr/co2-interference
   `scripts/manual-shots.cjs` (needs `npm i -D puppeteer-core`, Edge/Chrome, the built app on port 3120). Rerun both after UI changes.
 
 ## Where things are
-- `reference/co2_bhp_model.py` – the reference program, verbatim: co2_bhp_multiwell (2).py (single-well and MULTIWELL
+- `reference/co2_bhp_model.py` – the reference program: co2_bhp_multiwell (2).py (single-well and MULTIWELL
   INTERFERENCE sections, Peng–Robinson CO₂ properties, zone 2 mobility Λ₂ = k·(krg2/μg + krw2/μw), pressure-limit
-  check). It is the source of truth for every equation, input check, message, table and output file. (Peng–Robinson is
+  check) with ONLY the background-property code of co2_bhp_dynamic_properties.py merged in: CO₂ viscosity (Fenghour 1998,
+  live PR density), salinity (McCain inverse of `brine_standard_density_lb_ft3`), brine density and cw (Driesner 2007 +
+  IAPWS-IF97), recalculated at every pressure trial and in every shut-in cell (nonlinear falloff). μ_g, cw, salt fraction
+  and brine density are NOT inputs. The merge also applies these properties to the multiwell section (each source's trial
+  BHP; the frozen-source falloff uses live cell properties). The no-evaporation branch of co2_bhp_multiwell (2).py is kept. It is the source of truth for every equation, input check, message, table and output file. (Peng–Robinson is
   4–6 % low in CO₂ density near the critical region compared with Span–Wagner; the project chose to keep Peng–Robinson.)
 - `lib/bhp.ts` – line-by-line translation of the single-well section (Python names, same result keys and order, messages,
   first-year detail, shut-in observation, pressure-limit status/summary, output files with Python number formatting,
