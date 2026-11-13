@@ -642,12 +642,6 @@ export default function Page() {
     return Math.max(1.4 * maxR, Number.isFinite(spacing) ? 0.8 * spacing : 0, 150);
   }, [wells, field, horizon]);
   const padEff = padM ?? autoPadM;
-  const outsidePoints = mapArea === "wells" ? points.filter((q) => {
-    const xs = wells.map((w) => w.x), ys = wells.map((w) => w.y);
-    const half = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / 2 + padEff;
-    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-    return Math.abs(q.x - cx) > half || Math.abs(q.y - cy) > half;
-  }) : [];
   const extent = useMemo(() => {
     const all = mapArea === "all" ? [...wells, ...points] : wells.length ? wells : points;
     const xs = all.map((o) => o.x), ys = all.map((o) => o.y);
@@ -1708,16 +1702,13 @@ export default function Page() {
 
               {viewEff === "mw" && mwRun && mwFiles && mwPlots && (
                 <div id="results">
+                  <div className="plotwrap" role="img" aria-label="BHP and interference of every well versus project time" dangerouslySetInnerHTML={{ __html: mwPlots[0].svg.replace(`width="${mwPlots[0].width}" height="${mwPlots[0].height}"`, 'width="100%"') }} />
+                  <div className="plotwrap" role="img" aria-label="Final interference matrix and front estimates" dangerouslySetInnerHTML={{ __html: mwPlots[1].svg.replace(`width="${mwPlots[1].width}" height="${mwPlots[1].height}"`, 'width="100%"') }} />
                   <h3>Multiwell pressure and interference</h3>
-                  <p className="caption" style={{ marginTop: 0 }}>
-                    Your program&apos;s multiwell calculation ({modelLabel(bhpIn)}, {mwRun.result.wells.length} wells, the last well stops at year {pyFormat(mwRun.result.years, "g")}{boundary.type !== "none" ? "; the program is infinite-acting, the boundary is used only in the maps and curves" : ""}).
-                    Each well&apos;s BHP = initial pressure + its own formation response + its skin + the interference from the other wells; rows of the matrix are receiving wells, columns are sources.
-                  </p>
                   <PyTable cols={MW_SUMMARY_COLS} rows={mwRun.result.summary.filter((r) => r.year === mwRun.result.years)} />
                   <h3>Peak pressure assessment</h3>
                   <PyTable cols={FAILURE_COLS} rows={mwRun.limitSummary} fmt=".4f" />
                   <h3>Cumulative {fluidName} injected at the end of injection</h3>
-                  <p className="caption" style={{ marginTop: 0 }}>Mass = the program&apos;s standard-condition {water ? "water mass per STB" : "CO₂ density"} ({water ? "water_mass_per_stb_lb" : "rho_sc_lb_scf"}) × the surface volume each well injects from its start to its end of injection{water ? "" : " (1 Mscf = 1000 scf)"}; the Field row is the sum of all wells.</p>
                   <InjectedTable />
                   <h3>Well separation distances (ft)</h3>
                   <div className="bhp-summary-wrap">
@@ -1726,15 +1717,12 @@ export default function Page() {
                       <tbody>{wellSeparations(mwRun.result.wells).map((row, i) => <tr key={i}><th>{mwRun.result.wells[i].name}</th>{row.map((v, j) => <td key={j}>{v.toFixed(3)}</td>)}</tr>)}</tbody>
                     </table>
                   </div>
-                  {two && <p className="caption">Three-zone multiphase superposition approximation. Plume overlap is reported separately (plume_overlap.csv){mwRun.result.overlaps.some((r) => r.plumes_touch_or_overlap) ? ": the individual plume circles touch or overlap at one or more reporting times" : ""}.</p>}
                   {mwRun.observation && (
                     <>
                       <h3>After all wells stop</h3>
                       <PyTable cols={MW_OBS_COLS} rows={mwRun.observation.rows} />
                     </>
                   )}
-                  <div className="plotwrap" role="img" aria-label="BHP and interference of every well versus project time" dangerouslySetInnerHTML={{ __html: mwPlots[0].svg.replace(`width="${mwPlots[0].width}" height="${mwPlots[0].height}"`, 'width="100%"') }} />
-                  <div className="plotwrap" role="img" aria-label="Final interference matrix and front estimates" dangerouslySetInnerHTML={{ __html: mwPlots[1].svg.replace(`width="${mwPlots[1].width}" height="${mwPlots[1].height}"`, 'width="100%"') }} />
                   <h3>Download calculations</h3>
                   <ul className="files">
                     {Object.entries(mwFiles).map(([name, text]) => (
@@ -1750,18 +1738,10 @@ export default function Page() {
                 </div>
               )}
 
-              {(viewEff === "map" || viewEff === "sat") && outsidePoints.length > 0 && (
-                <p className="hint">{outsidePoints.map((q) => q.name).join(", ")} {outsidePoints.length > 1 ? "lie" : "lies"} outside the map. Choose Map area: Wells and monitoring points to include {outsidePoints.length > 1 ? "them" : "it"}.</p>
-              )}
-
               {viewEff === "sat" && specSat && (
                 <>
                   <ChartView key={`sat-${runId}`} spec={specSat} title={`CO₂ saturation map at t = ${tNow.toFixed(1)} yr`} filename="co2-saturation-map" />
-                  <p className="caption">
-                    Saturation of the injected CO₂ (Sg) at {tNow.toFixed(1)} yr from a radial Buckley–Leverett front around each injector, for the cumulative reservoir volume of CO₂ of each well (surface volume × Bg at its bottom-hole pressure); where plumes overlap the higher saturation of the two is shown, so each well keeps its own profile, highest next to the well and falling outward to its front (maximum possible {satModel.smax.toFixed(2)}). Brine fills the rest of the pore space. Each well is a thin vertical line starting at the plume centre and pointing up, with its name centred on top of the line. Gravity override, dissolution and residual trapping are not modelled. Drag the evaluation-time slider to watch the plumes grow; they stop growing at each well&apos;s shut-in.
-                  </p>
                   <h3>CO₂ zones of each well at t = {tNow.toFixed(1)} yr</h3>
-                  <p className="caption" style={{ marginTop: 0 }}>Gas front r<sub>g</sub>, dry front r<sub>d</sub> and the zone 2 (CO₂ + brine) saturation from the program. Tip: click a well name to rename it everywhere.</p>
                   <div className="tablewrap">
                     <table className="matrix">
                       <thead><tr><th>Well</th><th>CO₂ injected (Mt)</th><th>Gas front r<sub>g</sub> ({dU.label})</th><th>Dry front r<sub>d</sub> ({dU.label})</th><th>Zone 2 Sg</th><th>Front Sg</th><th>Max Sg</th></tr></thead>
@@ -1830,10 +1810,6 @@ export default function Page() {
                     <button className="ghost" onClick={() => setMapStyle(DEFAULT_MAP_STYLE)}>Reset style</button>
                   </div>
                   <ChartView key={`map-${runId}`} spec={specMap} title={`Pressure buildup map at t = ${tNow.toFixed(1)} yr`} filename="pressure-map" />
-                  <p className="caption">
-                    Buildup at {tNow.toFixed(1)} yr: the sum of every well&apos;s pressure profile from the program ({modelLabel(bhpIn)}). {lim.allowableMPa !== null ? <><b>Pass/fail</b> is judged against the <b>allowable BHP</b> ({P(lim.allowableMPa, 1)} {pU.label}, a buildup of {P(lim.maxBuildupMPa)} {pU.label}), shown as the solid white/black contour, which only appears near the wells if the limit is approached.</> : <>No pressure limit was supplied.</>}
-                    The dashed teal contour is the <b>interference threshold</b> ({P(threshold, 3)} {pU.label}); it only shows how far a pressure effect can be detected and is not a pass/fail limit.
-                  </p>
                 </>
               )}
 
@@ -1843,9 +1819,6 @@ export default function Page() {
                   {wells.length > 0 && (
                     <>
                       <h3>What drives the field maximum</h3>
-                      <p className="caption">
-                        At each time the well with the highest pressure is the controlling well. The chart splits its buildup into the share caused by each injector (its own injection is the layer with its own name) plus skin. Add {P(lim.initialMPa, 1)} {pU.label} for absolute BHP.
-                      </p>
                       <ChartView key={`stack-${runId}`} spec={specStack} title="Field-maximum buildup split by source well" filename="field-maximum-drivers" />
                       <div className="tablewrap">
                         <table className="matrix">
@@ -1870,19 +1843,11 @@ export default function Page() {
               {viewEff === "bhp" && wells[bhpIdx] && (
                 <>
                   {multi && specWellBhp && <ChartView key={`wbhp-${runId}-${bhpIdx}`} spec={specWellBhp} title={`Bottom-hole pressure of ${wells[bhpIdx].name}, with interference from the other wells`} filename={`${wells[bhpIdx].name}-bhp`} />}
-                  {multi ? (
-                    <>
-                      <h3>Your program for {wells[bhpIdx].name} on its own</h3>
-                      <p className="caption" style={{ marginTop: 0 }}>
-                        The program&apos;s single-well calculation for this well alone: rate {num(fromCanon(rU, wells[bhpIdx].rate))} {rU.label}, radius {L(wells[bhpIdx].rwM ?? res.wellboreRadiusM)} {lU.label}, skin {num(wells[bhpIdx].skin)}, {code.out ? code.out.years : Math.round(wells[bhpIdx].endYr - wells[bhpIdx].startYr)} injection years, with the post-shut-in observation entered in the Input section. The chart above adds the interference from the other wells (Multiwell results tab).
-                        {code.note ? ` Note: ${code.note}.` : ""}
-                      </p>
-                    </>
-                  ) : (
-                    <p className="caption" style={{ marginTop: 0 }}>
-                      Your program&apos;s single-well calculation: rate {num(fromCanon(rU, wells[0].rate))} {rU.label}, well radius {L(res.wellboreRadiusM)} {lU.label}, skin {num(wells[0].skin)}, {cur.single.years} injection years, with the post-shut-in observation and the pressure check entered in the Input section. These are the program&apos;s own outputs; the other tabs show the same well on maps and curves.
-                    </p>
+                  {code.out && codePlot && (
+                    <div className="plotwrap" role="img" aria-label="Bottom-hole pressure versus elapsed time" dangerouslySetInnerHTML={{ __html: codePlot.svg.replace(`width="${codePlot.width}" height="${codePlot.height}"`, 'width="100%"') }} />
                   )}
+                  {multi && <h3>Your program for {wells[bhpIdx].name} on its own</h3>}
+                  {code.note && <p className="caption" style={{ marginTop: 0 }}>Note: {code.note}.</p>}
                   {code.error && <p className="err" role="alert">{code.error}</p>}
                   {code.out && codeFiles && codePlot && (
                     <div id="results">
@@ -1894,7 +1859,6 @@ export default function Page() {
                           <SummaryTable rows={code.out.observation.rows} />
                         </>
                       )}
-                      <div className="plotwrap" role="img" aria-label="Bottom-hole pressure versus elapsed time" dangerouslySetInnerHTML={{ __html: codePlot.svg.replace(`width="${codePlot.width}" height="${codePlot.height}"`, 'width="100%"') }} />
                       <h3>Annual injection results</h3>
                       <SummaryTable rows={code.out.results} />
                       <h3>Pressure assessment</h3>
@@ -1902,7 +1866,6 @@ export default function Page() {
                       {!multi && (
                         <>
                           <h3>Cumulative {fluidName} injected at the end of injection</h3>
-                          <p className="caption" style={{ marginTop: 0 }}>The program&apos;s Minj_lb and {water ? "Vwater_stb" : "Vsc_scf"} in the last year of the annual results.</p>
                           <InjectedTable />
                         </>
                       )}
@@ -1972,10 +1935,6 @@ export default function Page() {
 
               {viewEff === "limits" && (
                 <>
-                  <p className="caption" style={{ marginTop: 0 }}>
-                    The program&apos;s pressure check (pressure_limit_summary.csv): the required BHP of each well at every computed time{multi ? ", during injection and after all wells stop," : ""} is compared with the allowable BHP {lim.allowableMPa !== null ? <>(<b>{P(lim.allowableMPa, 1)} {pU.label}</b>{multi && wells.some((w) => w.maxBhpMPa !== null && w.maxBhpMPa !== undefined) ? ", or the well's own maximum" : ""})</> : "(none supplied: NOT ASSESSED)"}. FAIL means the required BHP exceeds the limit at a computed time; rates are not reduced automatically. This is an operating-pressure check, not a prediction of mechanical well integrity.
-                    The <b>interference threshold</b> ({P(threshold, 3)} {pU.label}) is not a pass/fail limit; it is only used for the map contour, the arrival times and the monitoring-point table below.
-                  </p>
                   <div className="tablewrap">
                     <table className="matrix">
                       <thead><tr><th>Well</th><th>Status</th><th>Peak BHP ({pU.label})</th><th>at (yr)</th>{multi && <><th>own formation</th><th>skin</th><th>interference</th></>}<th>Allowable BHP ({pU.label})</th><th>Minimum margin ({pU.label})</th><th>First exceedance (yr)</th></tr></thead>
@@ -1997,10 +1956,6 @@ export default function Page() {
                       </tbody>
                     </table>
                   </div>
-                  <p className="caption">
-                    {worstRow && peaks.length ? `Interference share at the worst well: ${peaks[worst].peak > 0 ? Math.round((peaks[worst].interference / peaks[worst].peak) * 100) : 0}% of its peak buildup. ` : ""}
-                    {Number.isFinite(scaleToLimit) ? `The pressure model is close to linear in rate (the CO₂ properties depend weakly on pressure), so scaling every rate by about ×${scaleToLimit.toFixed(2)} brings the worst well to the limit.` : ""}
-                  </p>
                   {points.length > 0 && (
                     <>
                       <h3>Monitoring points vs the interference threshold ({P(threshold, 3)} {pU.label})</h3>
@@ -2061,6 +2016,7 @@ export default function Page() {
                 </>
               )}
 
+              {viewEff === "mw" && (
               <details className="assump">
                 <summary>Model assumptions and limitations</summary>
                 <ul>
@@ -2074,6 +2030,7 @@ export default function Page() {
                   <li>Use for screening and ranking of well layouts; confirm with numerical simulation before decisions.</li>
                 </ul>
               </details>
+              )}
             </>
           )}
         </section>

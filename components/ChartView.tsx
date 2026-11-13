@@ -145,7 +145,7 @@ export default function ChartView({ spec, title, filename }: Props) {
   return (
     <div className="chartview">
       <div className="chartbar">
-        <span className="zoomhint">{isMap ? "Drag a square on the map to zoom" : "Drag a box on the plot to zoom"} · Ctrl + scroll to zoom · double-click to reset</span>
+        <span className="zoomhint" />
         <button className="ghost" aria-label="Zoom in" title="Zoom in" onClick={() => zoomCentre(0.6)}>＋</button>
         <button className="ghost" aria-label="Zoom out" title="Zoom out" onClick={() => zoomCentre(1 / 0.6)} disabled={!view}>−</button>
         <button className="ghost" onClick={() => setView(null)} disabled={!view}>Reset zoom</button>
