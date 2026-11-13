@@ -1590,8 +1590,9 @@ export default function Page() {
                   </g>
                 ))}
               </svg>
+              <span className="welcome-badge"><i aria-hidden="true" />Ready</span>
               <h2 className="welcome-title">No results yet</h2>
-              <p className="welcome-text">Check the inputs on the left, then run the analysis.</p>
+              <p className="welcome-text"><span className="welcome-arrow" aria-hidden="true">←</span>Check the inputs on the left, then run the analysis.</p>
               <button type="button" className="run welcome-run" onClick={() => runNow()}>▶ RUN analysis</button>
               <ol className="welcome-steps">
                 <li><span>1</span>Choose the well system</li>

@@ -492,3 +492,18 @@ h2 { letter-spacing: .08em; }
 @media (prefers-reduced-motion: reduce) { .wm-track h1.wordmark { animation: none; } .wm-track { -webkit-mask-image: none; mask-image: none; } }
 .hdrbtns { flex: 0 1 auto; }
 @media (max-width: 640px) { .wm-track h1.wordmark { animation-duration: 10s; } }
+
+/* ---- "No results yet" heading ---- */
+.welcome-badge { display: inline-flex; align-items: center; gap: 7px; margin-bottom: 10px; padding: 4px 12px 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 12%, var(--panel)); border: 1px solid color-mix(in srgb, var(--accent-2) 35%, transparent); }
+.welcome-badge i { width: 8px; height: 8px; border-radius: 50%; background: var(--accent-2); box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-2) 60%, transparent); animation: wb-pulse 1.8s ease-out infinite; }
+@keyframes wb-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-2) 55%, transparent); } 100% { box-shadow: 0 0 0 9px transparent; } }
+@media (prefers-reduced-motion: reduce) { .welcome-badge i { animation: none; } }
+.welcome-title { font-size: 34px; font-weight: 800; letter-spacing: .01em; margin: 0 0 12px; padding-bottom: 12px; position: relative; line-height: 1.15;
+  background: linear-gradient(120deg, var(--text) 0%, var(--accent) 55%, var(--accent-2) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.welcome-title::after { content: ""; position: absolute; left: 50%; bottom: 0; width: 64px; height: 4px; margin-left: -32px; border-radius: 4px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+.welcome-text { display: inline-flex; align-items: center; gap: 10px; font-size: 16px; color: var(--muted); margin-bottom: 22px; }
+.welcome-arrow { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; font-size: 15px; font-weight: 700; color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel)); border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); animation: wa-nudge 2.2s ease-in-out infinite; }
+@keyframes wa-nudge { 0%, 100% { transform: translateX(0); } 50% { transform: translateX(-5px); } }
+@media (prefers-reduced-motion: reduce) { .welcome-arrow { animation: none; } }
+@media (min-width: 1001px) and (max-height: 820px) { body:has(.welcome) .welcome-title { font-size: 28px; } body:has(.welcome) .welcome-text { margin-bottom: 14px; } }
+@media (max-width: 1000px) { .welcome-arrow { transform: rotate(90deg); animation: none; } }
