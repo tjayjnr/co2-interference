@@ -482,3 +482,13 @@ h2 { letter-spacing: .08em; }
   body:has(.welcome) .welcome-text { margin-bottom: 12px; }
   body:has(.welcome) .welcome-steps { margin-top: 12px; }
 }
+
+/* ---- the name glides from left to right across the header ---- */
+.wm-track { flex: 1 1 auto; min-width: 0; overflow: hidden; container-type: inline-size; padding: 2px 0;
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 4%, #000 92%, transparent 100%); mask-image: linear-gradient(90deg, transparent 0, #000 4%, #000 92%, transparent 100%); }
+.wm-track h1.wordmark { width: max-content; flex-wrap: nowrap; white-space: nowrap; animation: wm-slide 16s linear infinite; will-change: transform; }
+.wm-track:hover h1.wordmark { animation-play-state: paused; }
+@keyframes wm-slide { from { transform: translateX(-100%); } to { transform: translateX(100cqw); } }
+@media (prefers-reduced-motion: reduce) { .wm-track h1.wordmark { animation: none; } .wm-track { -webkit-mask-image: none; mask-image: none; } }
+.hdrbtns { flex: 0 1 auto; }
+@media (max-width: 640px) { .wm-track h1.wordmark { animation-duration: 10s; } }
