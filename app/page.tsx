@@ -1196,6 +1196,7 @@ export default function Page() {
 
             <div className="group" data-group="model" hidden={inTab !== "model"}>
               <h3>Pressure model and boundary</h3>
+              <div className="subhd">Fluid model</div>
               <div className="grid1">
                 <label className="field"><span>Phase / fluid</span>
                   <select aria-label="Phase / fluid" value={modelL} onChange={(e) => setModel(e.target.value as ModelKind)}>
@@ -1212,6 +1213,9 @@ export default function Page() {
                     </select>
                   </label>
                 )}
+              </div>
+              <div className="subhd">Boundary</div>
+              <div className="grid1">
                 <label className="field"><span>Boundary</span>
                   <select aria-label="Boundary type" value={boundaryL.type} onChange={(e) => setBoundary({ ...boundaryL, type: e.target.value as Boundary["type"] })}>
                     <option value="none">Infinite</option>
@@ -1277,10 +1281,14 @@ export default function Page() {
             {!multiL && (
               <div className="group" data-group="wells" hidden={inTab !== "wells"}>
                 <h3>Injection well</h3>
+                <div className="subhd">Injection</div>
                 <div className="grid2">
                   {uf(rateCatL, { label: modelL === "water" ? "Surface water injection rate" : "Surface injection rate", value: singleL.rate, onChange: (v) => setSingle((s) => ({ ...s, rate: v })), min: 0 })}
-                  <NumField label="Skin factor" value={singleL.skin} onChange={(v) => setSingle((s) => ({ ...s, skin: v }))} step={0.5} />
                   <NumField label="Number of injection years" unit="whole years" value={singleL.years} onChange={(v) => setSingle((s) => ({ ...s, years: v }))} step={1} min={1} />
+                </div>
+                <div className="subhd">Well completion</div>
+                <div className="grid2">
+                  <NumField label="Skin factor" value={singleL.skin} onChange={(v) => setSingle((s) => ({ ...s, skin: v }))} step={0.5} />
                 </div>
               </div>
             )}
@@ -1294,6 +1302,7 @@ export default function Page() {
                     <button className="ghost" onClick={() => download("wells.csv", wellsToCsv(rawWells, isGeo))}>Export</button>
                   </div>
                 </div>
+                <div className="subhd">Number of wells and layout</div>
                 <div className="grid2">
                   <NumField label="Number of wells" unit="2–32" value={rawWells.length} onChange={setWellCount} step={1} min={2} />
                   <label className="field"><span>Distances</span>
@@ -1321,20 +1330,6 @@ export default function Page() {
                       </select>
                     </label>
                   )}
-                  <label className="field"><span>Well radius</span>
-                    <select aria-label="Well radius" value={rwModeL} onChange={(e) => {
-                      const next = e.target.value as "same" | "each";
-                      // switching to one value per well starts every well at the common value
-                      if (next === "each" && rwModeL === "same") setWells((ws) => ws.map((w) => ({ ...w, rwM: rwAllL })));
-                      setRwMode(next);
-                    }}>
-                      <option value="same">Same for all wells</option>
-                      <option value="each">Different for each well</option>
-                    </select>
-                  </label>
-                  {rwModeL === "same"
-                    ? uf("length", { label: "Well radius (all wells)", value: rwAllL, onChange: setRwAll, min: 0 })
-                    : <p className="hint" style={{ alignSelf: "end", margin: 0 }}>Enter the radius of each well in the Radius column of the table.</p>}
                   {geomL.mode === "different" && geomL.method === "coordinates" && (
                     <label className="field coordsel"><span>Location input</span>
                       <select value={coordMode} onChange={(e) => switchCoord(e.target.value as "local" | "geo")}>
@@ -1354,10 +1349,27 @@ export default function Page() {
                     <textarea aria-label="Pairwise distances" rows={Math.min(8, rawWells.length + 1)} className="mono" placeholder={"0, 1000, 1500\n1000, 0, 1200\n1500, 1200, 0"} value={geomL.matrix} onChange={(e) => setGeom((g) => ({ ...g, matrix: e.target.value }))} />
                   </label>
                 )}
+                <div className="subhd">Well radius</div>
+                <div className="grid2">
+                  <label className="field"><span>Well radius</span>
+                    <select aria-label="Well radius" value={rwModeL} onChange={(e) => {
+                      const next = e.target.value as "same" | "each";
+                      // switching to one value per well starts every well at the common value
+                      if (next === "each" && rwModeL === "same") setWells((ws) => ws.map((w) => ({ ...w, rwM: rwAllL })));
+                      setRwMode(next);
+                    }}>
+                      <option value="same">Same for all wells</option>
+                      <option value="each">Different for each well</option>
+                    </select>
+                  </label>
+                  {rwModeL === "same"
+                    ? uf("length", { label: "Well radius (all wells)", value: rwAllL, onChange: setRwAll, min: 0 })
+                    : <p className="hint" style={{ alignSelf: "end", margin: 0 }}>Enter the radius of each well in the Radius column of the table.</p>}
+                </div>
                 <input ref={fileRef} type="file" accept=".csv,.txt,.tsv" hidden onChange={(e) => onImport(e.target.files?.[0])} />
                 {csvError && <p className="err">{csvError}</p>}
                 {geoBad && <p className="err">Latitude must be within ±90° and longitude within ±180°.</p>}
-                <h3 className="sub-h">Individual well inputs</h3>
+                <div className="subhd">Individual well inputs</div>
                 <div className="tablewrap">
                   <table className="edit">
                     <thead><tr>
@@ -1429,9 +1441,6 @@ export default function Page() {
                     </tbody>
                   </table>
                 </div>
-                <label className="field" style={{ marginTop: 8 }}><span>Reporting times (project years; blank = annual)</span>
-                  <input aria-label="Reporting times" placeholder="e.g. 0.5, 1, 5, 10, 30" value={reportL} onChange={(e) => setReportL(e.target.value)} />
-                </label>
                 {!layoutL.error && layoutL.wells.length > 1 && (
                   <details className="seps" open={layoutL.wells.length <= 6}>
                     <summary>Well separation distances ({dUL.label})</summary>
@@ -1447,11 +1456,16 @@ export default function Page() {
                     </div>
                   </details>
                 )}
+                <div className="subhd">Reporting</div>
+                <label className="field"><span>Reporting times (project years; blank = annual)</span>
+                  <input aria-label="Reporting times" placeholder="e.g. 0.5, 1, 5, 10, 30" value={reportL} onChange={(e) => setReportL(e.target.value)} />
+                </label>
               </div>
             )}
 
             <div className="group" data-group="limit" hidden={inTab !== "limit"}>
               <h3>Will the required pressure exceed a limit?</h3>
+              <div className="subhd">Pressure limit</div>
               <div className="grid2">
                 <label className="field"><span>Pressure assessment</span>
                   <select aria-label="Pressure assessment" value={limitL.mode} onChange={(e) => setLimitL((l) => ({ ...l, mode: e.target.value as LimitIn["mode"] }))}>
@@ -1467,17 +1481,28 @@ export default function Page() {
                     <NumField label="Allowable fraction" unit="0–1" value={limitL.fraction} onChange={(v) => setLimitL((l) => ({ ...l, fraction: v }))} step={0.05} min={0} />
                   </>
                 )}
+              </div>
+              <div className="subhd">Interference</div>
+              <div className="grid2">
                 {uf("pressure", { label: "Interference threshold", value: thresholdL, onChange: setThreshold })}
               </div>
             </div>
 
             <div className="group" data-group="shutin" hidden={inTab !== "shutin"}>
               <h3>Post-shut-in observation</h3>
-              <p className="hint" style={{ marginTop: 0 }}>Include pressure observation after injection stops?</p>
-              <label className="check"><input type="radio" name="observe" checked={observeL === "yes"} onChange={() => setObserve("yes")} /> Yes</label>{" "}
-              <label className="check"><input type="radio" name="observe" checked={observeL === "no"} onChange={() => setObserve("no")} /> No</label>
+              <div className="subhd">Observation after injection stops</div>
+              <div className="grid1">
+                <label className="field"><span>Include pressure observation after injection stops?</span>
+                  <select aria-label="Include observation" value={observeL} onChange={(e) => setObserve(e.target.value as "yes" | "no")}>
+                    <option value="yes">Yes</option>
+                    <option value="no">No</option>
+                  </select>
+                </label>
+              </div>
               {observeL === "yes" && (
-                <div className="grid2" style={{ marginTop: 8 }}>
+                <>
+                <div className="subhd">Observation period</div>
+                <div className="grid2">
                   <label className="field"><span>Observation duration (years)</span>
                     <input type="number" step="any" min={0} placeholder="e.g. 10" aria-label="Observation duration (years)" value={obsPeriodL} onChange={(e) => setObsPeriod(e.target.value)} />
                   </label>
@@ -1485,11 +1510,13 @@ export default function Page() {
                     <input type="text" placeholder="e.g. 0, 0.5, 1, 5, 10" aria-label="Observation years to report" value={obsYearsL} onChange={(e) => setObsYears(e.target.value)} />
                   </label>
                 </div>
+                </>
               )}
             </div>
 
             <div className="group" data-group="points" hidden={inTab !== "points"}>
               <h3>Monitoring points</h3>
+              <div className="subhd">Point locations</div>
               <div className="tablewrap">
                 <table className="edit">
                   <thead><tr><th>Name</th>{isGeo ? <><th>Lon (°)</th><th>Lat (°)</th></> : <><th>x {unitHead("distance")}</th><th>y {unitHead("distance")}</th></>}<th /></tr></thead>
@@ -1519,6 +1546,7 @@ export default function Page() {
 
             <div className="group" data-group="report" hidden={inTab !== "report"}>
               <h3>Report details</h3>
+              <div className="subhd">Report title page</div>
               <div className="grid2">
                 <label className="field"><span>Project name</span><input value={project} onChange={(e) => setProject(e.target.value)} placeholder="optional" /></label>
                 <label className="field"><span>Author</span><input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="optional" /></label>
