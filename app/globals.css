@@ -361,3 +361,33 @@ h2 { letter-spacing: .08em; }
   .top h1 { font-size: 20px; }
   .brand .mark { width: 32px; height: 32px; }
 }
+
+/* ---- Model and Reservoir & fluids sections ---- */
+.subhd { display: flex; align-items: center; gap: 10px; margin: 16px 0 8px; font-size: 11.5px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; color: var(--accent); }
+.subhd::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.panel .inputs .group > .subhd:nth-child(2) { margin-top: 2px; }
+.panel .inputs .grid2 { align-items: end; }
+/* fluid model cards */
+.choice3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.choice { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 2px; padding: 12px 6px 11px; border: 1px solid var(--line); border-radius: 12px; background: var(--field); cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }
+.choice input { position: absolute; opacity: 0; pointer-events: none; }
+.choice:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); }
+.choice.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, var(--panel)); box-shadow: inset 0 0 0 1px var(--accent); }
+.choice:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+.choice small { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+.choice b { font-size: 14px; line-height: 1.25; }
+.choice.on b { color: var(--accent); }
+.ic { width: 28px; height: 28px; margin-bottom: 6px; border-radius: 50%; display: block; }
+.ic-two { background: linear-gradient(90deg, #14a39a 0 50%, #2f6fd6 50% 100%); box-shadow: 0 0 0 3px color-mix(in srgb, #14a39a 18%, transparent); }
+.ic-co2 { background: radial-gradient(circle at 35% 35%, #8ff0e4, #14a39a 70%); box-shadow: 0 0 0 3px color-mix(in srgb, #14a39a 18%, transparent); }
+.ic-water { width: 24px; height: 24px; margin: 2px 0 8px; border-radius: 50% 0 50% 50%; transform: rotate(-45deg); background: radial-gradient(circle at 40% 60%, #9cc3ff, #2f6fd6 75%); }
+/* segmented choices */
+.seg { display: flex; padding: 3px; gap: 3px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; }
+.seg label { flex: 1; text-align: center; padding: 7px 8px; border-radius: 8px; font-size: 14px; color: var(--muted); cursor: pointer; transition: background .15s, color .15s; white-space: nowrap; }
+.seg label:hover { color: var(--text); }
+.seg label.on { background: var(--panel); color: var(--accent); font-weight: 700; box-shadow: 0 1px 3px rgba(16, 24, 40, .14); }
+.seg label:focus-within { outline: 2px solid var(--accent); outline-offset: 1px; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+@media (max-width: 460px) { .choice3 { grid-template-columns: 1fr; } .choice { flex-direction: row; gap: 10px; justify-content: flex-start; padding: 10px 12px; } .ic { margin: 0; } .seg label { white-space: normal; font-size: 13px; } }
+.seg label, .sysbtn { position: relative; }
+.seg input, .choice input, .sysbtn input { width: 1px; height: 1px; padding: 0; margin: 0; left: 50%; top: 50%; }

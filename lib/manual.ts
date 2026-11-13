@@ -69,31 +69,32 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   fig("system", "Figure 2a. The Well system choice at the top of the Input section: Single well or Multiwell interference.");
 
   b.push({ t: "h2", text: "4.2 Reservoir parameters" });
+  p("The Reservoir & fluids tab is arranged in four groups: Formation (permeability, porosity, thickness, rock compressibility and, for a single well, the well radius), Initial conditions (pressure and temperature), Brine (water viscosity and standard density; not shown for single-phase CO₂) and Relative permeability (two-phase only).");
   table("Table 2. Reservoir inputs (defaults are those of the reference model). Use site data wherever available.", ["Parameter", "Meaning", "Default"], [
-    ["Permeability (every zone)", "Permeability of the injection formation; the same in all zones.", "50 mD"],
-    ["Reservoir thickness", "Net thickness of the injection interval.", "20 ft"],
-    ["Porosity (every zone)", "Pore volume fraction; the same in all zones.", "0.20"],
+    ["Permeability", "Permeability of the injection formation; the same in all zones.", "50 mD"],
+    ["Thickness", "Net thickness of the injection interval.", "20 ft"],
+    ["Porosity", "Pore volume fraction; the same in all zones.", "0.20"],
     ["Well radius", "Radius at which each well's own pressure is evaluated.", "0.55 ft"],
-    ["Initial absolute pressure", "Initial reservoir pressure (absolute, psia in field units).", "3500 psia"],
-    ["Reservoir temperature", "Constant temperature; used for the Peng–Robinson CO₂ properties, the CO₂ viscosity, the brine density and compressibility and the water vapour pressure. Used by all three models.", "200 °F"],
+    ["Initial pressure (absolute)", "Initial reservoir pressure (absolute, psia in field units).", "3500 psia"],
+    ["Temperature", "Constant temperature; used for the Peng–Robinson CO₂ properties, the CO₂ viscosity, the brine density and compressibility and the water vapour pressure. Used by all three models.", "200 °F"],
   ]);
 
   b.push({ t: "h2", text: "4.2.1 Pressure model and fluid inputs" });
-  p("The Pressure model section chooses the injection-BHP model used for every well. Only the inputs used by the chosen model are shown.");
+  p("The Model tab chooses the injection-BHP model used for every well by clicking one of three cards (Two-phase CO₂–brine, Single-phase CO₂, Single-phase water). For the two-phase model, Evaporation is a Yes / No switch. Boundary is a three-way switch (Infinite, Sealing fault, Constant pressure); the boundary line and position appear only when a fault or constant-pressure edge is chosen. Only the inputs used by the chosen model are shown.");
   table("Table 2a. The three pressure models.", ["Model", "What it represents"], [
     ["Two-phase CO₂–brine (default)", "Three zones around each well: dry CO₂ next to the well (if evaporation is included), CO₂ + brine, and brine. The gas front follows from the Corey relative permeabilities (both exponents 3, or both 2), the dry front from the evaporation of the residual brine, and the zone 2 saturation from the CO₂ mass balance. CO₂ density, compressibility and Bg come from the Peng–Robinson equation of state for pure CO₂ at each well's bottom-hole pressure, converged to 10⁻⁴ psi; the CO₂ viscosity, brine density and water compressibility are recalculated at the same pressure."],
     ["Single-phase CO₂", "A CO₂-filled reservoir with relative permeability 1. Bg is fixed at 0.0005690187 rb/scf; CO₂ density and compressibility are fixed at the initial pressure. The CO₂ viscosity is recalculated at every pressure trial from the live Peng–Robinson density."],
     ["Single-phase water", "A water-filled reservoir with relative permeability 1 and Bw = 1.0 rb/STB. The brine density and water compressibility are calculated at every pressure trial. Rates are in STB/day."],
   ]);
   table("Table 2b. Fluid and rock-fluid inputs.", ["Input", "Used by", "Default"], [
-    ["Include evaporation?", "Two-phase. No sets the dry zone to zero (r_d = r_w).", "Yes"],
+    ["Evaporation", "Two-phase. No sets the dry zone to zero (r_d = r_w).", "Yes"],
     ["Water viscosity", "Two-phase, water", "0.30 cP"],
-    ["Brine density at 60 °F, 14.696 psia (standard)", "Two-phase, water. The measured density at standard conditions; the salinity follows from it. Do not enter a reservoir-condition density.", "63.878 lb/ft³"],
+    ["Standard density (60 °F, 1 atm), under Brine", "Two-phase, water. The measured density at standard conditions; the salinity follows from it. Do not enter a reservoir-condition density.", "63.878 lb/ft³"],
     ["Rock compressibility", "All models", "4.2×10⁻⁶ 1/psi"],
     ["Irreducible water saturation Swr", "Two-phase. The maximum CO₂ saturation is 1 − Swr.", "0.55"],
-    ["Gas end-point rel. perm. krg0", "Two-phase", "0.65"],
-    ["Water end-point rel. perm. krw0", "Two-phase", "1.0"],
-    ["Zone 1 gas rel. perm. krg1", "Two-phase (dry-CO₂ zone)", "0.65"],
+    ["Gas end-point krg0", "Two-phase", "0.65"],
+    ["Water end-point krw0", "Two-phase", "1.0"],
+    ["Zone 1 gas krg1", "Two-phase (dry-CO₂ zone)", "0.65"],
     ["Gas and water Corey exponents", "Two-phase. Both 3 (cubic front) or both 2 (quadratic front); other pairs are rejected.", "3 and 3"],
       ], "If an input is outside its allowed range (for example porosity not between 0 and 1, or mismatched Corey exponents) a red message appears under the RUN button and the calculation stops with the same message.");
 

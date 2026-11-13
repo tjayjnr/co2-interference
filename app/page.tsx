@@ -1196,66 +1196,86 @@ export default function Page() {
 
             <div className="group" data-group="model" hidden={inTab !== "model"}>
               <h3>Pressure model and boundary</h3>
-              <label className="field"><span>Phase / fluid</span>
-                <select aria-label="Phase / fluid" value={modelL} onChange={(e) => setModel(e.target.value as ModelKind)}>
-                  <option value="two">Two-phase CO₂–brine (three-zone model)</option>
-                  <option value="co2">Single-phase CO₂</option>
-                  <option value="water">Single-phase water</option>
-                </select>
-              </label>
-              {modelL === "two" && (
-                <label className="field" style={{ marginTop: 8 }}><span>Include evaporation?</span>
-                  <select value={flL.evaporation ? "yes" : "no"} onChange={(e) => setFl((f) => ({ ...f, evaporation: e.target.value === "yes" }))}>
-                    <option value="yes">Yes (dry zone next to the well)</option>
-                    <option value="no">No (r_d = r_w, no dry zone)</option>
-                  </select>
-                </label>
-              )}
-              <div className="grid2" style={{ marginTop: 8 }}>
-                <label className="field"><span>Boundary</span>
-                  <select aria-label="Boundary type" value={boundaryL.type} onChange={(e) => setBoundary({ ...boundaryL, type: e.target.value as Boundary["type"] })}>
-                    <option value="none">Infinite</option>
-                    <option value="noflow">Sealing fault (no-flow)</option>
-                    <option value="constant">Constant pressure</option>
-                  </select>
-                </label>
-                <label className="field"><span>Boundary line</span>
-                  <select aria-label="Boundary line" value={boundaryL.axis} disabled={boundaryL.type === "none"} onChange={(e) => setBoundary({ ...boundaryL, axis: e.target.value as "x" | "y" })}>
-                    <option value="x">{isGeo ? "longitude = const (N–S line)" : "x = const"}</option>
-                    <option value="y">{isGeo ? "latitude = const (E–W line)" : "y = const"}</option>
-                  </select>
-                </label>
-                {isGeo
-                  ? <NumField label={boundaryL.axis === "x" ? "Boundary longitude" : "Boundary latitude"} unit="°" value={boundaryDeg} onChange={setBoundaryDeg} />
-                  : uf("distance", { label: "Boundary position", value: boundaryL.positionM, onChange: (v) => setBoundary({ ...boundaryL, positionM: v }) })}
+              <div className="subhd">Phase / fluid</div>
+              <div className="choice3" role="radiogroup" aria-label="Phase / fluid">
+                {([["two", "Two-phase", "CO₂–brine", "two"], ["co2", "Single-phase", "CO₂", "co2"], ["water", "Single-phase", "Water", "water"]] as [ModelKind, string, string, string][]).map(([k, top, name, ic]) => (
+                  <label key={k} className={`choice ${modelL === k ? "on" : ""}`}>
+                    <input type="radio" name="model" checked={modelL === k} onChange={() => setModel(k)} />
+                    <i className={`ic ic-${ic}`} aria-hidden="true" />
+                    <small>{top}</small>
+                    <b>{name}</b>
+                  </label>
+                ))}
               </div>
+              {modelL === "two" && (
+                <>
+                  <div className="subhd">Evaporation (dry zone next to the well)</div>
+                  <div className="seg" role="radiogroup" aria-label="Include evaporation">
+                    <label className={flL.evaporation ? "on" : ""}><input type="radio" name="evap" checked={flL.evaporation} onChange={() => setFl((f) => ({ ...f, evaporation: true }))} />Yes</label>
+                    <label className={!flL.evaporation ? "on" : ""}><input type="radio" name="evap" checked={!flL.evaporation} onChange={() => setFl((f) => ({ ...f, evaporation: false }))} />No (r<sub>d</sub> = r<sub>w</sub>)</label>
+                  </div>
+                </>
+              )}
+              <div className="subhd">Boundary</div>
+              <div className="seg" role="radiogroup" aria-label="Boundary type">
+                {([["none", "Infinite"], ["noflow", "Sealing fault"], ["constant", "Constant pressure"]] as [Boundary["type"], string][]).map(([k, l]) => (
+                  <label key={k} className={boundaryL.type === k ? "on" : ""}>
+                    <input type="radio" name="boundary" checked={boundaryL.type === k} onChange={() => setBoundary({ ...boundaryL, type: k })} />{l}
+                  </label>
+                ))}
+              </div>
+              {boundaryL.type !== "none" && (
+                <div className="grid2" style={{ marginTop: 12 }}>
+                  <label className="field"><span>Boundary line</span>
+                    <select aria-label="Boundary line" value={boundaryL.axis} onChange={(e) => setBoundary({ ...boundaryL, axis: e.target.value as "x" | "y" })}>
+                      <option value="x">{isGeo ? "longitude = const (N–S line)" : "x = const"}</option>
+                      <option value="y">{isGeo ? "latitude = const (E–W line)" : "y = const"}</option>
+                    </select>
+                  </label>
+                  {isGeo
+                    ? <NumField label={boundaryL.axis === "x" ? "Boundary longitude" : "Boundary latitude"} unit="°" value={boundaryDeg} onChange={setBoundaryDeg} />
+                    : uf("distance", { label: "Boundary position", value: boundaryL.positionM, onChange: (v) => setBoundary({ ...boundaryL, positionM: v }) })}
+                </div>
+              )}
             </div>
 
             <div className="group" data-group="reservoir" hidden={inTab !== "reservoir"}>
               <h3>Reservoir and fluids</h3>
+              <div className="subhd">Formation</div>
               <div className="grid2">
-                {uf("perm", { label: "Permeability (every zone)", value: resL.permMd, onChange: setR("permMd"), min: 0 })}
-                {uf("length", { label: "Reservoir thickness", value: resL.thicknessM, onChange: setR("thicknessM"), min: 0 })}
-                <NumField label="Porosity (every zone)" unit="frac" value={resL.porosity} onChange={setR("porosity")} step={0.01} min={0} />
+                {uf("perm", { label: "Permeability", value: resL.permMd, onChange: setR("permMd"), min: 0 })}
+                <NumField label="Porosity" unit="frac" value={resL.porosity} onChange={setR("porosity")} step={0.01} min={0} />
+                {uf("length", { label: "Thickness", value: resL.thicknessM, onChange: setR("thicknessM"), min: 0 })}
+                {uf("compress", { label: "Rock compressibility", value: flL.rockComp, onChange: setF("rockComp"), min: 0 })}
                 {!multiL && uf("length", { label: "Well radius", value: resL.wellboreRadiusM, onChange: setR("wellboreRadiusM"), min: 0.01 })}
-                {uf("pressure", { label: "Initial absolute pressure", value: resL.initialMPa, onChange: setR("initialMPa"), min: 0 })}
-                {uf("temp", { label: "Reservoir temperature", value: resL.tempC, onChange: setR("tempC") })}
               </div>
-              <div className="grid2" style={{ marginTop: 8 }}>
-                {showF("mu_water_cP") && uf("viscosity", { label: "Water viscosity", value: flL.muWater, onChange: setF("muWater"), min: 0 })}
-                {showF("brine_standard_density_lb_ft3") && uf("density", { label: "Brine density at 60 °F, 14.696 psia (standard)", value: flL.brineDensityKgM3, onChange: setF("brineDensityKgM3"), min: 0 })}
-                {showF("rock_compressibility_per_psi") && uf("compress", { label: "Rock compressibility", value: flL.rockComp, onChange: setF("rockComp"), min: 0 })}
-                {modelL === "two" && (
-                  <>
-                    <NumField label="Irreducible water saturation Swr" unit="frac" value={flL.swr} onChange={setF("swr")} step={0.05} min={0} />
-                    <NumField label="Gas end-point rel. perm. krg0" value={flL.krg0} onChange={setF("krg0")} step={0.05} min={0} />
-                    <NumField label="Water end-point rel. perm. krw0" value={flL.krw0} onChange={setF("krw0")} step={0.05} min={0} />
-                    <NumField label="Zone 1 gas rel. perm. krg1" value={flL.krg1} onChange={setF("krg1")} step={0.05} min={0} />
+              <div className="subhd">Initial conditions</div>
+              <div className="grid2">
+                {uf("pressure", { label: "Initial pressure (absolute)", value: resL.initialMPa, onChange: setR("initialMPa"), min: 0 })}
+                {uf("temp", { label: "Temperature", value: resL.tempC, onChange: setR("tempC") })}
+              </div>
+              {showF("mu_water_cP") && (
+                <>
+                  <div className="subhd">Brine</div>
+                  <div className="grid2">
+                    {uf("viscosity", { label: "Water viscosity", value: flL.muWater, onChange: setF("muWater"), min: 0 })}
+                    {uf("density", { label: "Standard density (60 °F, 1 atm)", value: flL.brineDensityKgM3, onChange: setF("brineDensityKgM3"), min: 0 })}
+                  </div>
+                </>
+              )}
+              {modelL === "two" && (
+                <>
+                  <div className="subhd">Relative permeability</div>
+                  <div className="grid2">
+                    <NumField label="Irreducible water Swr" unit="frac" value={flL.swr} onChange={setF("swr")} step={0.05} min={0} />
+                    <NumField label="Gas end-point krg0" value={flL.krg0} onChange={setF("krg0")} step={0.05} min={0} />
+                    <NumField label="Water end-point krw0" value={flL.krw0} onChange={setF("krw0")} step={0.05} min={0} />
+                    <NumField label="Zone 1 gas krg1" value={flL.krg1} onChange={setF("krg1")} step={0.05} min={0} />
                     <NumField label="Gas Corey exponent ng" unit="3 or 2" value={flL.ng} onChange={setF("ng")} step={1} min={2} />
                     <NumField label="Water Corey exponent nw" unit="= ng" value={flL.nw} onChange={setF("nw")} step={1} min={2} />
-                  </>
-                )}
-              </div>
+                  </div>
+                </>
+              )}
             </div>
 
             {!multiL && (
