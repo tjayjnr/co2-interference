@@ -1207,7 +1207,6 @@ export default function Page() {
                   </select>
                 </label>
               )}
-              <p className="hint">{MODEL_HELP[modelL]}</p>
               <div className="grid2" style={{ marginTop: 8 }}>
                 <label className="field"><span>Boundary</span>
                   <select aria-label="Boundary type" value={boundaryL.type} onChange={(e) => setBoundary({ ...boundaryL, type: e.target.value as Boundary["type"] })}>
@@ -1226,7 +1225,10 @@ export default function Page() {
                   ? <NumField label={boundaryL.axis === "x" ? "Boundary longitude" : "Boundary latitude"} unit="°" value={boundaryDeg} onChange={setBoundaryDeg} />
                   : uf("distance", { label: "Boundary position", value: boundaryL.positionM, onChange: (v) => setBoundary({ ...boundaryL, positionM: v }) })}
               </div>
-              <p className="hint">Infinite: the aquifer has no edge (your program). For a sealing fault or a constant-pressure edge, give the straight boundary line: the maps, curves and matrix then add image wells; the program results stay infinite-acting. The Compare boundaries tab runs all three conditions side by side.</p>
+              <details className="notes"><summary>Notes</summary>
+                <p className="hint">{MODEL_HELP[modelL]}</p>
+                <p className="hint">Infinite: the aquifer has no edge (your program). For a sealing fault or a constant-pressure edge, give the straight boundary line: the maps, curves and matrix then add image wells; the program results stay infinite-acting. The Compare boundaries tab runs all three conditions side by side.</p>
+              </details>
             </div>
 
             <div className="group" data-group="reservoir">
@@ -1254,6 +1256,7 @@ export default function Page() {
                   </>
                 )}
               </div>
+              <details className="notes"><summary>Notes and calculated properties</summary>
               <div className="bgprops" aria-label="Calculated in the background">
                 <b>Calculated in the background</b> (not inputs; updated at every pressure trial and in the shut-in solve)
                 {bgLive.error ? <p className="err">{bgLive.error}</p> : (
@@ -1266,6 +1269,7 @@ export default function Page() {
                 )}
               </div>
               <p className="hint">The zone diffusivities are calculated by the program (D = m / c* for each zone, from the zone mobilities and compressibilities); they are reported in all_calculations.csv and source_states.csv.{modelL === "two" ? " The relative-permeability inputs also give the CO₂ saturation map." : ""}{multiL ? " The well radius is entered for each well in the table below." : ""}</p>
+              </details>
             </div>
 
             {!multiL && (
@@ -1276,7 +1280,7 @@ export default function Page() {
                   <NumField label="Skin factor" value={singleL.skin} onChange={(v) => setSingle((s) => ({ ...s, skin: v }))} step={0.5} />
                   <NumField label="Number of injection years" unit="whole years" value={singleL.years} onChange={(v) => setSingle((s) => ({ ...s, years: v }))} step={1} min={1} />
                 </div>
-                <p className="hint">The program&apos;s single-well calculation: one well at the centre of the maps (x = y = 0) injecting at a constant rate from year 0 for the given number of whole years. Rate in {modelL === "water" ? "STB/day of water (Bw = 1.0 rb/STB)" : "Mscf/day of CO₂ (150 means 150,000 scf/day)"}. Monitoring points are placed relative to the well.</p>
+                <details className="notes"><summary>Notes</summary><p className="hint">The program&apos;s single-well calculation: one well at the centre of the maps (x = y = 0) injecting at a constant rate from year 0 for the given number of whole years. Rate in {modelL === "water" ? "STB/day of water (Bw = 1.0 rb/STB)" : "Mscf/day of CO₂ (150 means 150,000 scf/day)"}. Monitoring points are placed relative to the well.</p></details>
               </div>
             )}
 
@@ -1348,12 +1352,6 @@ export default function Page() {
                   <label className="field" style={{ marginTop: 8 }}><span>Pairwise distances ({dUL.label}; numeric CSV, one row per well, zero diagonal)</span>
                     <textarea aria-label="Pairwise distances" rows={Math.min(8, rawWells.length + 1)} className="mono" placeholder={"0, 1000, 1500\n1000, 0, 1200\n1500, 1200, 0"} value={geomL.matrix} onChange={(e) => setGeom((g) => ({ ...g, matrix: e.target.value }))} />
                   </label>
-                )}
-                {isGeo && (
-                  <p className="hint">
-                    Enter WGS84 decimal degrees (east and north positive). Calculations use a local projection centred on the centroid of your locations
-                    {origin ? ` (${origin.lat.toFixed(4)}°, ${origin.lon.toFixed(4)}°)` : ""}, and the pressure map is labelled in longitude and latitude.
-                  </p>
                 )}
                 <input ref={fileRef} type="file" accept=".csv,.txt,.tsv" hidden onChange={(e) => onImport(e.target.files?.[0])} />
                 {csvError && <p className="err">{csvError}</p>}
@@ -1448,12 +1446,20 @@ export default function Page() {
                     </div>
                   </details>
                 )}
+                <details className="notes"><summary>Notes</summary>
+                {isGeo && (
+                  <p className="hint">
+                    Enter WGS84 decimal degrees (east and north positive). Calculations use a local projection centred on the centroid of your locations
+                    {origin ? ` (${origin.lat.toFixed(4)}°, ${origin.lon.toFixed(4)}°)` : ""}, and the pressure map is labelled in longitude and latitude.
+                  </p>
+                )}
                 <p className="hint">
                   As in the program&apos;s multiwell form: constant spacing applies to neighbouring wells (all separations, including grid diagonals, follow from the layout); adjacent distances place the wells along a straight line; a pairwise matrix must describe a realizable horizontal 2-D layout; custom coordinates are entered in the table.
                   Each well has its own rate ({modelL === "water" ? "STB/day of water" : "Mscf/day of CO₂"}; 0 = observation well), start year and skin, and a radius (Well radius: the same value for all wells, or Different for each well to give each its own in the table){modelL === "two" ? ", and its evaporation choice (inherit = the setting above)" : ""}. Max BHP: this well&apos;s own allowable BHP; blank uses the shared pressure limit.
                   {modelL === "two" ? " Two-phase wells inject one constant rate from their start year (the program does not accept rate changes for moving fronts)." : " ＋ adds a rate change (a new rate from a later year; rate 0 stops the well)."} Start and End: the years each well starts and stops injecting.{modelL === "two" ? " A two-phase well that stops before the last one follows the program's fixed-zone falloff from its end year while the others continue (the program itself stops all wells together; with equal end years the results are exactly the program's)." : " A single-phase well's end year is a rate change to 0, as in the program's rate schedule."}
                   CSV import: name, x_m, y_m <i>or</i> lon_deg, lat_deg, rate, start_yr, end_yr, skin (optional), changes (optional, e.g. 8:100|15:50).
                 </p>
+                </details>
               </div>
             )}
 
@@ -1476,12 +1482,14 @@ export default function Page() {
                 )}
                 {uf("pressure", { label: "Interference threshold", value: thresholdL, onChange: setThreshold })}
               </div>
+              <details className="notes"><summary>Notes</summary>
               <p className="hint">
                 {limL.allowableMPa !== null
                   ? <>Allowable BHP <b>{(limL.allowableMPa / pUL.f).toFixed(fx)} {units.pressure}</b> (initial pressure {(limL.initialMPa / pUL.f).toFixed(fx)} {units.pressure}, so the allowable buildup is {(limL.maxBuildupMPa / pUL.f).toFixed(pDec)} {units.pressure}). </>
                   : <>No limit: every well is reported as NOT ASSESSED. </>}
                 FAIL means the required BHP exceeds the selected limit at a computed time. Rates are not automatically reduced. This is an operating-pressure check, not a prediction of mechanical well integrity. The fraction is your choice (0.9 by default), not a regulatory rule. The interference threshold is not a limit: it only sets the detection contour and the arrival times.
               </p>
+              </details>
             </div>
 
             <div className="group" data-group="shutin">
@@ -1499,10 +1507,12 @@ export default function Page() {
                   </label>
                 </div>
               )}
+              <details className="notes"><summary>Notes</summary>
               <p className="hint">{observeL === "yes"
                 ? `${multiL ? "Observation starts when the last well stops (the latest End year)" : "The well stops after its injection years"} and the pressure is followed for this many years (zero rate, zones frozen at shut-in, as in the program). Report years are comma-separated years after shut-in; year 0 is the instant injection stops; leave blank for every whole year and the end.`
                 : "No observation: the results stop when injection stops."}
                 {" "}Results run from year 0 to {num(horizonL)} yr.</p>
+              </details>
             </div>
 
             <div className="group" data-group="points">
@@ -1540,7 +1550,7 @@ export default function Page() {
                 <label className="field"><span>Project name</span><input value={project} onChange={(e) => setProject(e.target.value)} placeholder="optional" /></label>
                 <label className="field"><span>Author</span><input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="optional" /></label>
               </div>
-              <p className="hint">Printed on the PDF / Word report.</p>
+              <details className="notes"><summary>Notes</summary><p className="hint">Printed on the PDF / Word report.</p></details>
             </div>
           </section>
         </aside>

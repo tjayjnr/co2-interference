@@ -247,3 +247,11 @@ td.calc { display: table-cell; white-space: nowrap; min-width: 54px; }
 .bgprops ul { margin: 4px 0 0; padding-left: 18px; }
 .bgprops li { margin: 2px 0; }
 .bgprops small { color: var(--muted, #667); }
+
+details.notes { margin-top: 10px; border-top: 1px solid var(--line, #dbe3e8); padding-top: 6px; }
+details.notes > summary { cursor: pointer; font-size: 12.5px; font-weight: 600; color: var(--muted, #667); list-style: none; display: inline-block; padding: 3px 10px; border: 1px solid var(--line, #c8d3da); border-radius: 6px 6px 0 0; user-select: none; }
+details.notes > summary::-webkit-details-marker { display: none; }
+details.notes > summary::before { content: "▸ "; }
+details.notes[open] > summary::before { content: "▾ "; }
+details.notes[open] > summary { color: inherit; }
+details.notes .bgprops { margin-top: 6px; }

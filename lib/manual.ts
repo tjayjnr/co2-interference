@@ -41,7 +41,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   p("The page opens with a worked example (four wells 1000 ft apart in a straight line and one monitoring point), so you can try the application immediately.");
   b.push({ t: "bullets", items: [
     "Step 1. Choose the Well system at the top of the Input panel: Single well or Multiwell interference.",
-    "Step 2. Check the values in the Input panel. Change anything you like; each number has its own unit selector beside it.",
+    "Step 2. Check the values in the Input panel. Change anything you like; each number has its own unit selector beside it. The explanations for each input section are in the Notes tab at the bottom of that section (click it to open).",
     "Step 3. Single well: enter the rate, skin and number of injection years. Multiwell: set the Number of wells and how the distances are given (constant spacing in a line or grid, adjacent distances, a pairwise distance matrix or x/y coordinates), then each well's rate, start and end year, radius, skin, evaporation choice and own maximum BHP in the table.",
     "Step 4. Press ▶ RUN analysis (button at the top of the left panel, or the link in the “No results yet” message). Nothing is calculated until you do this.",
     "Step 5. Read the status cards: with the example data (two-phase model, 30 years) the peak BHP is 3582.45 psia at Well 2 and Well 3 against an allowable BHP of 4680 psia (0.9 × 5200 psia), so the status is PASS.",
@@ -108,7 +108,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Fracture pressure, Allowable fraction", "Allowable BHP = fraction × fracture pressure (absolute).", "5200 psia, 0.9 (4680 psia)"],
     ["Interference threshold", "Detection level for the map contour, the arrival times and the monitoring points; not a pass/fail limit.", "1 psi"],
   ]);
-  p("Four properties are not inputs: the program calculates them in the background at every pressure trial, at each well's own bottom-hole pressure, and again in every cell of the shut-in solve. The box \"Calculated in the background\" under the fluid inputs shows their values at the initial pressure, and the result tables and CSV files report them at every time.");
+  p("Four properties are not inputs: the program calculates them in the background at every pressure trial, at each well's own bottom-hole pressure, and again in every cell of the shut-in solve. The \"Notes and calculated properties\" tab at the bottom of Reservoir and fluids shows their values at the initial pressure, and the result tables and CSV files report them at every time.");
   table("Table 2c. Properties calculated in the background (not inputs).", ["Property", "How it is calculated", "Used by"], [
     ["CO₂ viscosity", "Fenghour, Wakeham and Vesovic (1998) correlation from the reservoir temperature and the live Peng–Robinson CO₂ density at the pressure (no near-critical enhancement; near-critical states are rejected).", "Two-phase, CO₂"],
     ["Salinity (NaCl equivalent)", "Positive root of the McCain standard-density relation ρ_sc = 62.368 + 0.438603 S + 0.00160074 S² (S in weight percent), from the brine density at 60 °F and 14.696 psia. Salt mass and mole fractions do not change with pressure; the salt concentration in kg/m³ does.", "Two-phase, water"],
