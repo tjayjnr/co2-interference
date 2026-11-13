@@ -177,7 +177,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   bullets(
     "Press ▶ RUN analysis. The inputs at that moment are used for all results, tables, figures and reports.",
     "If you change any input afterwards, the status text next to the button and a yellow banner above the results say that the inputs have changed; press RUN again to refresh.",
-    "The Evaluation time slider, the Pressure unit selector, Map area, Map padding and the tabs do not require a new RUN, because they only change what is displayed. The ▶ Play button beside the Evaluation time slider plays the time forward to the end of the results so the maps and charts animate (the CO₂ plumes grow and the pressure spreads); press ❚❚ to pause, or move the slider to stop and pick a time. Pressing Play at the end starts again from the beginning.",
+    "The Evaluation time slider, the Pressure unit selector, Map area, Map padding and the tabs do not require a new RUN, because they only change what is displayed. The Evaluation time slider is shown on the CO₂ saturation and Pressure map tabs only; the Interference matrix uses the time last chosen there. The ▶ Play button beside it plays the time forward to the end of the results so the maps and charts animate (the CO₂ plumes grow and the pressure spreads); press ❚❚ to pause, or move the slider to stop and pick a time. Pressing Play at the end starts again from the beginning.",
     "Warnings appear above the results when something is inconsistent, for example a well that lies on the boundary, wells on both sides of the boundary, two wells at the same location, a well whose end year is not after its start year, or a pressure limit that is below the initial pressure.",
   );
 

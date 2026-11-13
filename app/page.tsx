@@ -805,7 +805,7 @@ export default function Page() {
   /* eslint-disable react-hooks/exhaustive-deps */
   const specSat = useMemo(() => (gridSat ? satSpec(gridSat) : null), [gridSat, wells, points, geo, dU, tNow]);
   const specMap = useMemo(() => (grid ? mapSpec(grid) : null), [grid, wells, points, boundary, threshold, lim, pU, dU, mapStyle, tNow, field, extentP]);
-  const specSeries = useMemo(() => lineSpec(mode, seriesNow, true), [seriesNow, mode, lim, pU, tNow]);
+  const specSeries = useMemo(() => lineSpec(mode, seriesNow, false), [seriesNow, mode, lim, pU]);
   const specStack = useMemo(stackSpec, [fieldDrivers, pU]);
   const specCompare = useMemo(() => (wells.length && cases.length ? compareSpec(cmpIdx, cases) : null), [cases, cmpIdx, lim, pU, times]);
   // BHP of the selected well with interference, and the same well alone (exactly the program for one well)
@@ -1693,11 +1693,12 @@ export default function Page() {
 
               <nav className="tabs" role="tablist">
                 {tabs.map(([v, l]) => (
-                  <button key={v} role="tab" aria-selected={viewEff === v} className={viewEff === v ? "on" : ""} onClick={() => setView(v)}>{l}</button>
+                  <button key={v} role="tab" aria-selected={viewEff === v} className={viewEff === v ? "on" : ""} onClick={() => { setView(v); setPlaying(false); }}>{l}</button>
                 ))}
               </nav>
 
               <div className="controls">
+                {(viewEff === "map" || viewEff === "sat") && (
                 <div className="field slider timeplay">
                   <span>Evaluation time <em>{tNow.toFixed(1)} yr</em></span>
                   <div className="playrow">
@@ -1710,6 +1711,7 @@ export default function Page() {
                     <input type="range" aria-label="Evaluation time" min={0.1} max={horizon} step={0.1} value={tNow} onChange={(e) => { setPlaying(false); setTEval(+e.target.value); }} />
                   </div>
                 </div>
+                )}
                 <label className="field"><span>Pressure unit</span>
                   <select value={units.pressure} onChange={(e) => setUnit("pressure")(e.target.value)}>
                     {UNITS.pressure.map((u) => <option key={u.label} value={u.label}>{u.label}</option>)}
