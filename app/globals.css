@@ -411,3 +411,14 @@ h2 { letter-spacing: .08em; }
 .welcome-steps { list-style: none; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; padding: 0; margin: 28px 0 0; }
 .welcome-steps li { display: flex; align-items: center; gap: 8px; padding: 7px 14px 7px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-size: 13.5px; color: var(--text); box-shadow: 0 1px 2px rgba(16, 24, 40, .05); }
 .welcome-steps span { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font-weight: 700; font-size: 12px; }
+
+/* ---- CO2-SATriPi wordmark ---- */
+.brand { gap: 16px; }
+.brand .mark { width: 46px; height: 46px; filter: drop-shadow(0 0 10px rgba(127, 227, 214, .45)); }
+.top h1.wordmark { display: flex; align-items: baseline; font-size: 34px; font-weight: 800; line-height: 1; letter-spacing: .01em; margin: 0; padding-bottom: 8px; position: relative; }
+.top h1.wordmark::after { content: ""; position: absolute; left: 0; bottom: 0; width: 100%; height: 3px; border-radius: 3px; background: linear-gradient(90deg, #7fe3d6, #5aa9ff 55%, transparent); }
+.wm-co2 { background: linear-gradient(135deg, #a7f3e6 0%, #5ad1c4 45%, #5aa9ff 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.wm-co2 sub { font-size: .52em; vertical-align: baseline; position: relative; top: .28em; margin-left: 1px; }
+.wm-dash { color: rgba(255, 255, 255, .55); margin: 0 3px; font-weight: 400; }
+.wm-name { color: #fff; letter-spacing: .04em; text-shadow: 0 2px 12px rgba(0, 0, 0, .25); }
+@media (max-width: 640px) { .top h1.wordmark { font-size: 26px; } .brand .mark { width: 36px; height: 36px; } }

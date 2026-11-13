@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "CO2 Interference Analyzer",
+  title: "CO₂-SATriPi",
   description: "Pressure interference and CO2 saturation analysis for multi-well CO2 injection into a saline aquifer",
 };
 

@@ -488,7 +488,7 @@ export async function renderDocx(blocks: Block[], runningTitle: string): Promise
   }
 
   const doc = new Document({
-    creator: "CO2 Interference Analyzer",
+    creator: "CO2-SATriPi",
     title: runningTitle,
     styles: { default: { document: { run: { font: FONT, size: 22 } } } },
     sections: [{
