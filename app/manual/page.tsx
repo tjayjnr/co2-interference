@@ -5,7 +5,7 @@ import { manualBlocks, SITE_URL } from "@/lib/manual";
 import type { Block } from "@/lib/report";
 
 export const metadata: Metadata = {
-  title: "User manual | CO₂-SATriPi Tool",
+  title: "User manual | CO₂-SATriPI Tool",
   description: "How to use the CO2 injection pressure interference and saturation analyzer",
 };
 

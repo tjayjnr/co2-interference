@@ -412,7 +412,7 @@ h2 { letter-spacing: .08em; }
 .welcome-steps li { display: flex; align-items: center; gap: 8px; padding: 7px 14px 7px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-size: 13.5px; color: var(--text); box-shadow: 0 1px 2px rgba(16, 24, 40, .05); }
 .welcome-steps span { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font-weight: 700; font-size: 12px; }
 
-/* ---- CO2-SATriPi wordmark ---- */
+/* ---- CO2-SATriPI wordmark ---- */
 .brand { gap: 16px; }
 .brand .mark { width: 46px; height: 46px; filter: drop-shadow(0 0 10px rgba(127, 227, 214, .45)); }
 .top h1.wordmark { display: flex; align-items: baseline; font-size: 34px; font-weight: 800; line-height: 1; letter-spacing: .01em; margin: 0; padding-bottom: 8px; position: relative; }

@@ -1145,7 +1145,7 @@ export default function Page() {
             <circle cx="20" cy="20" r="11" fill="none" stroke="currentColor" strokeOpacity=".6" strokeWidth="2" />
             <circle cx="20" cy="20" r="5" fill="currentColor" />
           </svg>
-          <div className="wm-track"><h1 className="wordmark" aria-label="CO₂-SATriPi Tool"><span className="wm-co2">CO<sub>2</sub></span><span className="wm-dash">-</span><span className="wm-name">SATriPi</span><span className="wm-tool">Tool</span></h1></div>
+          <div className="wm-track"><h1 className="wordmark" aria-label="CO₂-SATriPI Tool"><span className="wm-co2">CO<sub>2</sub></span><span className="wm-dash">-</span><span className="wm-name">SATriPI</span><span className="wm-tool">Tool</span></h1></div>
         </div>
         <div className="hdrbtns">
           <a className="toplink" href="/manual" target="_blank" rel="noopener noreferrer">User manual</a>

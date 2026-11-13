@@ -1,6 +1,6 @@
 @AGENTS.md
 
-# CO₂-SATriPi Tool (CO₂ injection pressure interference and saturation)
+# CO₂-SATriPI Tool (CO₂ injection pressure interference and saturation)
 
 Web app (Next.js 16, React 19, TypeScript, no UI library) for screening-level analysis of several injection wells in a
 saline aquifer. The user chooses the Well system: Single well (the program's single-well calculation) or Multiwell
