@@ -651,7 +651,7 @@ export default function Page() {
   }, [wells, points, padEff, mapArea]);
 
   const grid = useMemo(
-    () => (applied && wells.length ? field.grid(null, tNow, extent) : null),
+    () => (applied && wells.length ? field.grid(null, tNow, extent, 180, 180) : null),
     [applied, wells, tNow, field, extent],
   );
 
@@ -897,7 +897,7 @@ export default function Page() {
       const cases = computeCases();
       const figures = {
         sat: two ? await fig(satSpec(satGrid(wells, vols, satGeom, satModel, extent))) : undefined,
-        map: await fig(mapSpec(field.grid(null, tNow, extent))),
+        map: await fig(mapSpec(field.grid(null, tNow, extent, 180, 180))),
         bhp: await fig(lineSpec("bhp", buildSeries("bhp"), false)),
         compare: await fig(compareSpec(worst, cases)),
         drivers: await fig(stackSpec()),

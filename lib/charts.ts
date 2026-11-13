@@ -303,7 +303,7 @@ export interface MapStyle {
 const imgCache = new WeakMap<GridResult, Map<string, string>>();
 
 /** Heat-map image; `bounds` (ascending, same units as the grid values) turn it into discrete colour classes. */
-function heatmapDataUrl(g: GridResult, stops: Stops, key: string, bounds?: number[]): string {
+function heatmapDataUrl(g: GridResult, stops: Stops, key: string, bounds?: number[], lo = 0): string {
   let m = imgCache.get(g);
   if (!m) { m = new Map(); imgCache.set(g, m); }
   const hit = m.get(key);
@@ -318,7 +318,7 @@ function heatmapDataUrl(g: GridResult, stops: Stops, key: string, bounds?: numbe
       const v = g.values[j * g.nx + i];
       const o = ((g.ny - 1 - j) * g.nx + i) * 4;
       if (Number.isNaN(v)) { img.data.set([200, 200, 200, 90], o); continue; }
-      let u = g.max > 0 ? v / g.max : 0;
+      let u = g.max > lo ? (v - lo) / (g.max - lo) : 0;
       if (bounds && bounds.length > 1) {
         let k = 0;
         while (k < bounds.length - 2 && v >= bounds[k + 1]) k++;
@@ -334,12 +334,12 @@ function heatmapDataUrl(g: GridResult, stops: Stops, key: string, bounds?: numbe
   return url;
 }
 
-/** 0, nice steps ..., top: class boundaries for banded fills. */
-function niceBounds(top: number, n: number): number[] {
-  const ts = ticks(0, top, n);
-  const out = ts.filter((v) => v < top * 0.9999);
-  if (out[0] !== 0) out.unshift(0);
-  const step = ts.length > 1 ? ts[1] - ts[0] : top;
+/** lo, nice steps ..., top: class boundaries for banded fills. */
+function niceBounds(top: number, n: number, lo = 0): number[] {
+  const ts = ticks(lo, top, n);
+  const out = ts.filter((v) => v < top * 0.9999 && v >= lo);
+  if (out[0] !== lo) out.unshift(lo);
+  const step = ts.length > 1 ? ts[1] - ts[0] : top - lo;
   if (out.length > 1 && top - out[out.length - 1] < 0.25 * step) out.pop(); // last class absorbs a sliver at the top
   out.push(top);
   return out;
@@ -369,8 +369,25 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   const stops = st.reverse ? [...COLORMAPS[cmapName]].reverse() : COLORMAPS[cmapName];
   const fill = st.fill ?? "smooth";
   const top = g.max / o.pf; // top of the scale in display units
-  const bounds = fill === "bands" ? niceBounds(top, st.bands ?? 10).map((v) => v * o.pf) : undefined;
-  const png = fill === "none" ? "" : heatmapDataUrl(g, stops, `${cmapName}|${st.reverse ? 1 : 0}|${fill}|${bounds ? bounds.join(",") : ""}`, bounds);
+  // Pressure maps: the colour scale starts at the lowest buildup on the map (rounded down to a nice value), not at 0,
+  // so the pressure rising towards each well stands out. Saturation maps keep 0.
+  let loD = 0;
+  if (o.palette !== "sat") {
+    let gmin = Infinity;
+    for (const v of g.values) if (!Number.isNaN(v) && v < gmin) gmin = v;
+    const minD = gmin / o.pf;
+    if (Number.isFinite(minD) && minD > 0 && top > minD) {
+      const tk = ticks(minD, top, 10);
+      const stepT = tk.length > 1 ? tk[1] - tk[0] : top - minD;
+      loD = Math.max(0, Math.floor(minD / stepT + 1e-9) * stepT);
+      if (loD >= top) loD = 0;
+    }
+  }
+  const lo = loD * o.pf;
+  const norm = (v: number) => (g.max > lo ? (v - lo) / (g.max - lo) : 0); // v in model units
+  const normD = (v: number) => (top > loD ? (v - loD) / (top - loD) : 0); // v in display units
+  const bounds = fill === "bands" ? niceBounds(top, st.bands ?? 10, loD).map((v) => v * o.pf) : undefined;
+  const png = fill === "none" ? "" : heatmapDataUrl(g, stops, `${cmapName}|${st.reverse ? 1 : 0}|${fill}|${bounds ? bounds.join(",") : ""}|${lo}`, bounds, lo);
   const id = `clip${++uid}`;
   let s = tb.svg + clipDef(id, plot) + `<g clip-path="url(#${id})">`;
   const ix = px(g.x0), iy = py(g.y1);
@@ -432,7 +449,7 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
         const lines = segs.map((q) => `<line x1="${f1(ggx(q[0]))}" y1="${f1(ggy(q[1]))}" x2="${f1(ggx(q[2]))}" y2="${f1(ggy(q[3]))}"/>`).join("");
         // no fill: a classic contour plot with every line coloured by its value; otherwise dark lines over the fill
         s += fill === "none"
-          ? `<g style="stroke:${rgbAt(g.max > 0 ? (v * o.pf) / g.max : 0)};stroke-width:2.2;stroke-linecap:round">${lines}</g>`
+          ? `<g style="stroke:${rgbAt(norm(v * o.pf))};stroke-width:2.2;stroke-linecap:round">${lines}</g>`
           : `<g style="stroke:#fff;stroke-width:2.6;stroke-opacity:0.55">${lines}</g><g style="stroke:#161616;stroke-width:1;stroke-opacity:0.9">${lines}</g>`;
         if (st.contourLabels) {
           // each well gets its labels at its own angles (shifting with the level) so labels of different wells do not collide
@@ -577,7 +594,7 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
       // discrete classes
       const n = bounds.length - 1;
       for (let k = 0; k < n; k++) {
-        const y0 = ly + cbH * (1 - bounds[k + 1] / g.max), y1 = ly + cbH * (1 - bounds[k] / g.max);
+        const y0 = ly + cbH * (1 - norm(bounds[k + 1])), y1 = ly + cbH * (1 - norm(bounds[k]));
         const [r, gg, bb] = ramp((k + 0.5) / n, stops);
         s += `<rect x="${lx}" y="${f1(y0)}" width="16" height="${f1(y1 - y0 + 0.5)}" style="fill:rgb(${Math.round(r)},${Math.round(gg)},${Math.round(bb)})"/>`;
       }
@@ -585,22 +602,22 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
       barTicks = bounds.map((v) => v / o.pf);
     } else {
       s += `<rect x="${lx}" y="${ly}" width="16" height="${cbH}" fill="url(#cb${id})" style="stroke:${p.frame}"/>`;
-      barTicks = ticks(0, top, 10).filter((v) => v <= top * 1.0001);
+      barTicks = ticks(loD, top, 10).filter((v) => v <= top * 1.0001 && v >= loD - 1e-9);
     }
     const withContours = contourLevels.length > 0;
-    if (withContours) barTicks = [0, ...contourLevels, top]; // the legend follows the contour levels
+    if (withContours) barTicks = [loD, ...contourLevels.filter((v) => v > loD), top]; // the legend follows the contour levels
     const stepV = withContours ? contourStep || 1 : barTicks.length > 1 ? Math.min(...barTicks.slice(1).map((v, i) => v - barTicks[i]).filter((x) => x > 0)) : 1;
     const tickDec = Math.max(withContours ? 0 : o.tickDec ?? o.pDec, Math.ceil(-Math.log10(stepV) - 1e-9), 0);
-    const levelY = contourLevels.map((v) => ly + cbH * (1 - v / top));
+    const levelY = contourLevels.map((v) => ly + cbH * (1 - normD(v)));
     for (const v of barTicks) {
-      const yy = ly + cbH * (1 - v / top);
+      const yy = ly + cbH * (1 - normD(v));
       const isLevel = withContours && contourLevels.includes(v);
       if (withContours && !isLevel && levelY.some((ty) => Math.abs(ty - yy) < 13)) continue; // end labels yield to nearby contour labels
       if (isLevel) s += `<line x1="${lx}" x2="${lx + 16}" y1="${f1(yy)}" y2="${f1(yy)}" style="stroke:#161616;stroke-width:1"/>`;
       s += `<line x1="${lx + 16}" x2="${lx + 21}" y1="${f1(yy)}" y2="${f1(yy)}" style="stroke:${p.frame}"/>`;
       s += `<text x="${lx + 25}" y="${f1(yy + 4)}" style="${FONT};font-size:13px;${isLevel ? "font-weight:700;" : ""}fill:${isLevel || !withContours ? p.text : p.muted}">${v.toFixed(isLevel || !withContours ? tickDec : Math.max(tickDec, 2))}</text>`;
     }
-    const lastY = ly + cbH * (1 - barTicks[barTicks.length - 1] / top);
+    const lastY = ly + cbH * (1 - normD(barTicks[barTicks.length - 1]));
     if (!withContours && lastY - ly > 14) s += `<text x="${lx + 25}" y="${ly + 4}" style="${FONT};font-size:11px;font-weight:700;fill:${p.text}">max ${top.toFixed(Math.max(tickDec, 2))}</text>`;
     ly += cbH + 28;
   } else {
