@@ -1196,33 +1196,29 @@ export default function Page() {
 
             <div className="group" data-group="model" hidden={inTab !== "model"}>
               <h3>Pressure model and boundary</h3>
-              <div className="subhd">Phase / fluid</div>
-              <div className="choice3" role="radiogroup" aria-label="Phase / fluid">
-                {([["two", "Two-phase", "CO₂–brine", "two"], ["co2", "Single-phase", "CO₂", "co2"], ["water", "Single-phase", "Water", "water"]] as [ModelKind, string, string, string][]).map(([k, top, name, ic]) => (
-                  <label key={k} className={`choice ${modelL === k ? "on" : ""}`}>
-                    <input type="radio" name="model" checked={modelL === k} onChange={() => setModel(k)} />
-                    <i className={`ic ic-${ic}`} aria-hidden="true" />
-                    <small>{top}</small>
-                    <b>{name}</b>
+              <div className="grid1">
+                <label className="field"><span>Phase / fluid</span>
+                  <select aria-label="Phase / fluid" value={modelL} onChange={(e) => setModel(e.target.value as ModelKind)}>
+                    <option value="two">Two-phase CO₂–brine (three-zone model)</option>
+                    <option value="co2">Single-phase CO₂</option>
+                    <option value="water">Single-phase water</option>
+                  </select>
+                </label>
+                {modelL === "two" && (
+                  <label className="field"><span>Evaporation</span>
+                    <select aria-label="Include evaporation" value={flL.evaporation ? "yes" : "no"} onChange={(e) => setFl((f) => ({ ...f, evaporation: e.target.value === "yes" }))}>
+                      <option value="yes">Yes (dry zone next to the well)</option>
+                      <option value="no">No (r_d = r_w, no dry zone)</option>
+                    </select>
                   </label>
-                ))}
-              </div>
-              {modelL === "two" && (
-                <>
-                  <div className="subhd">Evaporation (dry zone next to the well)</div>
-                  <div className="seg" role="radiogroup" aria-label="Include evaporation">
-                    <label className={flL.evaporation ? "on" : ""}><input type="radio" name="evap" checked={flL.evaporation} onChange={() => setFl((f) => ({ ...f, evaporation: true }))} />Yes</label>
-                    <label className={!flL.evaporation ? "on" : ""}><input type="radio" name="evap" checked={!flL.evaporation} onChange={() => setFl((f) => ({ ...f, evaporation: false }))} />No (r<sub>d</sub> = r<sub>w</sub>)</label>
-                  </div>
-                </>
-              )}
-              <div className="subhd">Boundary</div>
-              <div className="seg" role="radiogroup" aria-label="Boundary type">
-                {([["none", "Infinite"], ["noflow", "Sealing fault"], ["constant", "Constant pressure"]] as [Boundary["type"], string][]).map(([k, l]) => (
-                  <label key={k} className={boundaryL.type === k ? "on" : ""}>
-                    <input type="radio" name="boundary" checked={boundaryL.type === k} onChange={() => setBoundary({ ...boundaryL, type: k })} />{l}
-                  </label>
-                ))}
+                )}
+                <label className="field"><span>Boundary</span>
+                  <select aria-label="Boundary type" value={boundaryL.type} onChange={(e) => setBoundary({ ...boundaryL, type: e.target.value as Boundary["type"] })}>
+                    <option value="none">Infinite</option>
+                    <option value="noflow">Sealing fault (no-flow)</option>
+                    <option value="constant">Constant pressure</option>
+                  </select>
+                </label>
               </div>
               {boundaryL.type !== "none" && (
                 <div className="grid2" style={{ marginTop: 12 }}>

@@ -391,3 +391,4 @@ h2 { letter-spacing: .08em; }
 @media (max-width: 460px) { .choice3 { grid-template-columns: 1fr; } .choice { flex-direction: row; gap: 10px; justify-content: flex-start; padding: 10px 12px; } .ic { margin: 0; } .seg label { white-space: normal; font-size: 13px; } }
 .seg label, .sysbtn { position: relative; }
 .seg input, .choice input, .sysbtn input { width: 1px; height: 1px; padding: 0; margin: 0; left: 50%; top: 50%; }
+.grid1 { display: grid; grid-template-columns: 1fr; gap: 12px; }
