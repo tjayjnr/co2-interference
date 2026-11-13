@@ -521,3 +521,13 @@ h2 { letter-spacing: .08em; }
 .logo-text { flex-direction: row; align-items: baseline; gap: 6px; }
 .logo-text span { margin-top: 0; font-size: 17px; font-weight: 400; font-style: italic; letter-spacing: .04em; text-transform: none; color: #7fe3d6; }
 @media (max-width: 640px) { .logo-text span { font-size: 16px; } }
+
+/* ---- play button beside the evaluation-time slider ---- */
+.timeplay .playrow { display: flex; align-items: center; gap: 10px; }
+.timeplay .playrow input[type=range] { flex: 1; }
+.playbtn { flex: 0 0 auto; width: 36px; height: 36px; padding: 0; border-radius: 50%; display: grid; place-items: center; background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 3px 10px color-mix(in srgb, var(--accent) 35%, transparent); transition: transform .12s, box-shadow .12s; }
+.playbtn svg { width: 16px; height: 16px; fill: #fff; }
+.playbtn:hover { transform: scale(1.06); box-shadow: 0 5px 14px color-mix(in srgb, var(--accent) 45%, transparent); }
+.playbtn.on { animation: playpulse 1.6s ease-in-out infinite; }
+@keyframes playpulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); } 50% { box-shadow: 0 0 0 6px transparent; } }
+@media (prefers-reduced-motion: reduce) { .playbtn.on { animation: none; } }

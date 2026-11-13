@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import ChartView from "@/components/ChartView";
 import NumField from "@/components/NumField";
 import { COLORMAP_LABELS, render, type ChartSpec, type MapStyle, type Series } from "@/lib/charts";
@@ -407,6 +407,21 @@ export default function Page() {
   /* eslint-enable react-hooks/exhaustive-deps */
   const lim = useMemo(() => limits({ initialMPa: res.initialMPa, ...cur.limit }), [res.initialMPa, cur.limit]);
   const tNow = Math.min(tEval, horizon);
+  // Play: step the evaluation time from its current value to the end of the results. The next step is scheduled
+  // only after the previous frame has been drawn, so slow maps simply play more slowly instead of piling up.
+  const [playing, setPlaying] = useState(false);
+  const playStep = Math.max(0.1, Math.round((horizon / 50) * 10) / 10);
+  useEffect(() => {
+    if (!playing) return;
+    if (tNow >= horizon - 1e-9) { setPlaying(false); return; }
+    const id = window.setTimeout(() => setTEval(Math.min(horizon, Math.round((tNow + playStep) * 10) / 10)), 60);
+    return () => window.clearTimeout(id);
+  }, [playing, tNow, horizon, playStep]);
+  const togglePlay = () => {
+    if (playing) { setPlaying(false); return; }
+    if (tNow >= horizon - 1e-9) setTEval(0.1); // at the end: start again from the beginning
+    setPlaying(true);
+  };
   const two = model === "two";
   const water = model === "water";
   const rateCat: Cat = water ? "waterrate" : "gasrate";
@@ -1683,9 +1698,18 @@ export default function Page() {
               </nav>
 
               <div className="controls">
-                <label className="field slider"><span>Evaluation time <em>{tNow.toFixed(1)} yr</em></span>
-                  <input type="range" min={0.1} max={horizon} step={0.1} value={tNow} onChange={(e) => setTEval(+e.target.value)} />
-                </label>
+                <div className="field slider timeplay">
+                  <span>Evaluation time <em>{tNow.toFixed(1)} yr</em></span>
+                  <div className="playrow">
+                    <button type="button" className={`playbtn ${playing ? "on" : ""}`} onClick={togglePlay}
+                      aria-label={playing ? "Pause the time animation" : "Play the time animation"} title={playing ? "Pause" : "Play through time"}>
+                      {playing
+                        ? <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="4.5" y="3.5" width="4" height="13" rx="1" /><rect x="11.5" y="3.5" width="4" height="13" rx="1" /></svg>
+                        : <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M6 3.6v12.8a.8.8 0 0 0 1.2.7l10.2-6.4a.8.8 0 0 0 0-1.4L7.2 2.9A.8.8 0 0 0 6 3.6z" /></svg>}
+                    </button>
+                    <input type="range" aria-label="Evaluation time" min={0.1} max={horizon} step={0.1} value={tNow} onChange={(e) => { setPlaying(false); setTEval(+e.target.value); }} />
+                  </div>
+                </div>
                 <label className="field"><span>Pressure unit</span>
                   <select value={units.pressure} onChange={(e) => setUnit("pressure")(e.target.value)}>
                     {UNITS.pressure.map((u) => <option key={u.label} value={u.label}>{u.label}</option>)}
