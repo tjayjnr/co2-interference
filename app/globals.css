@@ -468,7 +468,7 @@ h2 { letter-spacing: .08em; }
   body:has(.welcome) .top { flex: 0 0 auto; }
   body:has(.welcome) .layout { flex: 1 1 auto; min-height: 0; align-items: stretch; }
   body:has(.welcome) aside.panel { position: static; height: 100%; max-height: none; overflow-y: auto; }
-  body:has(.welcome) .results:has(.welcome) { min-height: 0; height: 100%; overflow: auto; }
+  body:has(.welcome) .results:has(.welcome) { min-height: 0; height: 100%; overflow: clip; }
   body:has(.welcome) .empty.welcome { padding: 24px 20px; }
 }
 @media (min-width: 1001px) and (max-height: 820px) {
@@ -476,4 +476,9 @@ h2 { letter-spacing: .08em; }
   body:has(.welcome) .top h1.wordmark { font-size: 36px; }
   body:has(.welcome) .welcome-art { width: 260px; margin-bottom: 6px; }
   body:has(.welcome) .welcome-steps { margin-top: 18px; }
+}
+@media (min-width: 1001px) and (max-height: 640px) {
+  body:has(.welcome) .welcome-art { width: 200px; }
+  body:has(.welcome) .welcome-text { margin-bottom: 12px; }
+  body:has(.welcome) .welcome-steps { margin-top: 12px; }
 }
