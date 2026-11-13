@@ -1140,11 +1140,28 @@ export default function Page() {
     <main className="app">
       <header className="top">
         <div className="brand">
-          <svg className="mark" viewBox="0 0 40 40" aria-hidden="true">
-            <circle cx="20" cy="20" r="17" fill="none" stroke="currentColor" strokeOpacity=".35" strokeWidth="2" />
-            <circle cx="20" cy="20" r="11" fill="none" stroke="currentColor" strokeOpacity=".6" strokeWidth="2" />
-            <circle cx="20" cy="20" r="5" fill="currentColor" />
-          </svg>
+          <div className="logo" aria-hidden="true">
+            <svg className="logo-badge" viewBox="0 0 64 64">
+              <defs>
+                <linearGradient id="lg-bg" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stopColor="#1f63c6" />
+                  <stop offset="100%" stopColor="#0f8b8d" />
+                </linearGradient>
+              </defs>
+              <rect x="1" y="1" width="62" height="62" rx="16" fill="url(#lg-bg)" />
+              <rect x="1" y="1" width="62" height="62" rx="16" fill="none" stroke="#fff" strokeOpacity=".35" strokeWidth="1.5" />
+              <ellipse cx="32" cy="44" rx="24" ry="7" fill="none" stroke="#a7f3e6" strokeOpacity=".45" strokeWidth="1.6" />
+              <ellipse cx="32" cy="44" rx="14" ry="4.2" fill="none" stroke="#a7f3e6" strokeOpacity=".8" strokeWidth="1.6" />
+              <line x1="32" y1="12" x2="32" y2="44" stroke="#fff" strokeWidth="3" strokeLinecap="round" />
+              <rect x="25" y="9" width="14" height="7" rx="2" fill="#fff" />
+              <circle cx="32" cy="44" r="3.2" fill="#7fe3d6" />
+              <text x="32" y="32" textAnchor="middle" fontSize="13" fontWeight="800" fill="#fff" fontFamily="Times New Roman, serif" stroke="#16457a" strokeWidth="3" paintOrder="stroke">CO₂</text>
+            </svg>
+            <div className="logo-text">
+              <b>CO<sub>2</sub>-SATriPI</b>
+              <span>Tool</span>
+            </div>
+          </div>
           <div className="wm-track"><h1 className="wordmark" aria-label="CO₂-SATriPI Tool"><span className="wm-co2">CO<sub>2</sub></span><span className="wm-dash">-</span><span className="wm-name">SATriPI</span><span className="wm-tool">Tool</span></h1></div>
         </div>
         <div className="hdrbtns">

@@ -507,3 +507,13 @@ h2 { letter-spacing: .08em; }
 @media (prefers-reduced-motion: reduce) { .welcome-arrow { animation: none; } }
 @media (min-width: 1001px) and (max-height: 820px) { body:has(.welcome) .welcome-title { font-size: 28px; } body:has(.welcome) .welcome-text { margin-bottom: 14px; } }
 @media (max-width: 1000px) { .welcome-arrow { transform: rotate(90deg); animation: none; } }
+
+/* ---- fixed logo with the tool name on the left of the header ---- */
+.logo { flex: 0 0 auto; display: flex; align-items: center; gap: 12px; padding-right: 18px; margin-right: 4px; border-right: 1px solid rgba(255, 255, 255, .2); position: relative; z-index: 2; }
+.logo-badge { width: 58px; height: 58px; filter: drop-shadow(0 4px 12px rgba(0, 0, 0, .3)); }
+.logo-text { display: flex; flex-direction: column; line-height: 1.1; }
+.logo-text b { font-size: 17px; font-weight: 800; color: #fff; letter-spacing: .02em; white-space: nowrap; }
+.logo-text b sub { font-size: .6em; vertical-align: baseline; position: relative; top: .25em; }
+.logo-text span { font-size: 11px; font-weight: 700; letter-spacing: .32em; text-transform: uppercase; color: #7fe3d6; margin-top: 3px; }
+@media (min-width: 1001px) and (max-height: 820px) { body:has(.welcome) .logo-badge { width: 48px; height: 48px; } }
+@media (max-width: 640px) { .brand { flex-wrap: wrap; row-gap: 10px; } .logo { border-right: 0; padding-right: 0; } .logo-badge { width: 44px; height: 44px; } .logo-text b { font-size: 16px; } .wm-track { flex: 1 1 100%; } }
