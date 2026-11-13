@@ -303,7 +303,7 @@ export interface MapStyle {
 const imgCache = new WeakMap<GridResult, Map<string, string>>();
 
 /** Heat-map image; `bounds` (ascending, same units as the grid values) turn it into discrete colour classes. */
-function heatmapDataUrl(g: GridResult, stops: Stops, key: string, bounds?: number[], lo = 0): string {
+function heatmapDataUrl(g: GridResult, stops: Stops, key: string, bounds?: number[], lo = 0, toU?: (v: number) => number): string {
   let m = imgCache.get(g);
   if (!m) { m = new Map(); imgCache.set(g, m); }
   const hit = m.get(key);
@@ -318,7 +318,7 @@ function heatmapDataUrl(g: GridResult, stops: Stops, key: string, bounds?: numbe
       const v = g.values[j * g.nx + i];
       const o = ((g.ny - 1 - j) * g.nx + i) * 4;
       if (Number.isNaN(v)) { img.data.set([200, 200, 200, 90], o); continue; }
-      let u = g.max > lo ? (v - lo) / (g.max - lo) : 0;
+      let u = toU ? toU(v) : g.max > lo ? (v - lo) / (g.max - lo) : 0;
       if (bounds && bounds.length > 1) {
         let k = 0;
         while (k < bounds.length - 2 && v >= bounds[k + 1]) k++;
@@ -384,10 +384,15 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
     }
   }
   const lo = loD * o.pf;
-  const norm = (v: number) => (g.max > lo ? (v - lo) / (g.max - lo) : 0); // v in model units
-  const normD = (v: number) => (top > loD ? (v - loD) / (top - loD) : 0); // v in display units
+  // Pressure maps: a power stretch (u^1.7 of the lo..max range) keeps the broad background light and gives the darkest
+  // colours to the pressures near the wells, so every well shows as its own peak, highest at the well and fading
+  // outward. The colour bar keeps the true values at their positions.
+  const GAMMA = o.palette === "sat" ? 1 : 1.7;
+  const lin = (v: number) => (g.max > lo ? Math.min(1, Math.max(0, (v - lo) / (g.max - lo))) : 0);
+  const norm = (v: number) => lin(v) ** GAMMA; // v in model units
+  const normD = (v: number) => norm(v * o.pf); // v in display units
   const bounds = fill === "bands" ? niceBounds(top, st.bands ?? 10, loD).map((v) => v * o.pf) : undefined;
-  const png = fill === "none" ? "" : heatmapDataUrl(g, stops, `${cmapName}|${st.reverse ? 1 : 0}|${fill}|${bounds ? bounds.join(",") : ""}|${lo}`, bounds, lo);
+  const png = fill === "none" ? "" : heatmapDataUrl(g, stops, `${cmapName}|${st.reverse ? 1 : 0}|${fill}|${bounds ? bounds.join(",") : ""}|${lo}|g${GAMMA}`, bounds, lo, norm);
   const id = `clip${++uid}`;
   let s = tb.svg + clipDef(id, plot) + `<g clip-path="url(#${id})">`;
   const ix = px(g.x0), iy = py(g.y1);
@@ -609,8 +614,11 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
     const stepV = withContours ? contourStep || 1 : barTicks.length > 1 ? Math.min(...barTicks.slice(1).map((v, i) => v - barTicks[i]).filter((x) => x > 0)) : 1;
     const tickDec = Math.max(withContours ? 0 : o.tickDec ?? o.pDec, Math.ceil(-Math.log10(stepV) - 1e-9), 0);
     const levelY = contourLevels.map((v) => ly + cbH * (1 - normD(v)));
+    let prevY = Infinity;
     for (const v of barTicks) {
       const yy = ly + cbH * (1 - normD(v));
+      if (!withContours && v !== barTicks[barTicks.length - 1] && Math.abs(prevY - yy) < 14) continue;
+      if (!withContours) prevY = yy;
       const isLevel = withContours && contourLevels.includes(v);
       if (withContours && !isLevel && levelY.some((ty) => Math.abs(ty - yy) < 13)) continue; // end labels yield to nearby contour labels
       if (isLevel) s += `<line x1="${lx}" x2="${lx + 16}" y1="${f1(yy)}" y2="${f1(yy)}" style="stroke:#161616;stroke-width:1"/>`;
