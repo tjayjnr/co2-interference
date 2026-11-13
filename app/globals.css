@@ -422,3 +422,38 @@ h2 { letter-spacing: .08em; }
 .wm-dash { color: rgba(255, 255, 255, .55); margin: 0 3px; font-weight: 400; }
 .wm-name { color: #fff; letter-spacing: .04em; text-shadow: 0 2px 12px rgba(0, 0, 0, .25); }
 @media (max-width: 640px) { .top h1.wordmark { font-size: 26px; } .brand .mark { width: 36px; height: 36px; } }
+
+/* ---- title uses the header width ---- */
+.top { padding: 24px 28px; min-height: 104px; }
+.brand { flex: 1 1 auto; min-width: 0; gap: 18px; }
+.brand .mark { width: 56px; height: 56px; }
+.top h1.wordmark { font-size: 46px; padding-bottom: 10px; flex-wrap: wrap; row-gap: 4px; }
+.top h1.wordmark::after { height: 4px; }
+.wm-tool { margin-left: 14px; font-weight: 400; font-style: italic; letter-spacing: .06em; color: rgba(255, 255, 255, .82); }
+@media (max-width: 1100px) { .top h1.wordmark { font-size: 36px; } }
+@media (max-width: 640px) { .top { padding: 16px 18px; } .top h1.wordmark { font-size: 28px; } .brand .mark { width: 38px; height: 38px; } .wm-tool { margin-left: 8px; } }
+
+/* ---- Input heading ---- */
+.row-head.inhead { padding: 10px 12px; margin: 2px 0 4px; border-radius: 12px; background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 10%, var(--panel)), color-mix(in srgb, var(--accent-2) 10%, var(--panel))); border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line)); }
+.inhead-title { display: flex; align-items: center; gap: 10px; }
+.inhead-ic { width: 30px; height: 30px; padding: 5px; border-radius: 9px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); fill: #fff; stroke: #fff; stroke-width: 2; stroke-linecap: round; box-shadow: 0 3px 8px color-mix(in srgb, var(--accent) 35%, transparent); }
+.inhead-ic circle { fill: color-mix(in srgb, var(--accent) 70%, #000); stroke: #fff; stroke-width: 1.8; }
+.inhead h2 { margin: 0; font-size: 19px; text-transform: none; letter-spacing: .01em; color: var(--text); }
+.unitpick { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.unitpick select.preset { border-radius: 999px; padding: 6px 12px; font-weight: 600; color: var(--accent); background: var(--panel); border-color: color-mix(in srgb, var(--accent) 35%, var(--line)); }
+
+/* ---- empty results card ---- */
+.results:has(.welcome) { position: relative; overflow: hidden; display: flex; min-height: calc(100vh - 170px);
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--accent) 22%, transparent) 1px, transparent 1.6px) 0 0 / 22px 22px,
+    radial-gradient(ellipse at 15% 110%, color-mix(in srgb, var(--accent-2) 16%, transparent), transparent 55%),
+    radial-gradient(ellipse at 90% -10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 55%),
+    var(--panel); }
+.results:has(.welcome)::before, .results:has(.welcome)::after { content: ""; position: absolute; border-radius: 50%; pointer-events: none;
+  border: 1.5px solid color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: 0 0 0 40px color-mix(in srgb, var(--accent) 4%, transparent), 0 0 0 41.5px color-mix(in srgb, var(--accent) 12%, transparent), 0 0 0 90px color-mix(in srgb, var(--accent) 3%, transparent), 0 0 0 91.5px color-mix(in srgb, var(--accent) 9%, transparent); }
+.results:has(.welcome)::before { width: 180px; height: 180px; left: -70px; bottom: -70px; }
+.results:has(.welcome)::after { width: 140px; height: 140px; right: -50px; top: -50px; border-color: color-mix(in srgb, var(--accent-2) 18%, transparent); }
+.results .empty.welcome { flex: 1; justify-content: center; position: relative; z-index: 1; background: radial-gradient(ellipse at 50% 45%, var(--panel) 0%, color-mix(in srgb, var(--panel) 75%, transparent) 40%, transparent 70%); }
+@media (max-width: 1000px) { .results:has(.welcome) { min-height: 520px; } }
+.run { white-space: nowrap; flex: 0 0 auto; }

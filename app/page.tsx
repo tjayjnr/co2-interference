@@ -1145,7 +1145,7 @@ export default function Page() {
             <circle cx="20" cy="20" r="11" fill="none" stroke="currentColor" strokeOpacity=".6" strokeWidth="2" />
             <circle cx="20" cy="20" r="5" fill="currentColor" />
           </svg>
-          <h1 className="wordmark" aria-label="CO₂-SATriPi"><span className="wm-co2">CO<sub>2</sub></span><span className="wm-dash">-</span><span className="wm-name">SATriPi</span></h1>
+          <h1 className="wordmark" aria-label="CO₂-SATriPi Tool"><span className="wm-co2">CO<sub>2</sub></span><span className="wm-dash">-</span><span className="wm-name">SATriPi</span><span className="wm-tool">Tool</span></h1>
         </div>
         <div className="hdrbtns">
           <a className="toplink" href="/manual" target="_blank" rel="noopener noreferrer">User manual</a>
@@ -1165,14 +1165,22 @@ export default function Page() {
           {liveError && <p className="err">Input problem: {liveError}</p>}
 
           <section className="inputs">
-            <div className="row-head">
-              <h2>Input</h2>
+            <div className="row-head inhead">
+              <div className="inhead-title">
+                <svg className="inhead-ic" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12M20 18h0" />
+                  <circle cx="16" cy="6" r="2" /><circle cx="10" cy="12" r="2" /><circle cx="18" cy="18" r="2" />
+                </svg>
+                <h2>Input</h2>
+              </div>
+              <label className="unitpick"><span>Units</span>
               <select className="preset" aria-label="Unit preset" title="Unit preset" value={presetName}
                 onChange={(e) => { if (e.target.value !== "Custom") setUnits(PRESETS[e.target.value as "SI" | "Field"]); }}>
                 <option value="Field">Field units</option>
                 <option value="SI">SI units</option>
                 {presetName === "Custom" && <option value="Custom">Custom units</option>}
               </select>
+              </label>
             </div>
             <nav className="tabs intabs" role="tablist" aria-label="Input sections">
               {inputTabs.map(([k, l]) => (
