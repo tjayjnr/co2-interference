@@ -1139,9 +1139,13 @@ export default function Page() {
   return (
     <main className="app">
       <header className="top">
-        <div>
+        <div className="brand">
+          <svg className="mark" viewBox="0 0 40 40" aria-hidden="true">
+            <circle cx="20" cy="20" r="17" fill="none" stroke="currentColor" strokeOpacity=".35" strokeWidth="2" />
+            <circle cx="20" cy="20" r="11" fill="none" stroke="currentColor" strokeOpacity=".6" strokeWidth="2" />
+            <circle cx="20" cy="20" r="5" fill="currentColor" />
+          </svg>
           <h1>CO₂ Injection Pressure Interference</h1>
-          <p className="sub">Bottom-hole pressure of each well from the CO₂–brine injection program (two-phase three-zone, single-phase CO₂ or water), with the interference between wells · screening-level</p>
         </div>
         <div className="hdrbtns">
           <a className="toplink" href="/manual" target="_blank" rel="noopener noreferrer">User manual</a>

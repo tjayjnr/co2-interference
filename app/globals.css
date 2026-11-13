@@ -274,3 +274,90 @@ td.calc { display: table-cell; white-space: nowrap; min-width: 54px; }
 .panel .inputs .group[data-group="points"] { order: 14; }
 .panel .tabs.intabs button:nth-child(8) { order: 15; }
 .panel .inputs .group[data-group="report"] { order: 16; }
+
+/* ===================== visual refresh ===================== */
+:root {
+  --bg: #eef2f7; --panel: #ffffff; --line: #dfe5ee; --accent: #1f63c6; --accent-2: #0f8b8d;
+  --field: #f8fafc; --shadow: 0 1px 2px rgba(16, 24, 40, .05), 0 6px 20px rgba(16, 24, 40, .06);
+  --hdr: linear-gradient(118deg, #0d2340 0%, #16457a 52%, #12707e 100%);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0e131a; --panel: #161c25; --line: #283241; --accent: #6ea2ff; --accent-2: #4fd1c5;
+    --field: #10161e; --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 20px rgba(0, 0, 0, .25);
+    --hdr: linear-gradient(118deg, #0a1a30 0%, #123a66 52%, #0e5a66 100%);
+  }
+}
+body { background: var(--bg); }
+.app { padding: 18px 20px; }
+
+/* header band */
+.top { background: var(--hdr); color: #fff; border-radius: 16px; padding: 18px 24px; margin-bottom: 18px; box-shadow: 0 10px 30px rgba(13, 35, 64, .25); position: relative; overflow: hidden; }
+.top::after { content: ""; position: absolute; right: -60px; top: -80px; width: 300px; height: 300px; border-radius: 50%; border: 40px solid rgba(255, 255, 255, .05); pointer-events: none; }
+.brand { display: flex; align-items: center; gap: 14px; }
+.brand .mark { width: 40px; height: 40px; color: #7fe3d6; flex: 0 0 auto; }
+.top h1 { font-size: 26px; font-weight: 700; letter-spacing: .01em; color: #fff; line-height: 1.2; }
+.hdrbtns { align-items: center; gap: 10px; position: relative; z-index: 1; }
+.top .toplink { color: #fff; text-decoration: none; border: 1px solid rgba(255, 255, 255, .35); border-radius: 8px; padding: 7px 14px; font-size: 14px; transition: background .15s; }
+.top .toplink:hover { background: rgba(255, 255, 255, .12); }
+.top button { background: #fff; color: #0d2340; font-weight: 600; border-radius: 8px; padding: 8px 15px; box-shadow: 0 2px 6px rgba(0, 0, 0, .15); transition: transform .12s, box-shadow .12s; }
+.top button:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0, 0, 0, .22); }
+.top button.ghost { background: rgba(255, 255, 255, .1); color: #fff; border: 1px solid rgba(255, 255, 255, .35); box-shadow: none; margin-top: 0; padding: 7px 14px; }
+.top button:disabled { opacity: .5; }
+
+/* cards */
+.panel, .results { border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); padding: 16px 18px; }
+.layout { gap: 18px; }
+
+/* run bar */
+.runbar { display: flex; align-items: center; gap: 12px; padding: 4px 0 14px; }
+.run { background: linear-gradient(135deg, var(--accent), var(--accent-2)); border-radius: 10px; padding: 11px 22px; font-size: 16px; letter-spacing: .02em; box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 35%, transparent); transition: transform .12s, box-shadow .12s; }
+.run:hover { transform: translateY(-1px); box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 45%, transparent); }
+.runbar .hint { margin: 0; font-size: 13px; }
+
+/* form controls */
+input, select, textarea { background: var(--field); border: 1px solid var(--line); border-radius: 8px; padding: 7px 9px; transition: border-color .15s, box-shadow .15s; }
+input:hover, select:hover, textarea:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+.field { font-size: 12.5px; gap: 4px; }
+.field > span { color: var(--muted); font-weight: 600; }
+.grid2 { gap: 12px 14px; }
+select.unitsel { padding: 6px 4px; border-radius: 8px; }
+button.ghost { border-radius: 8px; transition: background .15s, border-color .15s; }
+button.ghost:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); border-color: var(--accent); }
+h2 { letter-spacing: .08em; }
+
+/* vertical input tabs */
+.panel .tabs.intabs button { margin-top: 8px; padding: 11px 14px; font-size: 15px; font-weight: 600; background: var(--field); border: 1px solid var(--line); border-radius: 10px; display: flex; align-items: center; gap: 10px; transition: background .15s, border-color .15s; }
+.panel .tabs.intabs button::before { content: ""; width: 7px; height: 7px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(-45deg); transition: transform .15s; flex: 0 0 auto; }
+.panel .tabs.intabs button:hover { border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); background: color-mix(in srgb, var(--accent) 5%, var(--field)); }
+.panel .tabs.intabs button.on { background: color-mix(in srgb, var(--accent) 10%, var(--panel)); border-color: var(--accent); color: var(--accent); border-radius: 10px 10px 0 0; }
+.panel .tabs.intabs button.on::before { content: ""; transform: rotate(45deg); border-color: var(--accent); }
+.panel .inputs .group { border: 1px solid var(--accent); border-top: 0; border-radius: 0 0 10px 10px; padding: 14px; background: var(--panel); }
+
+/* well-system choice */
+.sysbtn { border-radius: 10px; padding: 12px 14px; text-align: center; transition: border-color .15s, background .15s; }
+.sysbtn:hover { border-color: var(--accent); }
+
+/* result tabs: segmented pills */
+.results .tabs { flex-wrap: wrap; overflow: visible; gap: 6px; border-bottom: 0; padding: 4px; background: var(--bg); border-radius: 12px; margin-bottom: 16px; }
+.results .tabs button { border: 0; border-radius: 9px; padding: 8px 14px; color: var(--muted); transition: background .15s, color .15s; }
+.results .tabs button:hover { color: var(--text); }
+.results .tabs button.on { background: var(--panel); color: var(--accent); box-shadow: 0 1px 3px rgba(16, 24, 40, .12); }
+
+/* status cards */
+.kpi { border-radius: 12px; padding: 12px 14px; background: var(--panel); box-shadow: var(--shadow); border-left-width: 5px; }
+.kpi span { font-weight: 600; text-transform: uppercase; letter-spacing: .04em; font-size: 11px; }
+.kpi b { font-size: 22px; margin: 2px 0; }
+
+/* misc */
+.stale, .warn { border-radius: 10px; }
+.empty { padding: 80px 16px; }
+.bhp-summary-wrap, .plotwrap { border-radius: 10px; }
+.bhp-summary thead th { background: #16457a; }
+.logos { box-shadow: 0 -1px 0 var(--line); }
+@media (max-width: 640px) {
+  .top { padding: 14px 16px; }
+  .top h1 { font-size: 20px; }
+  .brand .mark { width: 32px; height: 32px; }
+}
