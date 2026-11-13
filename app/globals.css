@@ -517,3 +517,7 @@ h2 { letter-spacing: .08em; }
 .logo-text span { font-size: 11px; font-weight: 700; letter-spacing: .32em; text-transform: uppercase; color: #7fe3d6; margin-top: 3px; }
 @media (min-width: 1001px) and (max-height: 820px) { body:has(.welcome) .logo-badge { width: 48px; height: 48px; } }
 @media (max-width: 640px) { .brand { flex-wrap: wrap; row-gap: 10px; } .logo { border-right: 0; padding-right: 0; } .logo-badge { width: 44px; height: 44px; } .logo-text b { font-size: 16px; } .wm-track { flex: 1 1 100%; } }
+/* logo text: "Tool" on the same line as CO2-SATriPI */
+.logo-text { flex-direction: row; align-items: baseline; gap: 6px; }
+.logo-text span { margin-top: 0; font-size: 17px; font-weight: 400; font-style: italic; letter-spacing: .04em; text-transform: none; color: #7fe3d6; }
+@media (max-width: 640px) { .logo-text span { font-size: 16px; } }
