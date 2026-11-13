@@ -11,7 +11,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await p.setViewport({ width: 1500, height: 1000 });
   await p.goto((process.env.APP_URL || "http://localhost:3120"), { waitUntil: "networkidle0" });
   // the input column scrolls on its own on wide screens: let it grow so every group can be captured
-  await p.addStyleTag({ content: "aside.panel { position: static !important; max-height: none !important; overflow: visible !important; }" });
+  await p.addStyleTag({ content: "aside.panel { position: static !important; max-height: none !important; overflow: visible !important; } .panel .inputs .group[hidden] { display: block !important; }" });
   const click = async (t) => { const [x] = await p.$$(`xpath/.//button[contains(., "${t}")]`); await x.click(); };
   const group = async (name) => p.$(`[data-group="${name}"]`);
   const rect = async (h) => h.evaluate((e) => { const r = e.getBoundingClientRect(); return { x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height }; });

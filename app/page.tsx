@@ -125,12 +125,6 @@ function backgroundProps(b: BhpInputs): BackgroundProps {
   }
 }
 
-const MODEL_HELP: Record<ModelKind, string> = {
-  two: "Original three-zone model around each well: dry CO₂ next to the well, CO₂ + brine, then brine. CO₂ properties (Bg, cg, density) come from the Peng–Robinson equation of state for pure CO₂ at each well's bottom-hole pressure; CO₂ viscosity, brine density and water compressibility are recalculated at every pressure trial, and the salinity follows from the standard brine density. Corey exponents must both be 3 (cubic) or both 2 (quadratic). Rates are in Mscf/day of CO₂.",
-  co2: "Initially CO₂-filled, homogeneous reservoir; relative permeability = 1. Bg is fixed at 0.0005690187 rb/scf; CO₂ density and cg are fixed at their Peng–Robinson values at the initial pressure and reservoir temperature. CO₂ viscosity is recalculated at every pressure trial from the live Peng–Robinson density. Rates are in Mscf/day of CO₂.",
-  water: "Initially water-filled reservoir; relative permeability = 1 and Bw fixed at 1.0 rb/STB. Water viscosity is an input; the brine density and water compressibility are calculated at every pressure trial from the temperature and the salinity (from the standard brine density). Rates are in STB/day of water.",
-};
-
 /** The program's default multiwell table: 4 wells, 150 Mscf/day, start year 0, radius 0.55 ft, skin 0 (1000 ft apart). */
 const newWellIn = (i: number, x = i * 1000 * FT, y = 0): WellIn => ({
   id: `w${i + 1}`, name: `Well ${i + 1}`, x, y, rate: 150, startYr: 0, endYr: 30, skin: 0, skinText: "",
@@ -261,6 +255,7 @@ export default function Page() {
   const [padM, setPadM] = useState<number | null>(null); // map padding around the wells; null = automatic
   const [mapArea, setMapArea] = useState<"wells" | "all">("wells"); // fit the maps to the wells, or also to the monitoring points
   const [view, setView] = useState<View>("mw");
+  const [inTab, setInTab] = useState("system");
   const [mode, setMode] = useState<Mode>("bhp");
   const [cmpWell, setCmpWell] = useState(0);
   const [bhpWell, setBhpWell] = useState(0);
@@ -1139,7 +1134,7 @@ export default function Page() {
     : [["bhp", "Program results"], ...satTab, ["map", "Pressure map"], ["series", "Time series"], ["limits", "Limit check"], ["compare", "Compare boundaries"]];
   const viewEff: View = view === "sat" && !two ? "map" : !multi && (view === "mw" || view === "matrix") ? "bhp" : view;
   const showF = (n: keyof BhpInputs) => (modelL === "two" ? true : modelL === "co2" ? ["rock_compressibility_per_psi", "temperature_F"].includes(n) : ["mu_water_cP", "brine_standard_density_lb_ft3", "rock_compressibility_per_psi", "temperature_F"].includes(n));
-  const bgLive = backgroundProps(toBhp(resL, flL, modelL, systemL));
+  const inputTabs: [string, string][] = [["system", "Well system"], ["model", "Model"], ["reservoir", "Reservoir & fluids"], ["wells", multiL ? "Wells" : "Injection well"], ["limit", "Pressure limit"], ["shutin", "Shut-in"], ["points", "Monitoring points"], ["report", "Report"]];
 
   return (
     <main className="app">
@@ -1175,8 +1170,13 @@ export default function Page() {
                 {presetName === "Custom" && <option value="Custom">Custom units</option>}
               </select>
             </div>
+            <nav className="tabs intabs" role="tablist" aria-label="Input sections">
+              {inputTabs.map(([k, l]) => (
+                <button key={k} role="tab" aria-selected={inTab === k} className={inTab === k ? "on" : ""} onClick={() => setInTab(k)}>{l}</button>
+              ))}
+            </nav>
 
-            <div className="group" data-group="system">
+            <div className="group" data-group="system" hidden={inTab !== "system"}>
               <h3>Well system</h3>
               <div className="sysbtns" role="radiogroup" aria-label="Well system">
                 <label className={`sysbtn ${systemL === "single" ? "on" : ""}`}>
@@ -1190,7 +1190,7 @@ export default function Page() {
               </div>
             </div>
 
-            <div className="group" data-group="model">
+            <div className="group" data-group="model" hidden={inTab !== "model"}>
               <h3>Pressure model and boundary</h3>
               <label className="field"><span>Phase / fluid</span>
                 <select aria-label="Phase / fluid" value={modelL} onChange={(e) => setModel(e.target.value as ModelKind)}>
@@ -1225,13 +1225,9 @@ export default function Page() {
                   ? <NumField label={boundaryL.axis === "x" ? "Boundary longitude" : "Boundary latitude"} unit="°" value={boundaryDeg} onChange={setBoundaryDeg} />
                   : uf("distance", { label: "Boundary position", value: boundaryL.positionM, onChange: (v) => setBoundary({ ...boundaryL, positionM: v }) })}
               </div>
-              <details className="notes"><summary>Notes</summary>
-                <p className="hint">{MODEL_HELP[modelL]}</p>
-                <p className="hint">Infinite: the aquifer has no edge (your program). For a sealing fault or a constant-pressure edge, give the straight boundary line: the maps, curves and matrix then add image wells; the program results stay infinite-acting. The Compare boundaries tab runs all three conditions side by side.</p>
-              </details>
             </div>
 
-            <div className="group" data-group="reservoir">
+            <div className="group" data-group="reservoir" hidden={inTab !== "reservoir"}>
               <h3>Reservoir and fluids</h3>
               <div className="grid2">
                 {uf("perm", { label: "Permeability (every zone)", value: resL.permMd, onChange: setR("permMd"), min: 0 })}
@@ -1256,36 +1252,21 @@ export default function Page() {
                   </>
                 )}
               </div>
-              <details className="notes"><summary>Notes and calculated properties</summary>
-              <div className="bgprops" aria-label="Calculated in the background">
-                <b>Calculated in the background</b> (not inputs; updated at every pressure trial and in the shut-in solve)
-                {bgLive.error ? <p className="err">{bgLive.error}</p> : (
-                  <ul>
-                    {bgLive.muGas !== null && <li>CO₂ viscosity at P<sub>i</sub>: <b>{bgLive.muGas.toFixed(5)} cP</b> <small>(Fenghour 1998, live Peng–Robinson density)</small></li>}
-                    {bgLive.ppm !== null && <li>Salinity: <b>{Math.round(bgLive.ppm).toLocaleString("en-US")} ppm</b> NaCl equivalent <small>(McCain, from the standard brine density)</small></li>}
-                    {bgLive.rhoW !== null && <li>Brine density at P<sub>i</sub>, T: <b>{(bgLive.rhoW * LB_FT3).toFixed(2)} kg/m³</b> ({bgLive.rhoW.toFixed(3)} lb/ft³) <small>(Driesner 2007 + IAPWS-IF97)</small></li>}
-                    {bgLive.cw !== null && <li>Water compressibility at P<sub>i</sub>: <b>{bgLive.cw.toExponential(3)} 1/psi</b> ({(bgLive.cw / PSI).toExponential(3)} 1/MPa)</li>}
-                  </ul>
-                )}
-              </div>
-              <p className="hint">The zone diffusivities are calculated by the program (D = m / c* for each zone, from the zone mobilities and compressibilities); they are reported in all_calculations.csv and source_states.csv.{modelL === "two" ? " The relative-permeability inputs also give the CO₂ saturation map." : ""}{multiL ? " The well radius is entered for each well in the table below." : ""}</p>
-              </details>
             </div>
 
             {!multiL && (
-              <div className="group" data-group="wells">
+              <div className="group" data-group="wells" hidden={inTab !== "wells"}>
                 <h3>Injection well</h3>
                 <div className="grid2">
                   {uf(rateCatL, { label: modelL === "water" ? "Surface water injection rate" : "Surface injection rate", value: singleL.rate, onChange: (v) => setSingle((s) => ({ ...s, rate: v })), min: 0 })}
                   <NumField label="Skin factor" value={singleL.skin} onChange={(v) => setSingle((s) => ({ ...s, skin: v }))} step={0.5} />
                   <NumField label="Number of injection years" unit="whole years" value={singleL.years} onChange={(v) => setSingle((s) => ({ ...s, years: v }))} step={1} min={1} />
                 </div>
-                <details className="notes"><summary>Notes</summary><p className="hint">The program&apos;s single-well calculation: one well at the centre of the maps (x = y = 0) injecting at a constant rate from year 0 for the given number of whole years. Rate in {modelL === "water" ? "STB/day of water (Bw = 1.0 rb/STB)" : "Mscf/day of CO₂ (150 means 150,000 scf/day)"}. Monitoring points are placed relative to the well.</p></details>
               </div>
             )}
 
             {multiL && (
-              <div className="group" data-group="wells">
+              <div className="group" data-group="wells" hidden={inTab !== "wells"}>
                 <div className="row-head">
                   <h3>Number of wells and distances</h3>
                   <div className="btns">
@@ -1446,24 +1427,10 @@ export default function Page() {
                     </div>
                   </details>
                 )}
-                <details className="notes"><summary>Notes</summary>
-                {isGeo && (
-                  <p className="hint">
-                    Enter WGS84 decimal degrees (east and north positive). Calculations use a local projection centred on the centroid of your locations
-                    {origin ? ` (${origin.lat.toFixed(4)}°, ${origin.lon.toFixed(4)}°)` : ""}, and the pressure map is labelled in longitude and latitude.
-                  </p>
-                )}
-                <p className="hint">
-                  As in the program&apos;s multiwell form: constant spacing applies to neighbouring wells (all separations, including grid diagonals, follow from the layout); adjacent distances place the wells along a straight line; a pairwise matrix must describe a realizable horizontal 2-D layout; custom coordinates are entered in the table.
-                  Each well has its own rate ({modelL === "water" ? "STB/day of water" : "Mscf/day of CO₂"}; 0 = observation well), start year and skin, and a radius (Well radius: the same value for all wells, or Different for each well to give each its own in the table){modelL === "two" ? ", and its evaporation choice (inherit = the setting above)" : ""}. Max BHP: this well&apos;s own allowable BHP; blank uses the shared pressure limit.
-                  {modelL === "two" ? " Two-phase wells inject one constant rate from their start year (the program does not accept rate changes for moving fronts)." : " ＋ adds a rate change (a new rate from a later year; rate 0 stops the well)."} Start and End: the years each well starts and stops injecting.{modelL === "two" ? " A two-phase well that stops before the last one follows the program's fixed-zone falloff from its end year while the others continue (the program itself stops all wells together; with equal end years the results are exactly the program's)." : " A single-phase well's end year is a rate change to 0, as in the program's rate schedule."}
-                  CSV import: name, x_m, y_m <i>or</i> lon_deg, lat_deg, rate, start_yr, end_yr, skin (optional), changes (optional, e.g. 8:100|15:50).
-                </p>
-                </details>
               </div>
             )}
 
-            <div className="group" data-group="limit">
+            <div className="group" data-group="limit" hidden={inTab !== "limit"}>
               <h3>Will the required pressure exceed a limit?</h3>
               <div className="grid2">
                 <label className="field"><span>Pressure assessment</span>
@@ -1482,17 +1449,9 @@ export default function Page() {
                 )}
                 {uf("pressure", { label: "Interference threshold", value: thresholdL, onChange: setThreshold })}
               </div>
-              <details className="notes"><summary>Notes</summary>
-              <p className="hint">
-                {limL.allowableMPa !== null
-                  ? <>Allowable BHP <b>{(limL.allowableMPa / pUL.f).toFixed(fx)} {units.pressure}</b> (initial pressure {(limL.initialMPa / pUL.f).toFixed(fx)} {units.pressure}, so the allowable buildup is {(limL.maxBuildupMPa / pUL.f).toFixed(pDec)} {units.pressure}). </>
-                  : <>No limit: every well is reported as NOT ASSESSED. </>}
-                FAIL means the required BHP exceeds the selected limit at a computed time. Rates are not automatically reduced. This is an operating-pressure check, not a prediction of mechanical well integrity. The fraction is your choice (0.9 by default), not a regulatory rule. The interference threshold is not a limit: it only sets the detection contour and the arrival times.
-              </p>
-              </details>
             </div>
 
-            <div className="group" data-group="shutin">
+            <div className="group" data-group="shutin" hidden={inTab !== "shutin"}>
               <h3>Post-shut-in observation</h3>
               <p className="hint" style={{ marginTop: 0 }}>Include pressure observation after injection stops?</p>
               <label className="check"><input type="radio" name="observe" checked={observeL === "yes"} onChange={() => setObserve("yes")} /> Yes</label>{" "}
@@ -1507,15 +1466,9 @@ export default function Page() {
                   </label>
                 </div>
               )}
-              <details className="notes"><summary>Notes</summary>
-              <p className="hint">{observeL === "yes"
-                ? `${multiL ? "Observation starts when the last well stops (the latest End year)" : "The well stops after its injection years"} and the pressure is followed for this many years (zero rate, zones frozen at shut-in, as in the program). Report years are comma-separated years after shut-in; year 0 is the instant injection stops; leave blank for every whole year and the end.`
-                : "No observation: the results stop when injection stops."}
-                {" "}Results run from year 0 to {num(horizonL)} yr.</p>
-              </details>
             </div>
 
-            <div className="group" data-group="points">
+            <div className="group" data-group="points" hidden={inTab !== "points"}>
               <h3>Monitoring points</h3>
               <div className="tablewrap">
                 <table className="edit">
@@ -1544,13 +1497,12 @@ export default function Page() {
               <button className="ghost" onClick={() => setPoints((ps) => [...ps, { id: uid("p"), name: `Point ${ps.length + 1}`, x: 0, y: 0, lon: origin?.lon ?? geoRef.lon, lat: origin?.lat ?? geoRef.lat }])}>+ Add point</button>
             </div>
 
-            <div className="group" data-group="report">
+            <div className="group" data-group="report" hidden={inTab !== "report"}>
               <h3>Report details</h3>
               <div className="grid2">
                 <label className="field"><span>Project name</span><input value={project} onChange={(e) => setProject(e.target.value)} placeholder="optional" /></label>
                 <label className="field"><span>Author</span><input value={author} onChange={(e) => setAuthor(e.target.value)} placeholder="optional" /></label>
               </div>
-              <details className="notes"><summary>Notes</summary><p className="hint">Printed on the PDF / Word report.</p></details>
             </div>
           </section>
         </aside>
