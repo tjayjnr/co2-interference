@@ -457,3 +457,23 @@ h2 { letter-spacing: .08em; }
 .results .empty.welcome { flex: 1; justify-content: center; position: relative; z-index: 1; background: radial-gradient(ellipse at 50% 45%, var(--panel) 0%, color-mix(in srgb, var(--panel) 75%, transparent) 40%, transparent 70%); }
 @media (max-width: 1000px) { .results:has(.welcome) { min-height: 520px; } }
 .run { white-space: nowrap; flex: 0 0 auto; }
+
+/* ---- before the first RUN the whole page fits the window, so the footer logos are visible without scrolling ---- */
+.sitefoot { margin-top: 16px; }
+.logos { padding: 12px 24px; gap: 16px 56px; }
+.logos img { height: 44px; } .logos img.logo-doe { height: 40px; }
+@media (min-width: 1001px) and (min-height: 560px) {
+  body:has(.welcome) { height: 100vh; min-height: 0; }
+  body:has(.welcome) .app { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; padding-bottom: 0; }
+  body:has(.welcome) .top { flex: 0 0 auto; }
+  body:has(.welcome) .layout { flex: 1 1 auto; min-height: 0; align-items: stretch; }
+  body:has(.welcome) aside.panel { position: static; height: 100%; max-height: none; overflow-y: auto; }
+  body:has(.welcome) .results:has(.welcome) { min-height: 0; height: 100%; overflow: auto; }
+  body:has(.welcome) .empty.welcome { padding: 24px 20px; }
+}
+@media (min-width: 1001px) and (max-height: 820px) {
+  body:has(.welcome) .top { padding: 14px 24px; min-height: 0; margin-bottom: 12px; }
+  body:has(.welcome) .top h1.wordmark { font-size: 36px; }
+  body:has(.welcome) .welcome-art { width: 260px; margin-bottom: 6px; }
+  body:has(.welcome) .welcome-steps { margin-top: 18px; }
+}
