@@ -373,14 +373,19 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   // so the pressure rising towards each well stands out. Saturation maps keep 0.
   let loD = 0;
   if (o.palette !== "sat") {
-    let gmin = Infinity;
-    for (const v of g.values) if (!Number.isNaN(v) && v < gmin) gmin = v;
-    const minD = gmin / o.pf;
-    if (Number.isFinite(minD) && minD > 0 && top > minD) {
-      const tk = ticks(minD, top, 10);
-      const stepT = tk.length > 1 ? tk[1] - tk[0] : top - minD;
-      loD = Math.max(0, Math.floor(minD / stepT + 1e-9) * stepT);
-      if (loD >= top) loD = 0;
+    // the scale starts at the highest buildup on the map edge (rounded up), so the edge takes the lightest colour and the
+    // infinite-acting pressure is seen fading out inside the map
+    let edge = -Infinity;
+    const at = (i: number, j: number) => g.values[j * g.nx + i];
+    for (let i = 0; i < g.nx; i++) for (const j of [0, g.ny - 1]) { const v = at(i, j); if (!Number.isNaN(v) && v > edge) edge = v; }
+    for (let j = 0; j < g.ny; j++) for (const i of [0, g.nx - 1]) { const v = at(i, j); if (!Number.isNaN(v) && v > edge) edge = v; }
+    const edgeD = edge / o.pf;
+    if (Number.isFinite(edgeD) && edgeD > 0 && top > edgeD) {
+      const tk = ticks(edgeD, top, 10);
+      const stepT = tk.length > 1 ? tk[1] - tk[0] : top - edgeD;
+      loD = Math.ceil(edgeD / stepT - 1e-9) * stepT;
+      if (loD >= top) loD = Math.floor(edgeD / stepT + 1e-9) * stepT;
+      if (loD >= top || loD < 0) loD = 0;
     }
   }
   const lo = loD * o.pf;

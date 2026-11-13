@@ -650,30 +650,18 @@ export default function Page() {
     return { x0: cx - half, x1: cx + half, y0: cy - half, y1: cy + half };
   }, [wells, points, padEff, mapArea]);
 
-  // Pressure map area. The aquifer is infinite-acting, so the buildup never ends at an edge; the automatic area is
-  // made wide enough that the pressure has faded (below 10 % of its peak, or below the interference threshold if
-  // that is larger) before the map edge when the last well stops injecting (the largest buildup). Only the area
-  // shown changes, not the calculation. A padding typed by the user is used as given.
+  // Pressure map area: the wells spread over the map with about two well spacings around them (at least the
+  // saturation map margin), so every well is clearly seen. The colour scale of the map starts at the buildup on the map
+  // edge, so the infinite-acting pressure is seen fading out before the edge. Only the display changes, not the
+  // calculation. A padding typed by the user is used as given.
   const autoPadPressM = useMemo(() => {
-    if (!applied || !wells.length) return autoPadM;
+    if (!wells.length) return autoPadM;
     const xs = wells.map((w) => w.x), ys = wells.map((w) => w.y);
-    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
     const halfC = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)) / 2;
-    const at = (t: number, x: number, y: number) => field.grid(null, t, { x0: x, x1: x, y0: y, y1: y }, 1, 1).values[0];
-    const lastEnd = Math.min(horizon, Math.max(...wells.map((w) => w.endYr)));
-    let need = autoPadM;
-    for (const t of [lastEnd]) {
-      const peak = Math.max(...wells.map((w) => at(t, w.x, w.y)));
-      if (!(peak > 0)) continue;
-      const cut = Math.max(0.1 * peak, threshold);
-      for (const [dx, dy] of [[1, 0], [0, 1]]) {
-        let r = Math.max(autoPadM, 100);
-        while (r < 2e6 && at(t, cx + dx * (halfC + r), cy + dy * (halfC + r)) > cut) r *= 1.3;
-        need = Math.max(need, r);
-      }
-    }
-    return need;
-  }, [applied, wells, field, horizon, autoPadM, threshold]);
+    let spacing = Infinity;
+    wells.forEach((p, i) => wells.slice(i + 1).forEach((q) => { spacing = Math.min(spacing, Math.hypot(p.x - q.x, p.y - q.y)); }));
+    return Math.max(autoPadM, Number.isFinite(spacing) ? 2 * spacing : 0, halfC);
+  }, [wells, autoPadM]);
   const padPressEff = padM ?? autoPadPressM;
   const extentP = useMemo(() => {
     const all = mapArea === "all" ? [...wells, ...points] : wells.length ? wells : points;
