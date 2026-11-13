@@ -392,3 +392,22 @@ h2 { letter-spacing: .08em; }
 .seg label, .sysbtn { position: relative; }
 .seg input, .choice input, .sysbtn input { width: 1px; height: 1px; padding: 0; margin: 0; left: 50%; top: 50%; }
 .grid1 { display: grid; grid-template-columns: 1fr; gap: 12px; }
+
+/* ---- empty results: welcome panel ---- */
+.empty.welcome { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 56px 20px 64px; border-radius: 12px; background: radial-gradient(ellipse at 50% 0%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 70%); }
+.welcome-art { width: min(340px, 100%); height: auto; margin-bottom: 14px; }
+.wa-layer { fill: color-mix(in srgb, var(--accent) 7%, var(--field)); stroke: var(--line); }
+.wa-pipe { stroke: var(--muted); stroke-width: 4; stroke-linecap: round; }
+.wa-head { fill: #14a39a; } .wa-head.b { fill: #2f6fd6; }
+.wa-dot { fill: #14a39a; } .wa-dot.b { fill: #2f6fd6; }
+.wa-overlap { fill: #f08c00; opacity: .55; }
+.wa-ring { fill: none; stroke: #14a39a; stroke-width: 1.5; transform-box: fill-box; transform-origin: center; opacity: 0; animation: wa-pulse 2.7s ease-out infinite; }
+.wa-ring.b { stroke: #2f6fd6; }
+@keyframes wa-pulse { 0% { transform: scale(.4); opacity: .9; } 100% { transform: scale(4.2); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .wa-ring { animation: none; opacity: .5; transform: scale(2.5); } }
+.welcome-title { font-size: 24px; text-transform: none; letter-spacing: 0; color: var(--text); margin: 0 0 6px; }
+.welcome-text { margin: 0 0 20px; color: var(--muted); font-size: 15px; }
+.welcome-run { font-size: 17px; padding: 12px 28px; }
+.welcome-steps { list-style: none; display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; padding: 0; margin: 28px 0 0; }
+.welcome-steps li { display: flex; align-items: center; gap: 8px; padding: 7px 14px 7px 8px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-size: 13.5px; color: var(--text); box-shadow: 0 1px 2px rgba(16, 24, 40, .05); }
+.welcome-steps span { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); font-weight: 700; font-size: 12px; }

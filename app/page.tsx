@@ -1557,9 +1557,39 @@ export default function Page() {
 
         <section className="results">
           {!applied && (
-            <div className="empty">
-              <p><b>No results yet.</b></p>
-              <p>Check the inputs on the left, then press <button type="button" className="linkbtn" onClick={() => runNow()}>▶ RUN analysis</button>.</p>
+            <div className="empty welcome">
+              <svg className="welcome-art" viewBox="0 0 320 170" aria-hidden="true">
+                <defs>
+                  <radialGradient id="wg1" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stopColor="#14a39a" stopOpacity=".55" />
+                    <stop offset="100%" stopColor="#14a39a" stopOpacity="0" />
+                  </radialGradient>
+                  <radialGradient id="wg2" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stopColor="#2f6fd6" stopOpacity=".5" />
+                    <stop offset="100%" stopColor="#2f6fd6" stopOpacity="0" />
+                  </radialGradient>
+                </defs>
+                <rect x="10" y="118" width="300" height="34" rx="8" className="wa-layer" />
+                <ellipse cx="110" cy="135" rx="78" ry="16" fill="url(#wg1)" />
+                <ellipse cx="210" cy="135" rx="78" ry="16" fill="url(#wg2)" />
+                <ellipse cx="160" cy="135" rx="20" ry="6" className="wa-overlap" />
+                {[110, 210].map((x, i) => (
+                  <g key={x}>
+                    <line x1={x} y1="34" x2={x} y2="135" className="wa-pipe" />
+                    <rect x={x - 13} y="20" width="26" height="16" rx="3" className={i ? "wa-head b" : "wa-head"} />
+                    <circle cx={x} cy="135" r="4.5" className={i ? "wa-dot b" : "wa-dot"} />
+                    {[0, 1, 2].map((k) => <ellipse key={k} cx={x} cy="135" rx="18" ry="5" className={i ? "wa-ring b" : "wa-ring"} style={{ animationDelay: `${k * 0.9 + i * 0.45}s` }} />)}
+                  </g>
+                ))}
+              </svg>
+              <h2 className="welcome-title">No results yet</h2>
+              <p className="welcome-text">Check the inputs on the left, then run the analysis.</p>
+              <button type="button" className="run welcome-run" onClick={() => runNow()}>▶ RUN analysis</button>
+              <ol className="welcome-steps">
+                <li><span>1</span>Choose the well system</li>
+                <li><span>2</span>Set the inputs</li>
+                <li><span>3</span>Press RUN</li>
+              </ol>
             </div>
           )}
 
