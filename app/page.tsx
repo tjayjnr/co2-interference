@@ -1668,26 +1668,41 @@ export default function Page() {
               )}
 
               <div className="kpis">
-                <div className="kpi">
-                  <span>Peak BHP (worst well)</span>
-                  <b>{worstRow ? P(worstRow.peak_BHP_psia * PSI, 2) : "–"} {pU.label}</b>
-                  <small>{worstRow ? `${nameOf(worstRow.well)} at year ${pyFormat(Number(worstRow.peak_project_year), "g")}` : ""} · {modelLabel(bhpIn)} · {multi ? `${wells.length} wells` : "single well"}</small>
-                </div>
-                <div className="kpi">
+                {(() => {
+                  const peakMPa = worstRow ? worstRow.peak_BHP_psia * PSI : null;
+                  const frac = peakMPa !== null && lim.allowableMPa ? Math.min(1, Math.max(0, (peakMPa - lim.initialMPa) / (lim.allowableMPa - lim.initialMPa))) : null;
+                  return (
+                    <div className="kpi kpi-peak">
+                      <i className="kpi-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3v13" /><path d="M7 8l5-5 5 5" /><path d="M4 21h16" /></svg></i>
+                      <span>Peak BHP (worst well)</span>
+                      <b>{peakMPa !== null ? P(peakMPa, 2) : "–"}<em>{pU.label}</em></b>
+                      {frac !== null && (
+                        <div className="kpi-bar" role="img" aria-label={`Peak buildup is ${Math.round(frac * 100)}% of the allowable buildup`}>
+                          <div style={{ width: `${Math.max(2, frac * 100)}%` }} className={frac >= 1 ? "over" : ""} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+                <div className="kpi kpi-allow">
+                  <i className="kpi-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 3l8 4v5c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V7z" /></svg></i>
                   <span>Allowable BHP</span>
-                  <b>{lim.allowableMPa !== null ? `${P(lim.allowableMPa, 1)} ${pU.label}` : "Not assessed"}</b>
-                  <small>{cur.limit.mode === "none" ? "No pressure limit supplied" : cur.limit.mode === "max_bhp" ? "Maximum allowable BHP" : `${num(cur.limit.fraction)} × fracture pressure ${P(cur.limit.fractureMPa, 1)} ${pU.label}`}{multi && wells.some((w) => w.maxBhpMPa !== null && w.maxBhpMPa !== undefined) ? " · some wells have their own maximum" : ""}</small>
+                  <b>{lim.allowableMPa !== null ? <>{P(lim.allowableMPa, 1)}<em>{pU.label}</em></> : "Not assessed"}</b>
                 </div>
-                <div className={`kpi ${overall === "FAIL" ? "bad" : overall === "PASS" ? "good" : ""}`}>
+                <div className={`kpi kpi-status ${overall === "FAIL" ? "bad" : overall === "PASS" ? "good" : ""}`}>
+                  <i className="kpi-ic" aria-hidden="true">
+                    {overall === "FAIL"
+                      ? <svg viewBox="0 0 24 24"><path d="M7 7l10 10M17 7L7 17" /></svg>
+                      : overall === "PASS" ? <svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+                      : <svg viewBox="0 0 24 24"><path d="M6 12h12" /></svg>}
+                  </i>
                   <span>Pressure status</span>
                   <b>{overall}</b>
-                  <small>{overall === "FAIL" ? "The required BHP exceeds the allowable BHP at a computed time." : overall === "PASS" ? "The required BHP stays at or below the allowable BHP at every computed time." : "No limit supplied."}</small>
-                  <small>{Number.isFinite(scaleToLimit) ? `Rates can scale about ×${scaleToLimit.toFixed(2)} to reach the limit.` : ""}</small>
                 </div>
-                <div className="kpi">
+                <div className="kpi kpi-mass">
+                  <i className="kpi-ic" aria-hidden="true"><svg viewBox="0 0 24 24"><circle cx="8" cy="14" r="4" /><circle cx="16" cy="10" r="5" /></svg></i>
                   <span>Cumulative {fluidName} injected (field)</span>
-                  <b>{massText(injected.totalLb)}</b>
-                  <small>{intStr(tonnes(injected.totalLb))} tonnes = {intStr(injected.totalLb)} lb · {intStr(volOf(injected.totalVol))} {volUnit} at the end of injection (year {pyFormat(injected.end, "g")}){multi ? `, ${injected.rows.length} wells` : ""}</small>
+                  <b>{massText(injected.totalLb).split(" ")[0]}<em>{massText(injected.totalLb).split(" ")[1]}</em></b>
                 </div>
               </div>
 

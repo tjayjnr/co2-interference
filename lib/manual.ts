@@ -56,7 +56,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["1", "RUN analysis", "Starts the calculation with the current inputs. Also shows whether results are up to date."],
     ["2", "Input panel", "One Input section with all inputs, in groups: well system, pressure model and boundary, reservoir and fluids, the injection well (single well) or the number of wells and distances (multiwell), the pressure limit, shut-in observation, monitoring points and report details."],
     ["3", "Export buttons", "Results CSV, Report (PDF) and Report (Word); the User manual link."],
-    ["4", "Status cards", "Peak BHP, allowable BHP and the program's pressure status (PASS, FAIL or NOT ASSESSED)."],
+    ["4", "Status cards", "Peak BHP of the worst well (the bar shows how much of the allowable buildup it uses), allowable BHP, the program's pressure status (PASS, FAIL or NOT ASSESSED) and the cumulative CO₂ injected by the field."],
     ["5", "Result tabs", "Multiwell results or Program results, CO₂ saturation (two-phase model), Pressure map, Time series, Well BHP and Interference matrix (multiwell), Limit check, Compare boundaries."],
     ["6", "Chart toolbar", "Zoom in/out, Reset zoom, Export PNG and Export SVG for the chart below it."],
   ]);

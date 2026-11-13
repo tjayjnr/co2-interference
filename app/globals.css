@@ -531,3 +531,25 @@ h2 { letter-spacing: .08em; }
 .playbtn.on { animation: playpulse 1.6s ease-in-out infinite; }
 @keyframes playpulse { 0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); } 50% { box-shadow: 0 0 0 6px transparent; } }
 @media (prefers-reduced-motion: reduce) { .playbtn.on { animation: none; } }
+
+/* ---- status cards ---- */
+.kpis { gap: 14px; }
+.kpi { position: relative; display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto auto; column-gap: 14px; align-items: center;
+  padding: 16px 18px; border: 1px solid var(--line); border-left-width: 1px; border-radius: 14px; overflow: hidden;
+  background: linear-gradient(160deg, color-mix(in srgb, var(--k, var(--accent)) 7%, var(--panel)) 0%, var(--panel) 60%); box-shadow: var(--shadow); }
+.kpi::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--k, var(--accent)); }
+.kpi-ic { grid-row: 1 / span 2; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+  background: color-mix(in srgb, var(--k, var(--accent)) 14%, var(--panel)); border: 1px solid color-mix(in srgb, var(--k, var(--accent)) 30%, transparent); }
+.kpi-ic svg { width: 22px; height: 22px; fill: none; stroke: var(--k, var(--accent)); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
+.kpi span { grid-column: 2; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.kpi b { grid-column: 2; font-size: 28px; font-weight: 800; line-height: 1.1; margin: 2px 0 0; color: var(--text); letter-spacing: .01em; }
+.kpi b em { font-style: normal; font-size: 15px; font-weight: 600; color: var(--muted); margin-left: 6px; }
+.kpi-peak { --k: #2f6fd6; } .kpi-allow { --k: #7c5cd6; } .kpi-mass { --k: #0f8b8d; }
+.kpi-status { --k: var(--muted); }
+.kpi-status.good { --k: var(--good); } .kpi-status.bad { --k: var(--bad); }
+.kpi-status.good b { color: var(--good); } .kpi-status.bad b { color: var(--bad); }
+.kpi.bad, .kpi.good { border-left-color: var(--line); }
+.kpi-bar { grid-column: 1 / -1; margin-top: 12px; height: 6px; border-radius: 6px; background: color-mix(in srgb, var(--k) 12%, var(--bg)); overflow: hidden; }
+.kpi-bar > div { height: 100%; border-radius: 6px; background: linear-gradient(90deg, #14a39a, #2f6fd6); }
+.kpi-bar > div.over { background: var(--bad); }
+@media (prefers-color-scheme: dark) { .kpi-peak { --k: #6ea2ff; } .kpi-allow { --k: #a48bff; } .kpi-mass { --k: #4fd1c5; } }
