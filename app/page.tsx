@@ -1172,7 +1172,7 @@ export default function Page() {
             </div>
             <nav className="tabs intabs" role="tablist" aria-label="Input sections">
               {inputTabs.map(([k, l]) => (
-                <button key={k} role="tab" aria-selected={inTab === k} className={inTab === k ? "on" : ""} onClick={() => setInTab(k)}>{l}</button>
+                <button key={k} role="tab" aria-selected={inTab === k} aria-expanded={inTab === k} className={inTab === k ? "on" : ""} onClick={() => setInTab(inTab === k ? "" : k)}>{l}</button>
               ))}
             </nav>
 
@@ -1181,11 +1181,11 @@ export default function Page() {
               <div className="sysbtns" role="radiogroup" aria-label="Well system">
                 <label className={`sysbtn ${systemL === "single" ? "on" : ""}`}>
                   <input type="radio" name="system" checked={systemL === "single"} onChange={() => setSystem("single")} />
-                  <b>Single well</b><small>one well, the program&apos;s single-well calculation</small>
+                  <b>Single well</b>
                 </label>
                 <label className={`sysbtn ${systemL === "multi" ? "on" : ""}`}>
                   <input type="radio" name="system" checked={systemL === "multi"} onChange={() => setSystem("multi")} />
-                  <b>Multiwell interference</b><small>several wells, each well&apos;s BHP with the pressure from the others</small>
+                  <b>Multiwell interference</b>
                 </label>
               </div>
             </div>

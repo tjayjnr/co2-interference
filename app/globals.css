@@ -245,7 +245,32 @@ td.calc { display: table-cell; white-space: nowrap; min-width: 54px; }
 /* background properties calculated by the program (CO2 viscosity, salinity, brine density, cw) */
 
 
-.panel .tabs.intabs { margin: 8px 0 0; flex-wrap: wrap; overflow: visible; }
-.intabs button { padding: 6px 9px; font-size: 13px; }
+
+/* Input sections as vertical tabs: each section opens directly under its tab */
+.panel section.inputs { display: flex; flex-direction: column; }
+.panel .inputs > .row-head { order: 0; }
+.panel .tabs.intabs { display: contents; }
+.panel .tabs.intabs button { display: block; width: 100%; text-align: left; margin-top: 6px; padding: 9px 12px; font-size: 14px; color: var(--text); background: var(--bg, #f4f7f9); border: 1px solid var(--line); border-radius: 8px; white-space: normal; }
+.panel .tabs.intabs button::before { content: "▸  "; color: var(--muted); }
+.panel .tabs.intabs button.on { border-color: var(--accent); border-bottom-left-radius: 0; border-bottom-right-radius: 0; font-weight: 600; }
+.panel .tabs.intabs button.on::before { content: "▾  "; color: var(--accent); }
 .panel .inputs .group[hidden] { display: none; }
-.panel .inputs .intabs + .group, .panel .inputs .group { border-top: 0; margin-top: 4px; }
+.panel .inputs .group { border: 1px solid var(--accent); border-top: 0; border-radius: 0 0 8px 8px; margin-top: 0; padding: 12px; }
+.panel .inputs .group > h3:first-child, .panel .inputs .group > .row-head > h3 { display: none; }
+.panel .inputs .group > .row-head { justify-content: flex-end; }
+.panel .tabs.intabs button:nth-child(1) { order: 1; }
+.panel .inputs .group[data-group="system"] { order: 2; }
+.panel .tabs.intabs button:nth-child(2) { order: 3; }
+.panel .inputs .group[data-group="model"] { order: 4; }
+.panel .tabs.intabs button:nth-child(3) { order: 5; }
+.panel .inputs .group[data-group="reservoir"] { order: 6; }
+.panel .tabs.intabs button:nth-child(4) { order: 7; }
+.panel .inputs .group[data-group="wells"] { order: 8; }
+.panel .tabs.intabs button:nth-child(5) { order: 9; }
+.panel .inputs .group[data-group="limit"] { order: 10; }
+.panel .tabs.intabs button:nth-child(6) { order: 11; }
+.panel .inputs .group[data-group="shutin"] { order: 12; }
+.panel .tabs.intabs button:nth-child(7) { order: 13; }
+.panel .inputs .group[data-group="points"] { order: 14; }
+.panel .tabs.intabs button:nth-child(8) { order: 15; }
+.panel .inputs .group[data-group="report"] { order: 16; }
