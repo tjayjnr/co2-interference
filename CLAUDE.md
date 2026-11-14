@@ -22,7 +22,10 @@ https://co2-interference.vercel.app · repo: github.com/tjayjnr/co2-interference
   live PR density), salinity (McCain inverse of `brine_standard_density_lb_ft3`), brine density and cw (Driesner 2007 +
   IAPWS-IF97), recalculated at every pressure trial and in every shut-in cell (nonlinear falloff). μ_g, cw, salt fraction
   and brine density are NOT inputs. The merge also applies these properties to the multiwell section (each source's trial
-  BHP; the frozen-source falloff uses live cell properties). The no-evaporation branch of co2_bhp_multiwell (2).py is kept. It is the source of truth for every equation, input check, message, table and output file. (Peng–Robinson is
+  BHP; the frozen-source falloff uses live cell properties). The no-evaporation branch of co2_bhp_multiwell (2).py is kept. Optional two-phase CO₂ dissolution
+  (`include_dissolution`, off by default; from co2_dissolution_pressure_only.py): Spycher 2003 solubility in the zone 2
+  brine, Sg2 = (Minj − ρg·Vp1 − Cd·Vp2)/((ρg − Cd)·Vp2), then the usual Corey → Λ2/ct2 → E1 → BHP chain; off reproduces
+  the original exactly, and the dissolution columns are added to the outputs only when it is on. It is the source of truth for every equation, input check, message, table and output file. (Peng–Robinson is
   4–6 % low in CO₂ density near the critical region compared with Span–Wagner; the project chose to keep Peng–Robinson.)
 - `lib/bhp.ts` – line-by-line translation of the single-well section (Python names, same result keys and order, messages,
   first-year detail, shut-in observation, pressure-limit status/summary, output files with Python number formatting,

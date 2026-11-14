@@ -30,6 +30,8 @@ export interface ReportData {
   model: "two" | "co2" | "water";
   modelLabel: string;
   evaporation: boolean;
+  /** two-phase: equilibrium CO2 dissolution in the zone 2 brine */
+  dissolution?: boolean;
   paramHead: string[];
   paramRows: string[][];
   wellHead: string[];
@@ -118,6 +120,11 @@ export function buildBlocks(d: ReportData): Block[] {
       : "Evaporation was not included in this analysis (y_w = c_eq = α_d = 0), so the dry front stays at the wellbore (r_d = r_w) and there is no dry zone. With evaporation the dry front would be" });
     b.push(E("r_d = √( r_w² + α_d V_r / (π φ h) ),   α_d = ρ_g c_eq / ( ρ_b (1 − X_s) S_wr + ρ_g c_eq (1 − S_wr) )"));
     b.push({ t: "p", text: "The zone 2 gas saturation S_g2 follows from the CO₂ mass balance (injected mass less the CO₂ in the dry zone, divided by the zone 2 pore volume), and gives the zone 2 relative permeabilities k_rg2 = k_rg0 x^n_g and k_rw2 = k_rw0 (1 − x)^n_w with x = S_g2 / (1 − S_wr); the zone 2 mobility is Λ_2 = k (k_rg2 / μ_g + k_rw2 / μ_w). The CO₂ properties (compressibility factor Z, compressibility c_g, density ρ_g = p M / (Z R T) and B_g) come from the Peng–Robinson equation of state for pure CO₂ and, with μ_g, the brine density ρ_b and c_w, are evaluated at the bottom-hole pressure itself: at each time the equation P = P_i + Δp(t, P) is solved by fixed-point iteration (Brent's method once the residual changes sign) until the residual is below 10⁻⁴ psi." });
+    if (d.dissolution) {
+      b.push({ t: "p", text: "CO₂ dissolution was included. The zone 2 brine holds CO₂ at its equilibrium solubility X_CO2,eq (Spycher et al., 2003, with the NaCl salting-out coefficient of Spycher and Pruess, 2005; 35–99 °C, 1–600 bar, 0–6 mol NaCl/kg water), and the aqueous-phase density ρ_aq follows from the apparent molar volume of dissolved CO₂ (Garcia) and the live CO₂-free brine density. The dissolved concentration C_d and the CO₂ inventory give the zone 2 free-gas saturation:" });
+      b.push(E("C_d = ρ_aq X_CO2,eq,   S_g2 = (M_inj − ρ_g V_p1 − C_d V_p2) / ((ρ_g − C_d) V_p2),   M_diss = C_d (1 − S_g2) V_p2,   M_inj = ρ_g V_p1 + ρ_g S_g2 V_p2 + M_diss"));
+      b.push({ t: "p", text: "The lower S_g2 sets k_rg2, k_rw2, Λ_2 and c_t2, and so m_2, D_2, the E₁ interface matching and the bottom-hole pressure; the solubility is recalculated at every pressure trial. This is an equilibrium inventory correction with the existing throughput front radii and saturation-weighted compressibility: dissolution front velocities and a solubility-derivative storage term are not derived." });
+    }
   } else if (d.model === "co2") {
     b.push({ t: "p", text: "In the single-phase CO₂ model the reservoir is initially filled with CO₂ (relative permeability 1). B_g is fixed at 0.0005690187 rb/scf, and the CO₂ density and compressibility c_g are fixed at their Peng–Robinson values at the initial pressure and reservoir temperature; c_t = c_g + c_r and μ = μ_g, with μ_g recalculated at the bottom-hole pressure from the live Peng–Robinson density. The dimensionless pressure is the line-source solution" });
     b.push(E("p_D = ½ E₁( 1 / 4t_D ),   t_D = k t / (μ φ c_t r_w²)"));

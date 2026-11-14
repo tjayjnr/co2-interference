@@ -80,7 +80,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   ]);
 
   b.push({ t: "h2", text: "4.2.1 Pressure model and fluid inputs" });
-  p("The Model tab has three drop-down lists: Phase / fluid (Two-phase CO₂–brine, Single-phase CO₂ or Single-phase water), Evaporation (Yes or No; two-phase only) and Boundary (Infinite, Sealing fault or Constant pressure). The boundary line and position appear only when a fault or constant-pressure edge is chosen. Only the inputs used by the chosen model are shown.");
+  p("The Model tab has four drop-down lists: Phase / fluid (Two-phase CO₂–brine, Single-phase CO₂ or Single-phase water), Evaporation (Yes or No; two-phase only), CO₂ dissolution (Off or On; two-phase only) and Boundary (Infinite, Sealing fault or Constant pressure). The boundary line and position appear only when a fault or constant-pressure edge is chosen. Only the inputs used by the chosen model are shown.");
   table("Table 2a. The three pressure models.", ["Model", "What it represents"], [
     ["Two-phase CO₂–brine (default)", "Three zones around each well: dry CO₂ next to the well (if evaporation is included), CO₂ + brine, and brine. The gas front follows from the Corey relative permeabilities (both exponents 3, or both 2), the dry front from the evaporation of the residual brine, and the zone 2 saturation from the CO₂ mass balance. CO₂ density, compressibility and Bg come from the Peng–Robinson equation of state for pure CO₂ at each well's bottom-hole pressure, converged to 10⁻⁴ psi; the CO₂ viscosity, brine density and water compressibility are recalculated at the same pressure."],
     ["Single-phase CO₂", "A CO₂-filled reservoir with relative permeability 1. Bg is fixed at 0.0005690187 rb/scf; CO₂ density and compressibility are fixed at the initial pressure. The CO₂ viscosity is recalculated at every pressure trial from the live Peng–Robinson density."],
@@ -88,6 +88,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   ]);
   table("Table 2b. Fluid and rock-fluid inputs.", ["Input", "Used by", "Default"], [
     ["Evaporation", "Two-phase. No sets the dry zone to zero (r_d = r_w).", "Yes"],
+    ["CO₂ dissolution", "Two-phase. On keeps CO₂ dissolved at its equilibrium solubility in the zone 2 brine (Spycher et al. 2003 with NaCl salting-out; valid 35–99 °C, 1–600 bar, 0–6 mol NaCl/kg). The zone 2 free-gas saturation becomes S_g2 = (M_inj − ρ_g V_p1 − C_d V_p2) / ((ρ_g − C_d) V_p2) with C_d = ρ_aq X_CO2,eq; the lower S_g2 changes the zone 2 relative permeabilities, mobility and compressibility and so the BHP. The front radii are unchanged. Off gives exactly the original calculation.", "Off"],
     ["Water viscosity", "Two-phase, water", "0.30 cP"],
     ["Standard density (60 °F, 1 atm), under Brine", "Two-phase, water. The measured density at standard conditions; the salinity follows from it. Do not enter a reservoir-condition density.", "63.878 lb/ft³"],
     ["Rock compressibility", "All models", "4.2×10⁻⁶ 1/psi"],

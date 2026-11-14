@@ -135,3 +135,18 @@ test("end year (website addition): a two-phase well stopped early follows the pr
   }
   assert.throws(() => runMultiwell(p, [makeWell({ name: "A", start_year: 5, end_year: 5 }), makeWell({ name: "B", x_ft: 1000 })], 10, ""), /end year must be after the start year/);
 });
+
+test("CO2 dissolution: one well in the multiwell solve equals the single-well program, and two wells run", async () => {
+  const { runModel } = await import("../lib/bhp.ts");
+  const p = { ...DEFAULT_INPUTS, include_dissolution: true };
+  const r = runMultiwell(p, [makeWell({ name: "Well 1" })], 6, "", { detail: false });
+  const { results } = runModel(p, 6);
+  for (let y = 1; y <= 6; y++) {
+    const row = r.summary.find((s) => s.year === y);
+    assert.ok(Math.abs(row.BHP_psia - results[y - 1].BHP_psia) < 2e-4, `year ${y}: ${row.BHP_psia} vs ${results[y - 1].BHP_psia}`);
+  }
+  const two = runMultiwell(p, [makeWell({ name: "A" }), makeWell({ name: "B", x_ft: 1000 })], 5, "", { detail: false });
+  const off = runMultiwell({ ...DEFAULT_INPUTS }, [makeWell({ name: "A" }), makeWell({ name: "B", x_ft: 1000 })], 5, "", { detail: false });
+  const last = (res) => res.summary.filter((s) => s.year === 5);
+  last(two).forEach((row, i) => assert.ok(row.BHP_psia > last(off)[i].BHP_psia));
+});
