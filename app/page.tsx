@@ -75,8 +75,6 @@ interface Fluids {
   ng: number;
   nw: number;
   evaporation: boolean;
-  /** two-phase: equilibrium CO2 dissolution in the zone 2 brine */
-  dissolution: boolean;
 }
 
 const B0 = DEFAULT_INPUTS;
@@ -91,7 +89,6 @@ const DEFAULT_FL: Fluids = {
   swr: B0.Swr, rockComp: B0.rock_compressibility_per_psi / PSI,
   krg0: B0.krg_endpoint, krw0: B0.krw_endpoint, krg1: B0.krg_zone1, ng: B0.corey_n_gas, nw: B0.corey_n_water,
   evaporation: B0.include_evaporation,
-  dissolution: B0.include_dissolution,
 };
 
 /** Reference-program inputs (field units) from the page inputs. Rates and skin are per well (multiwell: also the radius,
@@ -106,7 +103,6 @@ function toBhp(r: Reservoir, f: Fluids, model: ModelKind, system: System = "sing
     krg_endpoint: f.krg0, krw_endpoint: f.krw0, krg_zone1: f.krg1, corey_n_gas: f.ng, corey_n_water: f.nw, skin: 0,
     phase_mode: model === "two" ? "two" : "single", single_phase_fluid: model === "water" ? "water" : "co2",
     include_evaporation: f.evaporation,
-    include_dissolution: model === "two" && !!f.dissolution,
   };
 }
 
@@ -959,11 +955,11 @@ export default function Page() {
         project: applied.project, author: applied.author,
         date: new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" }),
         nWells: wells.length, nPoints: points.length, horizon, pLabel: pU.label,
-        model, modelLabel: modelLabel(bhpIn), evaporation: fl.evaporation, dissolution: two && !!fl.dissolution,
+        model, modelLabel: modelLabel(bhpIn), evaporation: fl.evaporation,
         paramHead: ["Parameter", "Value", "Unit"],
         paramRows: [
           ["Pressure model", modelLabel(bhpIn), "–"],
-          ...(two ? [["Include evaporation (dry zone)", fl.evaporation ? "Yes" : "No", "–"], ["Include CO₂ dissolution (zone 2 brine)", fl.dissolution ? "Yes" : "No", "–"]] : []),
+          ...(two ? [["Include evaporation (dry zone)", fl.evaporation ? "Yes" : "No", "–"]] : []),
           ["Permeability, k (every zone)", uv("perm", res.permMd), un("perm")],
           ["Net thickness, h", uv("length", res.thicknessM), un("length")],
           ["Porosity, φ (every zone)", num(res.porosity), "–"],
@@ -1055,7 +1051,7 @@ export default function Page() {
         satSentence: (() => {
           const rs = plumes.map((q) => q.radius);
           const big = plumes.reduce((m, q) => (q.radius > m.radius ? q : m), plumes[0]);
-          return `At t = ${tNow.toFixed(1)} yr the CO₂ gas fronts lie between ${D(Math.min(...rs))} and ${D(Math.max(...rs))} ${dU.label} from the injectors (largest: ${big.name}). ${fl.evaporation ? `The dry (evaporation) zone next to the wells extends to ${D(Math.min(...plumes.map((q) => q.dryR)))}–${D(Math.max(...plumes.map((q) => q.dryR)))} ${dU.label}.` : "Evaporation was switched off, so there is no dry zone."} The front radii and the zone 2 saturation come from the pressure model (cumulative reservoir volume of CO₂ at each well's bottom-hole pressure); the map shows the radial Buckley–Leverett saturation profile of each well for the same volumes, highest next to the well and falling outward; where plumes overlap the higher of the two saturations is shown. ${fl.dissolution ? "CO₂ dissolution was included in the zone 2 mass balance (it lowers the free-gas saturation S_g2, not the front radii). " : ""}Gravity override, ${fl.dissolution ? "" : "dissolution, "}capillarity and residual trapping are not included.`;
+          return `At t = ${tNow.toFixed(1)} yr the CO₂ gas fronts lie between ${D(Math.min(...rs))} and ${D(Math.max(...rs))} ${dU.label} from the injectors (largest: ${big.name}). ${fl.evaporation ? `The dry (evaporation) zone next to the wells extends to ${D(Math.min(...plumes.map((q) => q.dryR)))}–${D(Math.max(...plumes.map((q) => q.dryR)))} ${dU.label}.` : "Evaporation was switched off, so there is no dry zone."} The front radii and the zone 2 saturation come from the pressure model (cumulative reservoir volume of CO₂ at each well's bottom-hole pressure); the map shows the radial Buckley–Leverett saturation profile of each well for the same volumes, highest next to the well and falling outward; where plumes overlap the higher of the two saturations is shown. Gravity override, dissolution, capillarity and residual trapping are not included.`;
         })(),
         bhpHead: ["Well", `BHP at end of injection (${pU.label})`, "End (yr)", `BHP at horizon (${pU.label})`, ...(two ? [`r_g at shut-in (${dU.label})`, "Zone 2 S_g"] : []), `${fluidName} injected (t)`],
         injectedTotal: `${massText(injected.totalLb)} (${intStr(tonnes(injected.totalLb))} tonnes, ${intStr(injected.totalLb)} lb; ${intStr(volOf(injected.totalVol))} ${volUnit})`,
@@ -1269,14 +1265,6 @@ export default function Page() {
                     <select aria-label="Include evaporation" value={flL.evaporation ? "yes" : "no"} onChange={(e) => setFl((f) => ({ ...f, evaporation: e.target.value === "yes" }))}>
                       <option value="yes">Yes (dry zone next to the well)</option>
                       <option value="no">No (r_d = r_w, no dry zone)</option>
-                    </select>
-                  </label>
-                )}
-                {modelL === "two" && (
-                  <label className="field"><span>CO₂ dissolution</span>
-                    <select aria-label="Include CO2 dissolution" value={flL.dissolution ? "yes" : "no"} onChange={(e) => setFl((f) => ({ ...f, dissolution: e.target.value === "yes" }))}>
-                      <option value="no">Off (no CO₂ dissolved in the brine)</option>
-                      <option value="yes">On (equilibrium CO₂ dissolved in zone 2 brine)</option>
                     </select>
                   </label>
                 )}
