@@ -211,9 +211,7 @@ METHOD
     The existing evaporation closure is retained:
         rd = sqrt(rw**2 + alpha_d*Vr_ft3/(pi*phi*h)).
     Setting BOTH Corey exponents to 2 restores the consistent quadratic front
-    for comparison. Any other exponents (1 < ng < 6, 1 < nw < 6, equal or
-    not) use the same Welge tangent solved numerically: the maximum of
-    fg(s)/((1 - Swr)*s), fg = M*s**ng/(M*s**ng + (1 - s)**nw), F = that maximum.
+    for comparison. Other exponent pairs are rejected by this implementation.
     A saved configuration retains its explicit exponents; edit both to 3 to
     use the cubic model with a configuration from the previous script.
 
@@ -407,10 +405,12 @@ class Inputs:
         for name in ("rock_compressibility_per_psi",):
             if name in active_names and getattr(self, name) < 0:
                 raise ValueError(f"{name} cannot be negative.")
-        if self.phase_mode == "two" and not 1 < self.corey_n_gas < 6:
-            raise ValueError("corey_n_gas must satisfy 1 < value < 6.")
-        if self.phase_mode == "two" and not 1 < self.corey_n_water < 6:
-            raise ValueError("corey_n_water must satisfy 1 < value < 6.")
+        if self.phase_mode == "two" and (self.corey_n_gas, self.corey_n_water) not in ((2.0, 2.0), (3.0, 3.0)):
+            raise ValueError(
+                "Set both Corey exponents to 3 for the cubic model, or both "
+                "to 2 for the quadratic comparison. Other exponent pairs "
+                "require a different front-saturation derivation."
+            )
         temperature_K = (self.temperature_F + 459.67) * 5.0 / 9.0
         if temperature_K <= 0:
             raise ValueError("Absolute reservoir temperature must be positive.")
@@ -489,8 +489,8 @@ PROMPTS = {
     "krg_endpoint": "Gas endpoint relative permeability krg0",
     "krw_endpoint": "Water endpoint relative permeability krw0",
     "krg_zone1": "Zone 1 gas relative permeability krg1",
-    "corey_n_gas": "Gas Corey exponent ng (1 < ng < 6; 3 = cubic closed form)",
-    "corey_n_water": "Water Corey exponent nw (1 < nw < 6)",
+    "corey_n_gas": "Gas Corey exponent (3; or 2 with matching water exponent)",
+    "corey_n_water": "Water Corey exponent (must match gas exponent)",
     "skin": "Skin factor",
 }
 
@@ -836,8 +836,7 @@ def corey_front_quantities(M_lambda, Swr, n_gas=3.0, n_water=3.0):
         sf = 1.0/math.sqrt(1.0+M_lambda)
         front_factor = (1.0+math.sqrt(1.0+M_lambda))/(2.0*(1.0-Swr))
     else:
-        # Any other exponents: the same Welge tangent from the origin, solved numerically.
-        return tangent_front_quantities(M_lambda, Swr, n_gas, n_water, 0.0)
+        raise ValueError("Supported Corey exponent pairs are (3, 3) and (2, 2).")
 
     exponent = n_gas
     denominator = M_lambda*sf**exponent + (1.0-sf)**exponent
@@ -1012,20 +1011,11 @@ def dissolution_properties(pressure_psia, p, rho_brine_lb_ft3, salt_mass_fractio
             "rho_co2_apparent_lb_ft3": partial_rho, "dXeq_dP_per_psi": dx_dp}
 
 
-def corey_fractional_flow(s, M_lambda, n, n_water=None):
-    """fg(s) and dfg/ds for Corey exponents n (gas) and n_water, s = Sg/(1-Swr).
-
-    fg = M*s**ng/(M*s**ng + (1-s)**nw); n_water=None means nw = ng.
-    """
-    if n_water is None or n_water == n:
-        denominator = M_lambda*s**n+(1.0-s)**n
-        fg = M_lambda*s**n/denominator
-        derivative = n*M_lambda*s**(n-1.0)*(1.0-s)**(n-1.0)/denominator**2
-        return fg, derivative
-    nw = n_water
-    denominator = M_lambda*s**n+(1.0-s)**nw
+def corey_fractional_flow(s, M_lambda, n):
+    """fg(s) and dfg/ds for equal Corey exponents, s = Sg/(1-Swr)."""
+    denominator = M_lambda*s**n+(1.0-s)**n
     fg = M_lambda*s**n/denominator
-    derivative = M_lambda*(n*s**(n-1.0)*(1.0-s)**nw + nw*s**n*(1.0-s)**(nw-1.0))/denominator**2
+    derivative = n*M_lambda*s**(n-1.0)*(1.0-s)**(n-1.0)/denominator**2
     return fg, derivative
 
 
@@ -1043,41 +1033,33 @@ def dissolution_front_quantities(M_lambda, Swr, n_gas, n_water, a):
         return corey_front_quantities(M_lambda, Swr, n_gas, n_water)
     if not math.isfinite(a) or a < 0:
         raise ValueError("Dissolution retardation a = cd/(rho_g-cd) must be finite and >= 0.")
-    return tangent_front_quantities(M_lambda, Swr, n_gas, n_water, a)
-
-
-def tangent_front_quantities(M_lambda, Swr, n_gas, n_water, a):
-    """Numerical leading shock for any Corey exponents: the maximum of
-    F(s) = (fg + a)/((1-Swr)*s + a), i.e. the chord from (-a,-a) tangent to fg.
-    a = 0 is the Welge tangent from the origin (no dissolution)."""
-    if not math.isfinite(M_lambda) or M_lambda <= 0:
-        raise ValueError("Endpoint mobility ratio M_lambda must be finite and positive.")
-    if not 0 <= Swr < 1:
-        raise ValueError("Swr must satisfy 0 <= Swr < 1.")
+    if n_gas != n_water or n_gas not in (2.0, 3.0):
+        raise ValueError("Supported Corey exponent pairs are (3, 3) and (2, 2).")
+    n = n_gas
     width = 1.0-Swr
 
     def speed(s):
-        return (corey_fractional_flow(s, M_lambda, n_gas, n_water)[0]+a)/(width*s+a)
+        return (corey_fractional_flow(s, M_lambda, n)[0]+a)/(width*s+a)
 
     def tangency(s):
         # Numerator of dF/ds; positive below the tangent point, negative above.
-        fg, derivative = corey_fractional_flow(s, M_lambda, n_gas, n_water)
+        fg, derivative = corey_fractional_flow(s, M_lambda, n)
         return derivative*(width*s+a)-width*(fg+a)
 
     grid = np.linspace(1e-9, 1.0, 20001)
     index = int(np.argmax(speed(grid)))
     if index == 0 or index == len(grid)-1:
-        raise ValueError("Could not locate the gas front for these Corey exponents.")
+        raise ValueError("Could not locate the dissolution-retarded gas front.")
     left, right = float(grid[index-1]), float(grid[index+1])
     if tangency(left) > 0 > tangency(right):
         sf = brentq(tangency, left, right, xtol=1e-15, rtol=1e-14)
     else:
         sf = float(grid[index])
-    fg, derivative = corey_fractional_flow(sf, M_lambda, n_gas, n_water)
+    fg, derivative = corey_fractional_flow(sf, M_lambda, n)
     front_factor = (fg+a)/(width*sf+a)
     tangent_error = derivative/width-front_factor
     if abs(tangent_error) > 1e-7*front_factor:
-        raise ValueError("Gas front failed the shock-tangent condition.")
+        raise ValueError("Dissolution front failed the shock-tangent condition.")
     return {
         "corey_n_gas": float(n_gas), "corey_n_water": float(n_water),
         "sf_normalized": sf, "Sg_front": width*sf,
@@ -2049,7 +2031,7 @@ def save_results(results, p, constants, output_dir, make_plot=True, *, observati
             fig.suptitle(
                 ("Calculated bottom-hole pressure: "+model_label(p)
                  if p.phase_mode == "single" else
-                 f"Calculated bottom-hole pressure: two-phase CO2-brine, Corey ng = {p.corey_n_gas:g}, nw = {p.corey_n_water:g}"),
+                 f"Calculated bottom-hole pressure: two-phase CO2-brine, Corey n = {p.corey_n_gas:g}"),
                 fontsize=15,
             )
             fig.text(
@@ -2779,7 +2761,7 @@ def show_single_well_input_form(display_form=True):
             if phase == "single" else
             "<p><b>Selected: two-phase CO2-BRINE.</b> Original dry-gas, two-phase, "
             "and brine zones. CO2 rate: <b>Mscf/day</b>. "
-            "Corey exponents: any 1 &lt; ng &lt; 6 and 1 &lt; nw &lt; 6 (both 3 = cubic, both 2 = quadratic closed forms).</p>"
+            "Use matching Corey exponents: both 3, or both 2.</p>"
             "<p>For shut-in observation, select <b>Yes</b> in the input grid. "
             "Year <b>0</b> is the instant injection stops. Leave the reporting years "
             "blank for annual readings and a reading at the end of the observation period.</p>"

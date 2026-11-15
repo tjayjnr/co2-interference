@@ -82,7 +82,7 @@ export function renderBhpPlot(out: RunOutput): { svg: string; width: number; hei
   s.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="${FONT}">`);
   s.push(`<rect width="${W}" height="${H}" fill="#ffffff"/>`);
   s.push(`<defs><clipPath id="c1"><rect x="${left1}" y="${top}" width="${w1}" height="${bottom - top}"/></clipPath><clipPath id="c2"><rect x="${left2}" y="${top}" width="${w2}" height="${bottom - top}"/></clipPath></defs>`);
-  const title = p.phase_mode === "single" ? `Calculated bottom-hole pressure: ${modelLabel(p)}` : `Calculated bottom-hole pressure: two-phase CO2-brine, Corey ng = ${pyFormat(p.corey_n_gas, "g")}, nw = ${pyFormat(p.corey_n_water, "g")}`;
+  const title = p.phase_mode === "single" ? `Calculated bottom-hole pressure: ${modelLabel(p)}` : `Calculated bottom-hole pressure: two-phase CO2-brine, Corey n = ${pyFormat(p.corey_n_gas, "g")}`;
   s.push(`<text x="${W / 2}" y="30" text-anchor="middle" font-size="20">${esc(title)}</text>`);
 
   const panel = (x0: number, w: number, X: (v: number) => number, xt: [number, string][], ptitle: string, xlabel: string, clip: string, Y: (v: number) => number, ya: { ticks: number[]; label: (v: number) => string }) => {

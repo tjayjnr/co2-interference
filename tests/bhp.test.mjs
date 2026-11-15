@@ -102,10 +102,7 @@ test("browser form: the Python's validation messages", () => {
   assert.throws(() => browserCalculation({ ...base, observe: "yes", period: "" }), /Enter a positive observation duration in years/);
   assert.throws(() => browserCalculation({ ...base, observe: "yes", period: "-1" }), /Enter a positive, finite observation duration/);
   assert.throws(() => browserCalculation({ ...base, observe: "yes", period: "5", offsets: "7" }), /Observation years must be numbers between 0 and 5/);
-  assert.throws(() => browserCalculation({ ...base, fields: { corey_n_gas: "1" } }), /corey_n_gas must satisfy 1 < value < 6/);
-  assert.throws(() => browserCalculation({ ...base, fields: { corey_n_gas: "6" } }), /corey_n_gas must satisfy 1 < value < 6/);
-  assert.throws(() => browserCalculation({ ...base, fields: { corey_n_water: "1" } }), /corey_n_water must satisfy 1 < value < 6/);
-  assert.throws(() => browserCalculation({ ...base, fields: { corey_n_water: "6" } }), /corey_n_water must satisfy 1 < value < 6/);
+  assert.throws(() => browserCalculation({ ...base, fields: { corey_n_gas: "2" } }), /Set both Corey exponents/);
   const out = browserCalculation({ ...base, years: "3", observe: "yes", period: "2", offsets: "" });
   assert.deepEqual(out.observation.rows.map((r) => r.years_after_shut_in), [1, 2]);
   assert.equal(out.label, "Two-phase CO₂–brine");
@@ -237,30 +234,4 @@ test("CO2 dissolution (co2_dissolution_pressure_only.py): solubility, mass balan
   const p = { ...b.DEFAULT_INPUTS, include_dissolution: true, observation_period_years: 2, observation_years: "0,1,2" };
   const obs = b.calculateObservation(b.runModel(p, 3).results[2], p, false);
   assert.ok(obs.rows.every((r) => Number.isFinite(r.BHP_psia)));
-});
-
-test("Corey exponents: any values, the numeric Welge tangent equals the closed forms for (3,3) and (2,2)", async () => {
-  const { coreyFrontQuantities, tangentFrontQuantities, coreyFractionalFlow, runModel } = await import("../lib/bhp.ts");
-  for (const n of [2, 3]) for (const [M, Swr] of [[18, 0.55], [5, 0.3], [0.7, 0.2]]) {
-    const exact = coreyFrontQuantities(M, Swr, n, n), num = tangentFrontQuantities(M, Swr, n, n, 0);
-    assert.ok(Math.abs(exact.sf_normalized - num.sf_normalized) < 1e-10, `n=${n} M=${M}: sf ${exact.sf_normalized} vs ${num.sf_normalized}`);
-    assert.ok(Math.abs(exact.gas_front_factor - num.gas_front_factor) < 1e-9 * exact.gas_front_factor);
-  }
-  for (const [ng, nw] of [[2.5, 2.5], [4, 2], [2, 4], [1.5, 1.2], [5.5, 3]]) {
-    const c = coreyFrontQuantities(18, 0.55, ng, nw);
-    const [fg, d] = coreyFractionalFlow(c.sf_normalized, 18, ng, nw);
-    assert.ok(c.sf_normalized > 0 && c.sf_normalized < 1);
-    assert.ok(Math.abs(d * c.sf_normalized - fg) < 1e-9, `(${ng},${nw}) tangent from the origin`);
-    assert.ok(Math.abs(c.gas_front_factor - fg / (0.45 * c.sf_normalized)) < 1e-12);
-    // the derivative of the general fractional flow by finite difference
-    const h = 1e-6, s = 0.4;
-    const fd = (coreyFractionalFlow(s + h, 18, ng, nw)[0] - coreyFractionalFlow(s - h, 18, ng, nw)[0]) / (2 * h);
-    assert.ok(Math.abs(fd - coreyFractionalFlow(s, 18, ng, nw)[1]) < 1e-6);
-  }
-  for (const include_dissolution of [false, true]) {
-    const { results } = runModel({ ...DEFAULT_INPUTS, corey_n_gas: 4, corey_n_water: 2, include_dissolution }, 5);
-    assert.ok(results.every((r) => Number.isFinite(r.BHP_psia) && r.BHP_psia > DEFAULT_INPUTS.initial_pressure_psia));
-    assert.equal(results[0].corey_n_gas, 4);
-    assert.equal(results[0].corey_n_water, 2);
-  }
 });
