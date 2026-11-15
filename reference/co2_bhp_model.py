@@ -211,7 +211,7 @@ METHOD
     The existing evaporation closure is retained:
         rd = sqrt(rw**2 + alpha_d*Vr_ft3/(pi*phi*h)).
     Setting BOTH Corey exponents to 2 restores the consistent quadratic front
-    for comparison. Any other exponents (1 < ng <= 10, 1 <= nw <= 10, equal or
+    for comparison. Any other exponents (1 < ng < 6, 1 < nw < 6, equal or
     not) use the same Welge tangent solved numerically: the maximum of
     fg(s)/((1 - Swr)*s), fg = M*s**ng/(M*s**ng + (1 - s)**nw), F = that maximum.
     A saved configuration retains its explicit exponents; edit both to 3 to
@@ -407,10 +407,10 @@ class Inputs:
         for name in ("rock_compressibility_per_psi",):
             if name in active_names and getattr(self, name) < 0:
                 raise ValueError(f"{name} cannot be negative.")
-        if self.phase_mode == "two" and not 1 < self.corey_n_gas <= 10:
-            raise ValueError("corey_n_gas must satisfy 1 < value <= 10 (a gas exponent of 1 or less has no leading shock front).")
-        if self.phase_mode == "two" and not 1 <= self.corey_n_water <= 10:
-            raise ValueError("corey_n_water must satisfy 1 <= value <= 10.")
+        if self.phase_mode == "two" and not 1 < self.corey_n_gas < 6:
+            raise ValueError("corey_n_gas must satisfy 1 < value < 6.")
+        if self.phase_mode == "two" and not 1 < self.corey_n_water < 6:
+            raise ValueError("corey_n_water must satisfy 1 < value < 6.")
         temperature_K = (self.temperature_F + 459.67) * 5.0 / 9.0
         if temperature_K <= 0:
             raise ValueError("Absolute reservoir temperature must be positive.")
@@ -489,8 +489,8 @@ PROMPTS = {
     "krg_endpoint": "Gas endpoint relative permeability krg0",
     "krw_endpoint": "Water endpoint relative permeability krw0",
     "krg_zone1": "Zone 1 gas relative permeability krg1",
-    "corey_n_gas": "Gas Corey exponent ng (1 < ng <= 10; 3 = cubic closed form)",
-    "corey_n_water": "Water Corey exponent nw (1 <= nw <= 10)",
+    "corey_n_gas": "Gas Corey exponent ng (1 < ng < 6; 3 = cubic closed form)",
+    "corey_n_water": "Water Corey exponent nw (1 < nw < 6)",
     "skin": "Skin factor",
 }
 
@@ -2779,7 +2779,7 @@ def show_single_well_input_form(display_form=True):
             if phase == "single" else
             "<p><b>Selected: two-phase CO2-BRINE.</b> Original dry-gas, two-phase, "
             "and brine zones. CO2 rate: <b>Mscf/day</b>. "
-            "Corey exponents: any 1 &lt; ng &le; 10 and 1 &le; nw &le; 10 (both 3 = cubic, both 2 = quadratic closed forms).</p>"
+            "Corey exponents: any 1 &lt; ng &lt; 6 and 1 &lt; nw &lt; 6 (both 3 = cubic, both 2 = quadratic closed forms).</p>"
             "<p>For shut-in observation, select <b>Yes</b> in the input grid. "
             "Year <b>0</b> is the instant injection stops. Leave the reporting years "
             "blank for annual readings and a reading at the end of the observation period.</p>"

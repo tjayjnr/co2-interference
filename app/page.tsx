@@ -1338,8 +1338,8 @@ export default function Page() {
                     <NumField label="Gas end-point krg0" value={flL.krg0} onChange={setF("krg0")} step={0.05} min={0} />
                     <NumField label="Water end-point krw0" value={flL.krw0} onChange={setF("krw0")} step={0.05} min={0} />
                     <NumField label="Zone 1 gas krg1" value={flL.krg1} onChange={setF("krg1")} step={0.05} min={0} />
-                    <NumField label="Gas Corey exponent ng" unit="1 < ng ≤ 10" value={flL.ng} onChange={setF("ng")} min={1} />
-                    <NumField label="Water Corey exponent nw" unit="1 – 10" value={flL.nw} onChange={setF("nw")} min={1} />
+                    <NumField label="Gas Corey exponent ng" unit="1 < ng < 6" value={flL.ng} onChange={setF("ng")} min={1} />
+                    <NumField label="Water Corey exponent nw" unit="1 < nw < 6" value={flL.nw} onChange={setF("nw")} min={1} />
                   </div>
                 </>
               )}

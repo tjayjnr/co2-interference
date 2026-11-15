@@ -102,8 +102,10 @@ test("browser form: the Python's validation messages", () => {
   assert.throws(() => browserCalculation({ ...base, observe: "yes", period: "" }), /Enter a positive observation duration in years/);
   assert.throws(() => browserCalculation({ ...base, observe: "yes", period: "-1" }), /Enter a positive, finite observation duration/);
   assert.throws(() => browserCalculation({ ...base, observe: "yes", period: "5", offsets: "7" }), /Observation years must be numbers between 0 and 5/);
-  assert.throws(() => browserCalculation({ ...base, fields: { corey_n_gas: "1" } }), /corey_n_gas must satisfy 1 < value <= 10/);
-  assert.throws(() => browserCalculation({ ...base, fields: { corey_n_water: "12" } }), /corey_n_water must satisfy 1 <= value <= 10/);
+  assert.throws(() => browserCalculation({ ...base, fields: { corey_n_gas: "1" } }), /corey_n_gas must satisfy 1 < value < 6/);
+  assert.throws(() => browserCalculation({ ...base, fields: { corey_n_gas: "6" } }), /corey_n_gas must satisfy 1 < value < 6/);
+  assert.throws(() => browserCalculation({ ...base, fields: { corey_n_water: "1" } }), /corey_n_water must satisfy 1 < value < 6/);
+  assert.throws(() => browserCalculation({ ...base, fields: { corey_n_water: "6" } }), /corey_n_water must satisfy 1 < value < 6/);
   const out = browserCalculation({ ...base, years: "3", observe: "yes", period: "2", offsets: "" });
   assert.deepEqual(out.observation.rows.map((r) => r.years_after_shut_in), [1, 2]);
   assert.equal(out.label, "Two-phase CO₂–brine");
@@ -244,7 +246,7 @@ test("Corey exponents: any values, the numeric Welge tangent equals the closed f
     assert.ok(Math.abs(exact.sf_normalized - num.sf_normalized) < 1e-10, `n=${n} M=${M}: sf ${exact.sf_normalized} vs ${num.sf_normalized}`);
     assert.ok(Math.abs(exact.gas_front_factor - num.gas_front_factor) < 1e-9 * exact.gas_front_factor);
   }
-  for (const [ng, nw] of [[2.5, 2.5], [4, 2], [2, 4], [1.5, 1], [6, 3]]) {
+  for (const [ng, nw] of [[2.5, 2.5], [4, 2], [2, 4], [1.5, 1.2], [5.5, 3]]) {
     const c = coreyFrontQuantities(18, 0.55, ng, nw);
     const [fg, d] = coreyFractionalFlow(c.sf_normalized, 18, ng, nw);
     assert.ok(c.sf_normalized > 0 && c.sf_normalized < 1);

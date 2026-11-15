@@ -96,8 +96,8 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Gas end-point krg0", "Two-phase", "0.65"],
     ["Water end-point krw0", "Two-phase", "1.0"],
     ["Zone 1 gas krg1", "Two-phase (dry-CO₂ zone)", "0.65"],
-    ["Gas and water Corey exponents", "Two-phase. Any values with 1 < ng ≤ 10 and 1 ≤ nw ≤ 10; they need not be equal. Both 3 or both 2 use the exact cubic or quadratic front; any other pair finds the same Welge tangent numerically.", "3 and 3"],
-      ], "If an input is outside its allowed range (for example porosity not between 0 and 1, or a Corey exponent outside 1–10) a red message appears under the RUN button and the calculation stops with the same message.");
+    ["Gas and water Corey exponents", "Two-phase. Any values greater than 1 and less than 6 (1 < ng < 6, 1 < nw < 6); they need not be equal. Both 3 or both 2 use the exact cubic or quadratic front; any other pair finds the same Welge tangent numerically.", "3 and 3"],
+      ], "If an input is outside its allowed range (for example porosity not between 0 and 1, or a Corey exponent not between 1 and 6) a red message appears under the RUN button and the calculation stops with the same message.");
 
   b.push({ t: "h2", text: "4.2.2 Post-shut-in observation" });
   p("As in the program, the Input section asks: Include pressure observation after injection stops? Choose Yes and enter the Observation duration (years) and the Observation years to report (for example 0, 0.5, 1, 5, 10; leave blank for every whole year and the end of the period), or choose No. Observation starts when the last well stops (the latest End year; single well: after its injection years); the pressure then falls by zero-flow radial diffusion of each well's final pressure profile with the zone radii, mobilities and storage frozen at shut-in, and in the multiwell calculation the wells' falloffs are added at every well. Year 0 is the instant injection stops, with the flowing skin drop removed. The results run from year 0 to the last End year plus the observation duration; the evaluation-time slider covers the same period.");

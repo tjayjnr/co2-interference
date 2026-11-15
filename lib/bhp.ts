@@ -243,8 +243,8 @@ export const PROMPTS: Record<string, string> = {
   krg_endpoint: "Gas endpoint relative permeability krg0",
   krw_endpoint: "Water endpoint relative permeability krw0",
   krg_zone1: "Zone 1 gas relative permeability krg1",
-  corey_n_gas: "Gas Corey exponent ng (1 < ng <= 10; 3 = cubic closed form)",
-  corey_n_water: "Water Corey exponent nw (1 <= nw <= 10)",
+  corey_n_gas: "Gas Corey exponent ng (1 < ng < 6; 3 = cubic closed form)",
+  corey_n_water: "Water Corey exponent nw (1 < nw < 6)",
   skin: "Skin factor",
 };
 
@@ -276,10 +276,8 @@ export function validate(p: Inputs): void {
   for (const name of ["rock_compressibility_per_psi"] as const) {
     if (active.includes(name) && p[name] < 0) fail(`${name} cannot be negative.`);
   }
-  if (p.phase_mode === "two" && !(p.corey_n_gas > 1 && p.corey_n_gas <= 10)) {
-    fail("corey_n_gas must satisfy 1 < value <= 10 (a gas exponent of 1 or less has no leading shock front).");
-  }
-  if (p.phase_mode === "two" && !(p.corey_n_water >= 1 && p.corey_n_water <= 10)) fail("corey_n_water must satisfy 1 <= value <= 10.");
+  if (p.phase_mode === "two" && !(p.corey_n_gas > 1 && p.corey_n_gas < 6)) fail("corey_n_gas must satisfy 1 < value < 6.");
+  if (p.phase_mode === "two" && !(p.corey_n_water > 1 && p.corey_n_water < 6)) fail("corey_n_water must satisfy 1 < value < 6.");
   const tK = ((p.temperature_F + 459.67) * 5.0) / 9.0;
   if (tK <= 0) fail("Absolute reservoir temperature must be positive.");
   if (p.phase_mode === "two" || isWaterMode(p)) waterProperties(p.initial_pressure_psia, p);
