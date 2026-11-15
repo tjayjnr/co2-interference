@@ -39,6 +39,9 @@ https://co2-interference.vercel.app · repo: github.com/tjayjnr/co2-interference
 - `lib/mwfield.ts` – `MultiwellField`: the multiwell program evaluated at any point/time for the maps, curves, matrix and
   boundary comparison (coupled solve at that time; frozen-source falloff after the endpoint). Used for both systems
   (single well = one-well multiwell run, equal to the single-well program within the 1e-4 psi tolerance). Returns MPa.
+- `lib/runJob.ts` + `lib/run.worker.ts` + `lib/workerClient.ts` – RUN, the Well BHP tab's own runs and the boundary comparison
+  run in a Web Worker (the page never freezes); the worker also pre-solves the field (`MultiwellField.prime`: snapshots at
+  the curve times, every source's shut-in falloff) so the page only looks values up. Results must stay structured-cloneable.
 - `lib/physics.ts` – shared types, rate schedules, image sources, time grid, pressure limit. `lib/saturation.ts` – Buckley–Leverett map.
 - `lib/geo.ts`, `lib/units.ts`, `lib/csv.ts`, `lib/charts.ts` (+ `contour.ts`, `streamlines.ts`), `lib/report.ts` (PDF/Word report).
 - `app/page.tsx` – the UI: Well system (Single well / Multiwell interference) first, then model and boundary, reservoir and

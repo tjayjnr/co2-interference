@@ -569,3 +569,4 @@ h2 { letter-spacing: .08em; }
 @keyframes run-bar { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
 body:has(.run-toast) { cursor: progress; }
 @media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2s; } .run-toast-bar i { animation: none; width: 100%; opacity: .6; } }
+.calc-note { display: flex; align-items: center; gap: 8px; color: var(--accent); }

@@ -1,7 +1,8 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { flushSync } from "react-dom";
+import type { FieldJob, RunJob, RunResult, SingleJob } from "@/lib/runJob";
+import { runTask } from "@/lib/workerClient";
 import ChartView from "@/components/ChartView";
 import NumField from "@/components/NumField";
 import { COLORMAP_LABELS, render, type ChartSpec, type MapStyle, type Series } from "@/lib/charts";
@@ -17,7 +18,7 @@ import {
 import { renderBhpPlot } from "@/lib/bhpPlot";
 import {
   configureWellGeometry, cumulativeRateDays, makeWell, multiwellCalculation, multiwellFiles, runMultiwell, wellSeparations,
-  type GeometryInput, type Images, type MWell, type MultiwellRun,
+  type GeometryInput, type Images, type MWell, type MultiwellResult, type MultiwellRun,
 } from "@/lib/multiwell";
 import { MultiwellField } from "@/lib/mwfield";
 import { renderMultiwellMatrix, renderMultiwellPressure } from "@/lib/multiwellPlot";
@@ -137,6 +138,17 @@ const newWellIn = (i: number, x = i * 1000 * FT, y = 0): WellIn => ({
 });
 const DEFAULT_WELLS: WellIn[] = [0, 1, 2, 3].map((i) => newWellIn(i));
 const DEFAULT_POINTS: PointIn[] = [{ id: "p1", name: "Legacy well", x: 2500, y: -1500 }];
+
+/** The post-shut-in observation of a set of inputs: duration and the years after shut-in that are reported. */
+function obsOf(c: { observe: string; obsPeriod: string; obsYears: string }): { period: number; offsets: number[] } {
+  if (c.observe === "no") return { period: 0, offsets: [] };
+  try {
+    const period = parsePyFloat(c.obsPeriod);
+    return { period, offsets: observationSchedule(period, c.obsYears.trim()).offsets.map((o) => o.v) };
+  } catch {
+    return { period: 0, offsets: [] };
+  }
+}
 
 type View = "mw" | "sat" | "map" | "series" | "bhp" | "matrix" | "limits" | "compare";
 type Mode = "total" | "interference" | "bhp";
@@ -394,18 +406,29 @@ export default function Page() {
   // ---- RUN ----
   const [applied, setApplied] = useState<Inputs | null>(null);
   const [runId, setRunId] = useState(0);
-  // RUN shows a running indicator first: wait until the browser has painted it, then calculate synchronously (flushSync),
-  // then keep the indicator up for at least 450 ms so even a fast run gives visible feedback.
+  // RUN: the calculation runs in a background worker (lib/run.worker.ts), so the page never freezes. The applied inputs
+  // and the results change together when it is done; the "Running…" indicator stays at least 450 ms.
   const [running, setRunning] = useState(false);
+  const [run, setRun] = useState<RunResult>({ program: null, multi: null, fieldRun: null, error: "" });
   const runNow = () => {
     if (obsCheck.error || running) return;
     const snapshot = inputsL;
     const started = performance.now();
     setRunning(true);
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      try { flushSync(() => { setApplied(snapshot); setRunId((n) => n + 1); }); }
-      finally { window.setTimeout(() => setRunning(false), Math.max(0, 450 - (performance.now() - started))); }
-    }));
+    const done = (out: RunResult) => {
+      setApplied(snapshot);
+      setRun(out);
+      setRunId((n) => n + 1);
+      window.setTimeout(() => setRunning(false), Math.max(0, 450 - (performance.now() - started)));
+    };
+    let job: RunJob;
+    try {
+      job = buildRunJob(snapshot);
+    } catch (e) {
+      done({ program: null, multi: null, fieldRun: null, error: errText(e) });
+      return;
+    }
+    runTask<RunResult>({ type: "run", job }).then(done, (e) => done({ program: null, multi: null, fieldRun: null, error: errText(e) }));
   };
   // Names are cosmetic (they update everywhere without a new RUN), so they are ignored when checking for stale results.
   const sig = (i: Inputs) => JSON.stringify({ ...i, wells: i.wells.map(({ name, ...r }) => (void name, r)), points: i.points.map(({ name, ...r }) => (void name, r)), mwells: i.mwells.map(({ name, ...r }) => (void name, r)) });
@@ -444,15 +467,7 @@ export default function Page() {
   const rateCat: Cat = water ? "waterrate" : "gasrate";
   const rateCatL: Cat = modelL === "water" ? "waterrate" : "gasrate";
 
-  const obsApplied = useMemo(() => {
-    if (cur.observe === "no") return { period: 0, offsets: [] as number[] };
-    try {
-      const period = parsePyFloat(cur.obsPeriod);
-      return { period, offsets: observationSchedule(period, cur.obsYears.trim()).offsets.map((o) => o.v) };
-    } catch {
-      return { period: 0, offsets: [] as number[] };
-    }
-  }, [cur.observe, cur.obsPeriod, cur.obsYears]);
+  const obsApplied = useMemo(() => obsOf(cur), [cur.observe, cur.obsPeriod, cur.obsYears]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** Image wells of every source for a straight boundary: distance (ft) from each receiving well to each image. */
   const imagesFor = (ws: Well[], b: Boundary): Images | null => {
@@ -460,59 +475,48 @@ export default function Page() {
     return ws.map((w) => sourcesFor(w, b).filter((s) => !s.real).map((s) => ({ d: ws.map((r) => Math.hypot(r.x - s.x, r.y - s.y) / FT), sign: s.sign })));
   };
 
-  // The run of the program for the applied inputs: single well (single-well section) or multiwell interference.
-  const run = useMemo((): { program: RunOutput | null; multi: MultiwellRun | null; fieldRun: ReturnType<typeof runMultiwell> | null; error: string } => {
-    if (!applied) return { program: null, multi: null, fieldRun: null, error: "" };
-    const c = applied;
+  // The job of a RUN (single well: the single-well section; multiwell interference: the multiwell section), with what the
+  // page's pressure field needs so the worker solves it in advance.
+  const buildRunJob = (c: Inputs): RunJob => {
     const p = toBhp(c.res, c.fl, c.model, c.system);
     const spec = limitSpec(c.limit);
-    const period = c.observe === "yes" ? obsApplied.period : 0;
-    try {
-      if (c.system === "single") {
-        const w = c.wells[0];
-        const pp: BhpInputs = { ...p, q_Mscf_day: w.rate, water_rate_stb_day: w.rate, skin: w.skin, observation_period_years: period, observation_years: period > 0 ? c.obsYears.trim() : "" };
-        const { results, constants } = runModel(pp, c.single.years);
-        const observation = calculateObservation(results[results.length - 1], pp, true);
-        const firstYear = calculateFirstYearDetail(results, pp, constants);
-        const program = withPressureLimit({ label: BROWSER_PHASES[c.model][2], years: c.single.years, p: pp, results, constants, observation, firstYear }, spec);
-        const fieldRun = runMultiwell(pp, [toMWell(w, pp, c.res.wellboreRadiusM, c.model)], c.single.years, "", { detail: false, pressureLimit: spec, images: imagesFor(c.wells, c.boundary) });
-        return { program, multi: null, fieldRun, error: "" };
-      }
-      const mr = multiwellCalculation({
-        p, wells: c.mwells, geometry: c.geomInput, years: c.years, report_times: c.reportTimes,
-        observe: c.observe, period: c.obsPeriod, offsets: c.obsYears, limit: spec,
-      });
-      const r = mr.result;
-      const fieldRun = c.boundary.type === "none" ? r : runMultiwell(r.parameters, r.wells, r.years, "", { detail: false, pressureLimit: spec, images: imagesFor(c.wells, c.boundary) });
-      return { program: null, multi: mr, fieldRun, error: "" };
-    } catch (e) {
-      return { program: null, multi: null, fieldRun: null, error: errText(e) };
+    const obs = obsOf(c);
+    const prime = { wells: c.wells, boundary: c.boundary, horizon: c.horizon, offsets: obs.offsets };
+    const images = imagesFor(c.wells, c.boundary);
+    if (c.system === "single") {
+      const w = c.wells[0];
+      const period = c.observe === "yes" ? obs.period : 0;
+      const pp: BhpInputs = { ...p, q_Mscf_day: w.rate, water_rate_stb_day: w.rate, skin: w.skin, observation_period_years: period, observation_years: period > 0 ? c.obsYears.trim() : "" };
+      return { kind: "single", program: { p: pp, years: c.single.years, label: BROWSER_PHASES[c.model][2], limit: spec }, well: toMWell(w, pp, c.res.wellboreRadiusM, c.model), images, prime };
     }
-  }, [applied, obsApplied]); // eslint-disable-line react-hooks/exhaustive-deps
+    return {
+      kind: "multi",
+      form: { p, wells: c.mwells, geometry: c.geomInput, years: c.years, report_times: c.reportTimes, observe: c.observe, period: c.obsPeriod, offsets: c.obsYears, limit: spec },
+      boundaryNone: c.boundary.type === "none", limit: spec, images, prime,
+    };
+  };
 
   // The pressure field of the run (maps and curves), and the same wells with the other boundary conditions on demand.
   const field = useMemo(
     () => new MultiwellField(run.fieldRun, applied ? cur.wells : [], boundary, horizon, obsApplied.offsets, run.error || null),
     [run, applied, cur.wells, boundary, horizon, obsApplied],
   );
-  const fieldCache = useMemo(() => new Map<Boundary["type"], MultiwellField>(), [run, cur.wells, boundary, horizon, obsApplied]); // eslint-disable-line react-hooks/exhaustive-deps
-  const fieldFor = (type: Boundary["type"]): MultiwellField => {
-    if (type === boundary.type) return field;
-    const hit = fieldCache.get(type);
+  // The same wells with the other boundary conditions (comparison tab and report): runs in the worker, cached per RUN.
+  const boundaryRuns = useRef<{ runId: number; jobs: Map<Boundary["type"], Promise<MultiwellField>> }>({ runId: -1, jobs: new Map() });
+  const fieldForAsync = (type: Boundary["type"]): Promise<MultiwellField> => {
+    if (type === boundary.type || !run.fieldRun) return Promise.resolve(field);
+    if (boundaryRuns.current.runId !== runId) boundaryRuns.current = { runId, jobs: new Map() };
+    const hit = boundaryRuns.current.jobs.get(type);
     if (hit) return hit;
-    let f: MultiwellField;
     const base = run.fieldRun;
-    if (!base) f = field;
-    else {
-      try {
-        const r = runMultiwell(base.parameters, base.wells, base.years, "", { detail: false, pressureLimit: base.pressure_limit, images: imagesFor(cur.wells, { ...boundary, type }) });
-        f = new MultiwellField(r, cur.wells, { ...boundary, type }, horizon, obsApplied.offsets);
-      } catch (e) {
-        f = new MultiwellField(null, cur.wells, { ...boundary, type }, horizon, [], errText(e));
-      }
-    }
-    fieldCache.set(type, f);
-    return f;
+    const b2 = { ...boundary, type };
+    const job: FieldJob = { p: base.parameters, wells: base.wells, years: base.years, limit: base.pressure_limit, images: imagesFor(cur.wells, b2), prime: { wells: cur.wells, boundary: b2, horizon, offsets: obsApplied.offsets } };
+    const pr = runTask<MultiwellResult>({ type: "field", job }).then(
+      (r) => new MultiwellField(r, cur.wells, b2, horizon, obsApplied.offsets),
+      (e) => new MultiwellField(null, cur.wells, b2, horizon, [], errText(e)),
+    );
+    boundaryRuns.current.jobs.set(type, pr);
+    return pr;
   };
   const fieldError = applied ? field.error : null;
 
@@ -631,14 +635,15 @@ export default function Page() {
   // Same wells, three boundary conditions (each a run of the program with image wells; the infinite case is the program).
   // Calculated only when the comparison is shown or the report is built.
   type Case = { key: Boundary["type"]; label: string; color: string; dash?: string; perWell: { ys: number[]; peak: number; t: number }[] };
-  const computeCases = (): Case[] => {
+  const CASE_KEYS: Boundary["type"][] = ["none", "constant", "noflow"];
+  const casesFrom = (fs: MultiwellField[]): Case[] => {
     const defs: { key: Boundary["type"]; label: string; color: string; dash?: string }[] = [
       { key: "none", label: "Infinite-acting", color: "#2a6fdb" },
       { key: "constant", label: "Constant-pressure boundary", color: "#2f9e44", dash: "6 4" },
       { key: "noflow", label: "No-flow boundary", color: "#d9480f", dash: "2 4" },
     ];
-    return defs.map((d) => {
-      const f = fieldFor(d.key);
+    return defs.map((d, di) => {
+      const f = fs[di];
       const perWell = wells.map((w) => {
         const ys = times.map((t) => f.wellbore(w, t));
         const k = ys.reduce((m, v, i) => (v > ys[m] ? i : m), 0);
@@ -647,7 +652,16 @@ export default function Page() {
       return { ...d, perWell };
     });
   };
-  const cases = useMemo(() => (view === "compare" && applied ? computeCases() : []), [view, applied, wells, times, field]); // eslint-disable-line react-hooks/exhaustive-deps
+  const computeCases = async (): Promise<Case[]> => casesFrom(await Promise.all(CASE_KEYS.map(fieldForAsync)));
+  const [caseFields, setCaseFields] = useState<{ runId: number; fs: MultiwellField[] } | null>(null);
+  useEffect(() => {
+    if (view !== "compare" || !applied || caseFields?.runId === runId) return;
+    let live = true;
+    Promise.all(CASE_KEYS.map(fieldForAsync)).then((fs) => { if (live) setCaseFields({ runId, fs }); });
+    return () => { live = false; };
+  }, [view, applied, runId, caseFields]); // eslint-disable-line react-hooks/exhaustive-deps
+  const casesPending = view === "compare" && !!applied && caseFields?.runId !== runId;
+  const cases = useMemo(() => (view === "compare" && applied && caseFields?.runId === runId ? casesFrom(caseFields.fs) : []), [view, applied, wells, times, field, caseFields, runId]); // eslint-disable-line react-hooks/exhaustive-deps
   const cmpIdx = Math.min(cmpWell, Math.max(wells.length - 1, 0));
   const bhpIdx = Math.min(bhpWell, Math.max(wells.length - 1, 0));
 
@@ -728,32 +742,36 @@ export default function Page() {
   // and the post-shut-in observation entered in the Input section.
   // Single well: the run itself. Multiwell: the selected well run on its own (its rate, radius, skin, evaporation choice and
   // own maximum BHP; injection from its start year to its end year, in whole years).
-  const code = useMemo((): { out: RunOutput | null; error: string; note: string } => {
-    if (!applied) return { out: null, error: "", note: "" };
-    if (!multi) return { out: run.program, error: run.error, note: "" };
-    if (view !== "bhp") return { out: null, error: "", note: "" }; // only for the Well BHP tab: not calculated before it is opened
+  const bhpKey = `${runId}|${bhpIdx}`;
+  const [codeRes, setCodeRes] = useState<{ key: string; out: RunOutput | null; error: string; note: string } | null>(null);
+  useEffect(() => {
+    if (!applied || !multi || view !== "bhp" || codeRes?.key === bhpKey) return;
     const w = wells[bhpIdx];
-    if (!w) return { out: null, error: "", note: "" };
+    if (!w) return;
     const years = Math.max(1, Math.round(w.endYr - w.startYr));
     const notes: string[] = [];
     if (Math.abs(w.endYr - w.startYr - years) > 1e-9) notes.push(`the injection period is rounded to ${years} whole years`);
     if ((w.changes ?? []).some((ch) => ch.yr > w.startYr && ch.yr < w.endYr)) notes.push("the program uses one constant rate, the first rate of the well (its rate changes are only in the multiwell results)");
-    try {
-      const period = cur.observe === "yes" ? obsApplied.period : 0;
-      const p: BhpInputs = {
-        ...bhpIn, q_Mscf_day: w.rate, water_rate_stb_day: w.rate, skin: w.skin, rw_ft: (w.rwM ?? B0.rw_ft * FT) / FT,
-        include_evaporation: model === "two" && w.evaporation && w.evaporation !== "inherit" ? w.evaporation === "on" : bhpIn.include_evaporation,
-        observation_period_years: period, observation_years: period > 0 ? cur.obsYears.trim() : "",
-      };
-      const { results, constants } = runModel(p, years);
-      const observation = calculateObservation(results[results.length - 1], p, true);
-      const firstYear = calculateFirstYearDetail(results, p, constants);
-      const limit = w.maxBhpMPa !== null && w.maxBhpMPa !== undefined ? { mode: "max_bhp", max_bhp_psia: w.maxBhpMPa / PSI } : limitSpec(cur.limit);
-      return { out: withPressureLimit({ label: BROWSER_PHASES[model][2], years, p, results, constants, observation, firstYear }, limit), error: "", note: notes.join("; ") };
-    } catch (e) {
-      return { out: null, error: errText(e), note: notes.join("; ") };
-    }
-  }, [applied, multi, run, wells, bhpIdx, bhpIn, cur.observe, cur.obsYears, cur.limit, obsApplied, model, view]); // eslint-disable-line react-hooks/exhaustive-deps
+    const period = cur.observe === "yes" ? obsApplied.period : 0;
+    const p: BhpInputs = {
+      ...bhpIn, q_Mscf_day: w.rate, water_rate_stb_day: w.rate, skin: w.skin, rw_ft: (w.rwM ?? B0.rw_ft * FT) / FT,
+      include_evaporation: model === "two" && w.evaporation && w.evaporation !== "inherit" ? w.evaporation === "on" : bhpIn.include_evaporation,
+      observation_period_years: period, observation_years: period > 0 ? cur.obsYears.trim() : "",
+    };
+    const limit = w.maxBhpMPa !== null && w.maxBhpMPa !== undefined ? { mode: "max_bhp" as const, max_bhp_psia: w.maxBhpMPa / PSI } : limitSpec(cur.limit);
+    const job: SingleJob = { p, years, label: BROWSER_PHASES[model][2], limit };
+    const key = bhpKey;
+    let live = true;
+    runTask<RunOutput>({ type: "single", job }).then(
+      (out) => { if (live) setCodeRes({ key, out, error: "", note: notes.join("; ") }); },
+      (e) => { if (live) setCodeRes({ key, out: null, error: errText(e), note: notes.join("; ") }); },
+    );
+    return () => { live = false; };
+  }, [applied, multi, view, bhpKey, codeRes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const code: { out: RunOutput | null; error: string; note: string } = !applied ? { out: null, error: "", note: "" }
+    : !multi ? { out: run.program, error: run.error, note: "" }
+    : codeRes?.key === bhpKey ? codeRes : { out: null, error: "", note: "" };
+  const codePending = !!applied && multi && view === "bhp" && codeRes?.key !== bhpKey;
   const codePlot = useMemo(() => (code.out ? renderBhpPlot(code.out) : null), [code.out]);
   const codeFiles = useMemo(() => (code.out ? outputFiles(code.out) : null), [code.out]);
   const saveCodePlot = async () => {
@@ -814,20 +832,29 @@ export default function Page() {
   const specStack = useMemo(stackSpec, [fieldDrivers, pU]);
   const specCompare = useMemo(() => (wells.length && cases.length ? compareSpec(cmpIdx, cases) : null), [cases, cmpIdx, lim, pU, times]);
   // BHP of the selected well with interference, and the same well alone (exactly the program for one well)
+  const [aloneRes, setAloneRes] = useState<{ key: string; f: MultiwellField } | null>(null);
+  useEffect(() => {
+    if (!applied || !multi || view !== "bhp" || aloneRes?.key === bhpKey) return;
+    const base = run.fieldRun;
+    const b0 = { ...boundary, type: "none" as const };
+    const key = bhpKey;
+    if (!base || !cur.wells[bhpIdx]) return;
+    const job: FieldJob = { p: base.parameters, wells: [base.wells[bhpIdx]], years: base.years, limit: null, images: null, prime: { wells: [cur.wells[bhpIdx]], boundary: b0, horizon, offsets: obsApplied.offsets } };
+    let live = true;
+    runTask<MultiwellResult>({ type: "field", job }).then(
+      (r) => { if (live) setAloneRes({ key, f: new MultiwellField(r, [cur.wells[bhpIdx]], b0, horizon, obsApplied.offsets) }); },
+      (e) => { if (live) setAloneRes({ key, f: new MultiwellField(null, [cur.wells[bhpIdx]], b0, horizon, [], errText(e)) }); },
+    );
+    return () => { live = false; };
+  }, [applied, multi, view, bhpKey, aloneRes]); // eslint-disable-line react-hooks/exhaustive-deps
   const specWellBhp = useMemo(() => {
     const w = wells[bhpIdx];
-    if (!w || view !== "bhp") return null; // only for the Well BHP tab
+    if (!w || view !== "bhp" || aloneRes?.key !== bhpKey) return null; // only for the Well BHP tab, once the worker is done
     const all = buildSeries("bhp");
-    const base = run.fieldRun;
-    let alone: MultiwellField;
-    try {
-      alone = new MultiwellField(base ? runMultiwell(base.parameters, [base.wells[bhpIdx]], base.years, "", { detail: false }) : null, [cur.wells[bhpIdx]], { ...boundary, type: "none" }, horizon, obsApplied.offsets);
-    } catch (e) {
-      alone = new MultiwellField(null, [cur.wells[bhpIdx]], { ...boundary, type: "none" }, horizon, [], errText(e));
-    }
+    const alone = aloneRes.f;
     const own: Series = { name: `${w.name} alone`, color: "#111111", dash: "5 4", x: times, y: times.map((t) => lim.initialMPa + alone.wellbore(w, t)) };
     return lineSpec("bhp", [{ ...all[bhpIdx], name: `${w.name} with interference from the other wells` }, own], true);
-  }, [wells, points, times, field, run, bhpIdx, lim, pU, tNow, horizon, boundary, obsApplied, view]);
+  }, [wells, points, times, field, run, bhpIdx, lim, pU, tNow, horizon, boundary, obsApplied, view, aloneRes, bhpKey]);
   /* eslint-enable react-hooks/exhaustive-deps */
 
   const updWell = (id: string, patch: Partial<WellIn>) => setWells((ws) => ws.map((w) => (w.id === id ? { ...w, ...patch } : w)));
@@ -935,7 +962,7 @@ export default function Page() {
         const r = render(spec, "light");
         return { png: await svgToPngDataUrl(r.svg, r.width, r.height, 2), w: r.width, h: r.height };
       };
-      const cases = computeCases();
+      const cases = await computeCases();
       const figures = {
         sat: two ? await fig(satSpec(satGrid(wells, vols, satGeom, satModel, extent))) : undefined,
         map: await fig(mapSpec(field.grid(null, tNow, extentP, 180, 180))),
@@ -1920,6 +1947,7 @@ export default function Page() {
 
               {viewEff === "bhp" && wells[bhpIdx] && (
                 <>
+                  {codePending && <p className="hint calc-note"><span className="spin" aria-hidden="true" /> Calculating {wells[bhpIdx].name} on its own…</p>}
                   {multi && specWellBhp && <ChartView key={`wbhp-${runId}-${bhpIdx}`} spec={specWellBhp} title={`Bottom-hole pressure of ${wells[bhpIdx].name}, with interference from the other wells`} filename={`${wells[bhpIdx].name}-bhp`} />}
                   {code.out && codePlot && (
                     <div className="plotwrap" role="img" aria-label="Bottom-hole pressure versus elapsed time" dangerouslySetInnerHTML={{ __html: codePlot.svg.replace(`width="${codePlot.width}" height="${codePlot.height}"`, 'width="100%"') }} />
@@ -2038,6 +2066,7 @@ export default function Page() {
                 </>
               )}
 
+              {viewEff === "compare" && casesPending && <p className="hint calc-note"><span className="spin" aria-hidden="true" /> Calculating the three boundary cases…</p>}
               {viewEff === "compare" && (
                 <>
                   <div className="controls">

@@ -75,6 +75,22 @@ export class MultiwellField {
     }
   }
 
+  /**
+   * Solve in advance everything the curves and maps need (run in the background worker): the coupled solve at each of
+   * the given times and every source's falloff after the endpoint. They are stored on the result (`snapshots`,
+   * `observationFrozen`), so a field built from it on the page only looks them up.
+   */
+  prime(times: number[]): void {
+    const r = this.r;
+    if (!r || this.error) return;
+    for (const t of times) if (t > 0 && t <= this.endpoint) this.snap(t);
+    if (r.parameters.phase_mode === "two" && this.horizon > this.endpoint) {
+      const frozen = this.wells.map((_, k) => this.frozenOf(k));
+      r.observationFrozen = frozen;
+    }
+    r.snapshots = [...this.snaps.values()].sort((a, b) => a.year - b.year);
+  }
+
   /** Fixed-zone falloff of source k after the endpoint (solved once). */
   private frozenOf(k: number): FrozenSource | null {
     if (this.frozen.has(k)) return this.frozen.get(k) ?? null;

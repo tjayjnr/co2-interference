@@ -173,3 +173,22 @@ test("front figure: the overlap is shaded only for interfering wells", async () 
   // the circles keep the program's front radii
   for (const s of r.end_snapshot.states) assert.ok(svg.includes("r=\"") && s.rg_ft > 0);
 });
+
+test("background RUN job: same program results, and the pre-solved field equals a field solved on the page", async () => {
+  const { executeRun } = await import("../lib/runJob.ts");
+  const { MultiwellField } = await import("../lib/mwfield.ts");
+  const p = { ...DEFAULT_INPUTS };
+  const form = { p, wells: [], geometry: { number: 3, spacing_ft: 1000 }, years: "10", report_times: "", observe: "yes", period: "5", offsets: "0,1,5", limit: { mode: "none" } };
+  const pageWells = [0, 1, 2].map((i) => ({ id: "w" + i, name: "Well " + (i + 1), x: i * 304.8, y: 0, rate: 150, startYr: 0, endYr: 10, skin: 0 }));
+  const prime = { wells: pageWells, boundary: { type: "none" }, horizon: 15, offsets: [0, 1, 5] };
+  const out = structuredClone(executeRun({ kind: "multi", form, boundaryNone: true, limit: { mode: "none" }, images: null, prime }));
+  assert.equal(out.error, "");
+  const direct = multiwellCalculation(form);
+  out.multi.result.summary.forEach((r, i) => assert.equal(r.BHP_psia, direct.result.summary[i].BHP_psia));
+  const primed = new MultiwellField(out.fieldRun, pageWells, prime.boundary, 15, prime.offsets);
+  const plain = new MultiwellField(direct.result, pageWells, prime.boundary, 15, prime.offsets);
+  for (const t of [0.5, 3, 10, 11, 15]) for (const w of pageWells) {
+    const a = primed.wellbore(w, t), b = plain.wellbore(w, t);
+    assert.ok(Math.abs(a - b) / 0.006894757 < 2e-3, `t=${t} ${w.name}: ${a} vs ${b}`);
+  }
+});
