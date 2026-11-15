@@ -731,6 +731,7 @@ export default function Page() {
   const code = useMemo((): { out: RunOutput | null; error: string; note: string } => {
     if (!applied) return { out: null, error: "", note: "" };
     if (!multi) return { out: run.program, error: run.error, note: "" };
+    if (view !== "bhp") return { out: null, error: "", note: "" }; // only for the Well BHP tab: not calculated before it is opened
     const w = wells[bhpIdx];
     if (!w) return { out: null, error: "", note: "" };
     const years = Math.max(1, Math.round(w.endYr - w.startYr));
@@ -752,7 +753,7 @@ export default function Page() {
     } catch (e) {
       return { out: null, error: errText(e), note: notes.join("; ") };
     }
-  }, [applied, multi, run, wells, bhpIdx, bhpIn, cur.observe, cur.obsYears, cur.limit, obsApplied, model]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [applied, multi, run, wells, bhpIdx, bhpIn, cur.observe, cur.obsYears, cur.limit, obsApplied, model, view]); // eslint-disable-line react-hooks/exhaustive-deps
   const codePlot = useMemo(() => (code.out ? renderBhpPlot(code.out) : null), [code.out]);
   const codeFiles = useMemo(() => (code.out ? outputFiles(code.out) : null), [code.out]);
   const saveCodePlot = async () => {
@@ -815,7 +816,7 @@ export default function Page() {
   // BHP of the selected well with interference, and the same well alone (exactly the program for one well)
   const specWellBhp = useMemo(() => {
     const w = wells[bhpIdx];
-    if (!w) return null;
+    if (!w || view !== "bhp") return null; // only for the Well BHP tab
     const all = buildSeries("bhp");
     const base = run.fieldRun;
     let alone: MultiwellField;
@@ -826,7 +827,7 @@ export default function Page() {
     }
     const own: Series = { name: `${w.name} alone`, color: "#111111", dash: "5 4", x: times, y: times.map((t) => lim.initialMPa + alone.wellbore(w, t)) };
     return lineSpec("bhp", [{ ...all[bhpIdx], name: `${w.name} with interference from the other wells` }, own], true);
-  }, [wells, points, times, field, run, bhpIdx, lim, pU, tNow, horizon, boundary, obsApplied]);
+  }, [wells, points, times, field, run, bhpIdx, lim, pU, tNow, horizon, boundary, obsApplied, view]);
   /* eslint-enable react-hooks/exhaustive-deps */
 
   const updWell = (id: string, patch: Partial<WellIn>) => setWells((ws) => ws.map((w) => (w.id === id ? { ...w, ...patch } : w)));

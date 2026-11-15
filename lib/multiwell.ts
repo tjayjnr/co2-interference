@@ -645,6 +645,8 @@ export interface MultiwellResult {
   frozen: (FrozenSource | null)[];
   frozenStates: (Row | null)[];
   frozenBhp: number[];
+  /** website: each source's shut-in falloff solved by calculateMultiwellObservation (reused by the maps and curves) */
+  observationFrozen?: (FrozenSource | null)[];
 }
 
 /** Distances from every receiver to each source (diagonal = the source's own well radius). */
@@ -810,13 +812,13 @@ export function frozenAt(f: FrozenSource, r: number, tau: number): number {
   return (1 - w) * interpLog(f, f.profiles[lo], r) + w * interpLog(f, f.profiles[hi], r);
 }
 
-/** `_frozen_source_observation`: samples[receiver][k] at the given years after shut-in. */
-function frozenSourceObservation(state: Row, p: Inputs, radii: number[], offsets: number[]): number[][] {
+/** `_frozen_source_observation`: samples[receiver][k] at the given years after shut-in (and the solution, for reuse). */
+function frozenSourceObservation(state: Row, p: Inputs, radii: number[], offsets: number[]): { samples: number[][]; f: FrozenSource | null } {
   const period = Math.max(...offsets);
   const initial = radialPressureFromState(radii, state, p).pressure;
-  if (period === 0) return radii.map((_, m) => offsets.map(() => initial[m]));
+  if (period === 0) return { samples: radii.map((_, m) => offsets.map(() => initial[m])), f: null };
   const f = frozenSourceSolution(state, p, radii, offsets);
-  return radii.map((r, m) => offsets.map((t) => (t === 0 ? initial[m] : frozenAt(f, r, t))));
+  return { samples: radii.map((r, m) => offsets.map((t) => (t === 0 ? initial[m] : frozenAt(f, r, t)))), f };
 }
 
 export interface MultiwellObservation {
@@ -853,11 +855,17 @@ export function calculateMultiwellObservation(result: MultiwellResult, detail = 
     } else if (p.phase_mode === "two") {
       const state = end.states[i];
       if (state) {
-        const samples = frozenSourceObservation(state, parameters, radii, times);
-        for (const img of result.images?.[i] ?? []) {
-          frozenSourceObservation(state, parameters, img.d, times).forEach((row, m) => row.forEach((v, j) => { samples[m][j] += img.sign * v; }));
+        // one solve per source; image wells (website boundary option) are sampled from the same solution
+        const imgs = result.images?.[i] ?? [];
+        const all = [...radii, ...imgs.flatMap((img) => img.d)];
+        const { samples, f } = frozenSourceObservation(state, parameters, all, times);
+        let at = radii.length;
+        for (const img of imgs) {
+          img.d.forEach((_, m) => samples[at + m].forEach((v, j) => { samples[m][j] += img.sign * v; }));
+          at += img.d.length;
         }
-        samples.forEach((row, m) => row.forEach((v, j) => { matrices[j][m][i] = v; }));
+        samples.slice(0, radii.length).forEach((row, m) => row.forEach((v, j) => { matrices[j][m][i] = v; }));
+        (result.observationFrozen ??= wells.map(() => null))[i] = f;
       }
     } else {
       times.forEach((offset, j) => {

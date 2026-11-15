@@ -82,7 +82,11 @@ export class MultiwellField {
     const state = r.end_snapshot.states[k];
     const period = this.horizon - this.endpoint;
     let f: FrozenSource | null = null;
-    if (state && period > 0) {
+    // the program's own post-shut-in solve of this source (calculateMultiwellObservation) when it covers the period:
+    // the same solution, so it is not solved a second time
+    const solved = r.observationFrozen?.[k];
+    if (state && period > 0 && solved && solved.times[solved.times.length - 1] >= period - 1e-9) f = solved;
+    else if (state && period > 0) {
       const radii = [...r.distances.map((row) => row[k]), ...(r.images?.[k] ?? []).flatMap((img) => img.d)];
       const hits = [...this.hits, period];
       for (let y = 1; y < period; y++) hits.push(y);

@@ -580,24 +580,49 @@ export function liveCo2(pressure_psia: number, temperature_F: number): { mu: num
  * nodes every 0.02 psi, computed once on first use and shared by all solves with the same fluid, linear in between
  * (relative error below 1e-9, far inside the solver tolerance).
  */
-const NODE_CACHE = new Map<string, Map<number, Float64Array>>();
+// Nodes are stored in blocks of 1024 consecutive nodes (typed arrays, with the last block used kept at hand): the same
+// node values as one value per node, without a hash lookup for every cell update.
+interface NodeBlock { v: Float64Array; ok: Uint8Array }
+const BLOCK = 1024;
+const NODE_CACHE = new Map<string, Map<number, NodeBlock>>();
 export function tabulatedProperty(key: string, m: number, fn: (pressure_psia: number) => number[], step = 0.02): (pressure_psia: number, out: Float64Array) => void {
-  let nodes = NODE_CACHE.get(key);
-  if (!nodes) { nodes = new Map(); NODE_CACHE.set(key, nodes); }
-  const cache = nodes;
-  const node = (k: number): Float64Array => {
-    let v = cache.get(k);
-    if (!v) {
-      if (cache.size > 400000) cache.clear();
-      v = Float64Array.from(fn(k * step));
-      cache.set(k, v);
+  let blocks = NODE_CACHE.get(key);
+  if (!blocks) { blocks = new Map(); NODE_CACHE.set(key, blocks); }
+  const cache = blocks;
+  let lastId = NaN;
+  let last: NodeBlock = { v: new Float64Array(0), ok: new Uint8Array(0) };
+  const blockOf = (id: number): NodeBlock => {
+    if (id === lastId) return last;
+    let b = cache.get(id);
+    if (!b) {
+      if (cache.size > 400) cache.clear();
+      b = { v: new Float64Array(BLOCK * m), ok: new Uint8Array(BLOCK) };
+      cache.set(id, b);
     }
-    return v;
+    last = b;
+    lastId = id;
+    return b;
+  };
+  const fill = (b: NodeBlock, j: number, k: number) => {
+    const vals = fn(k * step);
+    for (let i = 0; i < m; i++) b.v[j * m + i] = vals[i];
+    b.ok[j] = 1;
   };
   return (P: number, out: Float64Array) => {
     const u = P / step, k = Math.floor(u), f = u - k;
-    const x = node(k), y = node(k + 1);
-    for (let i = 0; i < m; i++) out[i] = x[i] + f * (y[i] - x[i]);
+    const id = Math.floor(k / BLOCK), j = k - id * BLOCK;
+    const bx = blockOf(id);
+    if (!bx.ok[j]) fill(bx, j, k);
+    if (j + 1 < BLOCK) {
+      if (!bx.ok[j + 1]) fill(bx, j + 1, k + 1);
+      const v = bx.v, o = j * m;
+      for (let i = 0; i < m; i++) out[i] = v[o + i] + f * (v[o + m + i] - v[o + i]);
+    } else {
+      const xv = bx.v, xo = j * m;
+      const by = blockOf(id + 1);
+      if (!by.ok[0]) fill(by, 0, k + 1);
+      for (let i = 0; i < m; i++) out[i] = xv[xo + i] + f * (by.v[i] - xv[xo + i]);
+    }
   };
 }
 
