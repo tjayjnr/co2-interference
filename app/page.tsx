@@ -827,7 +827,7 @@ export default function Page() {
     } catch (e) {
       alone = new MultiwellField(null, [cur.wells[bhpIdx]], { ...boundary, type: "none" }, horizon, [], errText(e));
     }
-    const own: Series = { name: `${w.name} alone (your program, no other wells)`, color: "#111111", dash: "5 4", x: times, y: times.map((t) => lim.initialMPa + alone.wellbore(w, t)) };
+    const own: Series = { name: `${w.name} alone`, color: "#111111", dash: "5 4", x: times, y: times.map((t) => lim.initialMPa + alone.wellbore(w, t)) };
     return lineSpec("bhp", [{ ...all[bhpIdx], name: `${w.name} with interference from the other wells` }, own], true);
   }, [wells, points, times, field, run, bhpIdx, lim, pU, tNow, horizon, boundary, obsApplied]);
   /* eslint-enable react-hooks/exhaustive-deps */

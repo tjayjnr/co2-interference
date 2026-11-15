@@ -107,21 +107,33 @@ interface LegendItem {
   kind: "line" | "box";
 }
 
-/** Wrapping legend row(s). Returns the svg fragment and its height. */
+/** Legend: one line whenever it can be made to fit (starting further left and, if needed, with slightly smaller
+ * text, down to 75 %); otherwise wrapping rows. Returns the svg fragment and its height. */
 function legendBlock(items: LegendItem[], x0: number, y0: number, maxX: number, t: Theme): { svg: string; height: number } {
   const p = palette(t);
   const rowH = 18;
+  const natural = (it: LegendItem) => 28 + it.name.length * 5.9 + 14; // Times 12 px: about 5.9 px per character
+  const total = items.reduce((a, it) => a + natural(it), 0);
+  let k = 1;
+  let wrap = false;
+  if (total > maxX - x0) {
+    x0 = Math.min(x0, 12); // use the full width for a single line
+    const fit = (maxX - x0) / total;
+    if (fit >= 0.75) k = fit;
+    else wrap = true;
+  }
   let x = x0;
   let row = 0;
   let out = "";
   for (const it of items) {
-    const w = 30 + it.name.length * 6.4 + 16;
-    if (x + w > maxX && x > x0) { x = x0; row++; }
+    const w = natural(it) * k;
+    if (wrap && x + w > maxX && x > x0) { x = x0; row++; }
     const y = y0 + row * rowH;
+    const sw = 22 * k;
     out += it.kind === "line"
-      ? `<line x1="${x}" x2="${x + 22}" y1="${y}" y2="${y}" style="stroke:${it.color};stroke-width:2.5" ${it.dash ? `stroke-dasharray="${it.dash}"` : ""}/>`
-      : `<rect x="${x}" y="${y - 6}" width="22" height="12" style="fill:${it.color}" fill-opacity="0.9"/>`;
-    out += `<text x="${x + 28}" y="${y + 4}" style="${FONT};font-size:12px;fill:${p.text}">${esc(it.name)}</text>`;
+      ? `<line x1="${f1(x)}" x2="${f1(x + sw)}" y1="${y}" y2="${y}" style="stroke:${it.color};stroke-width:2.5" ${it.dash ? `stroke-dasharray="${it.dash}"` : ""}/>`
+      : `<rect x="${f1(x)}" y="${y - 6}" width="${f1(sw)}" height="12" style="fill:${it.color}" fill-opacity="0.9"/>`;
+    out += `<text x="${f1(x + 28 * k)}" y="${y + 4}" style="${FONT};font-size:${(12 * k).toFixed(2)}px;fill:${p.text}">${esc(it.name)}</text>`;
     x += w;
   }
   return { svg: out, height: (row + 1) * rowH + 6 };
