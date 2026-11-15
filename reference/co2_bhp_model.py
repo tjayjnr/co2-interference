@@ -3919,7 +3919,7 @@ def save_multiwell_results(result, output_dir, make_plot=True, observation=None)
 def _plot_multiwell(result, folder, observation):
     try:
         import matplotlib.pyplot as plt
-        from matplotlib.patches import Circle
+        from matplotlib.patches import Circle, Rectangle
     except ImportError:
         print("Plotting skipped: install matplotlib to enable plots.")
         return
@@ -3961,25 +3961,23 @@ def _plot_multiwell(result, folder, observation):
     limits_x, limits_y = [], []
     end_states = result["end_snapshot"]["states"]
     radii = [(state.get("rg_ft", 0.0) if state else 0.0) for state in end_states]
-    # Interfering plumes touch instead of overlapping: when r_i + r_m > d_im both circles are
-    # scaled by d_im/(r_i + r_m); a well with several such neighbours takes the smallest factor.
-    factors = []
-    for i, well in enumerate(wells):
-        factor = 1.0
-        for m, other in enumerate(wells):
-            if m != i and radii[i] > 0 and radii[m] > 0:
-                d = math.hypot(well.x_ft-other.x_ft, well.y_ft-other.y_ft)
-                if radii[i]+radii[m] > d:
-                    factor = min(factor, d/(radii[i]+radii[m]))
-        factors.append(factor)
+    # Shade the plume overlap only for interfering wells: pairs with r_i + r_m > d_im.
+    overlap_pairs = [(i, m) for i in range(len(wells)) for m in range(i+1, len(wells))
+                     if radii[i] > 0 and radii[m] > 0
+                     and radii[i]+radii[m] > math.hypot(wells[i].x_ft-wells[m].x_ft, wells[i].y_ft-wells[m].y_ft)]
+    for i, m in overlap_pairs:
+        clip = Circle((wells[i].x_ft, wells[i].y_ft), radii[i], transform=axes[1].transData)
+        lens = Circle((wells[m].x_ft, wells[m].y_ft), radii[m], color="#404040", alpha=.35, linewidth=0)
+        axes[1].add_patch(lens)
+        lens.set_clip_path(clip)
     for i, (well, state) in enumerate(zip(wells, end_states)):
         color = colors(i % 10)
-        radius = radii[i]*factors[i]
+        radius = radii[i]
         if radius:
             axes[1].add_patch(Circle((well.x_ft, well.y_ft), radius, fill=False, color=color, linewidth=1.5))
             dry = state.get("dry_zone_thickness_ft", 0)
             if dry > 0:
-                axes[1].add_patch(Circle((well.x_ft, well.y_ft), state["rd_ft"]*factors[i], color=color, alpha=.25))
+                axes[1].add_patch(Circle((well.x_ft, well.y_ft), state["rd_ft"], color=color, alpha=.25))
         axes[1].plot(well.x_ft, well.y_ft, "o", color=color)
         axes[1].annotate(well.name, (well.x_ft, well.y_ft), xytext=(5, 5), textcoords="offset points")
         extent = max(radius, 20.0)
@@ -3990,9 +3988,9 @@ def _plot_multiwell(result, folder, observation):
     axes[1].set_xlim(min(limits_x)-50, max(limits_x)+50)
     axes[1].set_ylim(min(limits_y)-50, max(limits_y)+50)
     axes[1].grid(alpha=.2)
-    if any(factor < 1 for factor in factors):
-        axes[1].text(.5, -.16, "Interfering plumes drawn touching (circles scaled by d / (r_i + r_m)); table radii unchanged.",
-                     transform=axes[1].transAxes, ha="center", fontsize=8, color="#444")
+    if overlap_pairs:
+        axes[1].add_patch(Rectangle((0, 0), 0, 0, color="#404040", alpha=.35, label="Plume overlap between interfering wells"))
+        axes[1].legend(loc="upper center", bbox_to_anchor=(.5, -.12), fontsize=8, frameon=False)
     fig.savefig(folder/"multiwell_matrix_and_fronts.png", dpi=180)
     plt.close(fig)
 

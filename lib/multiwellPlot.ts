@@ -104,20 +104,15 @@ function ylOrRd(t: number): string {
   return `rgb(${a.map((v, k) => Math.round(v + f * (b[k] - v))).join(",")})`;
 }
 
-/** Display radii for the front circles of interfering wells. Each well's individual estimate r_i is drawn unchanged
- * unless its circle would overlap a neighbour's (r_i + r_m > d_im). Then both are scaled by d_im / (r_i + r_m), so the
- * two circles touch at one point instead of overlapping (plumes meet; they do not pass through each other). A well
- * with several such neighbours takes the smallest factor, so no pair of circles overlaps. Returns the factor per well. */
-export function touchingFrontFactors(wells: { x_ft: number; y_ft: number }[], radii: number[]): number[] {
-  return wells.map((w, i) => {
-    let f = 1;
-    wells.forEach((o, m) => {
-      if (m === i || !(radii[i] > 0) || !(radii[m] > 0)) return;
-      const d = Math.hypot(w.x_ft - o.x_ft, w.y_ft - o.y_ft);
-      if (radii[i] + radii[m] > d) f = Math.min(f, d / (radii[i] + radii[m]));
-    });
-    return f;
-  });
+/** Pairs of wells whose individual front circles overlap (r_i + r_m > d_im, both plumes present): the interfering
+ * wells whose overlap is shaded in the front figure. Each pair once, i < m. */
+export function overlappingFrontPairs(wells: { x_ft: number; y_ft: number }[], radii: number[]): [number, number][] {
+  const pairs: [number, number][] = [];
+  for (let i = 0; i < wells.length; i++) for (let m = i + 1; m < wells.length; m++) {
+    if (!(radii[i] > 0) || !(radii[m] > 0)) continue;
+    if (radii[i] + radii[m] > Math.hypot(wells[i].x_ft - wells[m].x_ft, wells[i].y_ft - wells[m].y_ft)) pairs.push([i, m]);
+  }
+  return pairs;
 }
 
 /** multiwell_matrix_and_fronts.png */
@@ -155,11 +150,11 @@ export function renderMultiwellMatrix(result: MultiwellResult): Svg {
   g += `<text transform="translate(${cbx + 72},${cby + cbh / 2}) rotate(-90)" text-anchor="middle" font-size="11.5">Pressure contribution (psi)</text>`;
   // right: front circles
   const states = result.end_snapshot.states;
-  // interfering plumes touch instead of overlapping (touchingFrontFactors)
-  const factor = touchingFrontFactors(wells, wells.map((_, i) => states[i]?.rg_ft ?? 0));
+  const radii = wells.map((_, i) => states[i]?.rg_ft ?? 0);
+  const pairs = overlappingFrontPairs(wells, radii);
   const lx: number[] = [], ly: number[] = [];
   wells.forEach((w, i) => {
-    const radius = (states[i]?.rg_ft ?? 0) * factor[i];
+    const radius = radii[i];
     const e = Math.max(radius, 20.0);
     lx.push(w.x_ft - e, w.x_ft + e);
     ly.push(w.y_ft - e, w.y_ft + e);
@@ -176,13 +171,19 @@ export function renderMultiwellMatrix(result: MultiwellResult): Svg {
   for (const t of xt) if (PX(t) >= ax.x && PX(t) <= ax.x + ax.w) g += `<line x1="${PX(t)}" x2="${PX(t)}" y1="${ax.y}" y2="${ax.y + ax.h}" stroke="#b0b0b0" stroke-opacity="0.2"/><text x="${PX(t)}" y="${ax.y + ax.h + 17}" text-anchor="middle" font-size="11">${fmt(t, xs)}</text>`;
   for (const t of yt) if (PY(t) >= ax.y && PY(t) <= ax.y + ax.h) g += `<line x1="${ax.x}" x2="${ax.x + ax.w}" y1="${PY(t)}" y2="${PY(t)}" stroke="#b0b0b0" stroke-opacity="0.2"/><text x="${ax.x - 7}" y="${PY(t) + 4}" text-anchor="end" font-size="11">${fmt(t, ys)}</text>`;
   g += `<clipPath id="fr"><rect x="${ax.x}" y="${ax.y}" width="${ax.w}" height="${ax.h}"/></clipPath><g clip-path="url(#fr)">`;
+  // shaded overlap of each interfering pair: circle m clipped by circle i (handles one circle inside the other)
+  pairs.forEach(([i, m], k) => {
+    const [a, b] = [wells[i], wells[m]];
+    g += `<clipPath id="fr-ov-${k}"><circle cx="${PX(a.x_ft)}" cy="${PY(a.y_ft)}" r="${radii[i] * sc}"/></clipPath>`;
+    g += `<circle cx="${PX(b.x_ft)}" cy="${PY(b.y_ft)}" r="${radii[m] * sc}" fill="#404040" fill-opacity="0.35" clip-path="url(#fr-ov-${k})"/>`;
+  });
   wells.forEach((w, i) => {
     const col = TAB10[i % 10];
     const s = states[i];
-    const radius = (s?.rg_ft ?? 0) * factor[i];
+    const radius = radii[i];
     if (radius) {
       g += `<circle cx="${PX(w.x_ft)}" cy="${PY(w.y_ft)}" r="${radius * sc}" fill="none" stroke="${col}" stroke-width="1.5"/>`;
-      if ((s?.dry_zone_thickness_ft ?? 0) > 0) g += `<circle cx="${PX(w.x_ft)}" cy="${PY(w.y_ft)}" r="${(s as Row).rd_ft * factor[i] * sc}" fill="${col}" fill-opacity="0.25"/>`;
+      if ((s?.dry_zone_thickness_ft ?? 0) > 0) g += `<circle cx="${PX(w.x_ft)}" cy="${PY(w.y_ft)}" r="${(s as Row).rd_ft * sc}" fill="${col}" fill-opacity="0.25"/>`;
     }
     g += `<circle cx="${PX(w.x_ft)}" cy="${PY(w.y_ft)}" r="3.5" fill="${col}"/><text x="${PX(w.x_ft) + 5}" y="${PY(w.y_ft) - 5}" font-size="11">${esc(w.name)}</text>`;
   });
@@ -190,7 +191,7 @@ export function renderMultiwellMatrix(result: MultiwellResult): Svg {
   g += `<text x="${ax.x + ax.w / 2}" y="${ax.y - 12}" text-anchor="middle" font-size="13">Individual radial front estimates</text>`;
   g += `<text x="${ax.x + ax.w / 2}" y="${ax.y + ax.h + 38}" text-anchor="middle" font-size="12">x (ft)</text>`;
   g += `<text transform="translate(${ax.x - 62},${ax.y + ax.h / 2}) rotate(-90)" text-anchor="middle" font-size="12">y (ft)</text>`;
-  if (factor.some((f) => f < 1)) g += `<text x="${ax.x + ax.w / 2}" y="${H - 6}" text-anchor="middle" font-size="10.5" fill="#444">Interfering plumes drawn touching (circles scaled by d / (r_i + r_m)); table radii unchanged.</text>`;
+  if (pairs.length) g += `<rect x="${ax.x + 120}" y="${H - 17}" width="14" height="10" fill="#404040" fill-opacity="0.35" stroke="#404040" stroke-width="0.6"/><text x="${ax.x + 140}" y="${H - 8}" font-size="10.5" fill="#444">Plume overlap between interfering wells</text>`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="${FONT}"><rect width="${W}" height="${H}" fill="#fff"/>${g}</svg>`;
   return { svg, width: W, height: H };
 }

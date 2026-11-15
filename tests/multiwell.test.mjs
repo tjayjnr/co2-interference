@@ -151,29 +151,25 @@ test("CO2 dissolution: one well in the multiwell solve equals the single-well pr
   last(two).forEach((row, i) => assert.ok(row.BHP_psia < last(off)[i].BHP_psia && row.interference_psi > 0));
 });
 
-test("front figure: circles of interfering wells touch instead of overlapping", async () => {
-  const { touchingFrontFactors } = await import("../lib/multiwellPlot.ts");
-  // two wells, 1000 ft apart, plumes of 800 ft: scaled to touch at one point
-  let f = touchingFrontFactors([{ x_ft: 0, y_ft: 0 }, { x_ft: 1000, y_ft: 0 }], [800, 800]);
-  assert.ok(Math.abs(800 * f[0] + 800 * f[1] - 1000) < 1e-9);
-  // plumes that do not reach each other are unchanged
-  assert.deepEqual(touchingFrontFactors([{ x_ft: 0, y_ft: 0 }, { x_ft: 1000, y_ft: 0 }], [300, 400]), [1, 1]);
-  // the program's own run: four wells, no pair overlaps and every well touches its closest interfering neighbour
+test("front figure: the overlap is shaded only for interfering wells", async () => {
+  const { overlappingFrontPairs, renderMultiwellMatrix } = await import("../lib/multiwellPlot.ts");
+  const two = [{ x_ft: 0, y_ft: 0 }, { x_ft: 1000, y_ft: 0 }];
+  assert.deepEqual(overlappingFrontPairs(two, [800, 800]), [[0, 1]]);
+  assert.deepEqual(overlappingFrontPairs(two, [300, 400]), []); // the plumes do not reach each other
+  assert.deepEqual(overlappingFrontPairs(two, [800, 0]), []); // no plume at the second well
+  // four wells in a row, 1200 ft apart, 10 years (fronts about 700 ft): neighbours overlap, wells further apart do not
   const p = { ...DEFAULT_INPUTS };
-  const start = defaultWells(p, 4);
-  const { wells } = configureWellGeometry(p, start, { number: 4, spacing_ft: 1000 });
+  const { wells } = configureWellGeometry(p, defaultWells(p, 4), { number: 4, spacing_ft: 1200 });
   const r = runMultiwell(p, wells, 10, "", { detail: false });
   const radii = r.end_snapshot.states.map((s) => s.rg_ft);
-  f = touchingFrontFactors(r.wells, radii);
-  const shown = radii.map((x, i) => x * f[i]);
-  for (let i = 0; i < wells.length; i++) {
-    let touches = false;
-    for (let m = 0; m < wells.length; m++) {
-      if (m === i) continue;
-      const d = Math.hypot(r.wells[i].x_ft - r.wells[m].x_ft, r.wells[i].y_ft - r.wells[m].y_ft);
-      assert.ok(shown[i] + shown[m] <= d * (1 + 1e-12), `wells ${i},${m} overlap`);
-      if (Math.abs(shown[i] + shown[m] - d) < 1e-6 * d) touches = true;
-    }
-    if (f[i] < 1) assert.ok(touches, `well ${i} touches a neighbour`);
+  const pairs = overlappingFrontPairs(r.wells, radii);
+  for (let i = 0; i < 4; i++) for (let m = i + 1; m < 4; m++) {
+    const d = Math.hypot(r.wells[i].x_ft - r.wells[m].x_ft, r.wells[i].y_ft - r.wells[m].y_ft);
+    assert.equal(pairs.some(([a, b]) => a === i && b === m), radii[i] + radii[m] > d, `pair ${i},${m}`);
   }
+  assert.ok(pairs.length > 0 && pairs.length < 6);
+  const svg = renderMultiwellMatrix(r).svg;
+  assert.equal((svg.match(/clip-path="url\(#fr-ov-/g) ?? []).length, pairs.length);
+  // the circles keep the program's front radii
+  for (const s of r.end_snapshot.states) assert.ok(svg.includes("r=\"") && s.rg_ft > 0);
 });
