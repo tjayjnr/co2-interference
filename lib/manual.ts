@@ -75,7 +75,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Thickness", "Net thickness of the injection interval.", "20 ft"],
     ["Porosity", "Pore volume fraction; the same in all zones.", "0.20"],
     ["Well radius", "Radius at which each well's own pressure is evaluated.", "0.55 ft"],
-    ["Initial pressure (absolute)", "Initial reservoir pressure (absolute, psia in field units).", "3500 psia"],
+    ["Initial pressure", "Initial reservoir pressure (absolute, psia in field units).", "3500 psia"],
     ["Temperature", "Constant temperature; used for the Peng–Robinson CO₂ properties, the CO₂ viscosity, the brine density and compressibility and the water vapour pressure. Used by all three models.", "200 °F"],
   ]);
 

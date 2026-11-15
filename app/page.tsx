@@ -1290,7 +1290,7 @@ export default function Page() {
               <div className="grid1">
                 <label className="field"><span>Phase / fluid</span>
                   <select aria-label="Phase / fluid" value={modelL} onChange={(e) => setModel(e.target.value as ModelKind)}>
-                    <option value="two">Two-phase CO₂–brine (three-zone model)</option>
+                    <option value="two">Two-phase CO₂–brine</option>
                     <option value="co2">Single-phase CO₂</option>
                     <option value="water">Single-phase water</option>
                   </select>
@@ -1298,16 +1298,16 @@ export default function Page() {
                 {modelL === "two" && (
                   <label className="field"><span>Evaporation</span>
                     <select aria-label="Include evaporation" value={flL.evaporation ? "yes" : "no"} onChange={(e) => setFl((f) => ({ ...f, evaporation: e.target.value === "yes" }))}>
-                      <option value="yes">Yes (dry zone next to the well)</option>
-                      <option value="no">No (r_d = r_w, no dry zone)</option>
+                      <option value="yes">Yes</option>
+                      <option value="no">No</option>
                     </select>
                   </label>
                 )}
                 {modelL === "two" && (
                   <label className="field"><span>CO₂ dissolution</span>
                     <select aria-label="Include CO2 dissolution" value={flL.dissolution ? "yes" : "no"} onChange={(e) => setFl((f) => ({ ...f, dissolution: e.target.value === "yes" }))}>
-                      <option value="no">Off (no CO₂ dissolved in the brine)</option>
-                      <option value="yes">On (CO₂ dissolves in the brine: front, S_g2, c_t2, zone 3 flux)</option>
+                      <option value="no">Off</option>
+                      <option value="yes">On</option>
                     </select>
                   </label>
                 )}
@@ -1349,7 +1349,7 @@ export default function Page() {
               </div>
               <div className="subhd">Initial conditions</div>
               <div className="grid2">
-                {uf("pressure", { label: "Initial pressure (absolute)", value: resL.initialMPa, onChange: setR("initialMPa"), min: 0 })}
+                {uf("pressure", { label: "Initial pressure", value: resL.initialMPa, onChange: setR("initialMPa"), min: 0 })}
                 {uf("temp", { label: "Temperature", value: resL.tempC, onChange: setR("tempC") })}
               </div>
               {showF("mu_water_cP") && (
@@ -1370,7 +1370,7 @@ export default function Page() {
                     <NumField label="Water end-point krw0" value={flL.krw0} onChange={setF("krw0")} step={0.05} min={0} />
                     <NumField label="Zone 1 gas krg1" value={flL.krg1} onChange={setF("krg1")} step={0.05} min={0} />
                     <NumField label="Gas Corey exponent ng" unit="3 or 2" value={flL.ng} onChange={setF("ng")} step={1} min={2} />
-                    <NumField label="Water Corey exponent nw" unit="= ng" value={flL.nw} onChange={setF("nw")} step={1} min={2} />
+                    <NumField label="Water Corey exponent nw" value={flL.nw} onChange={setF("nw")} step={1} min={2} />
                   </div>
                 </>
               )}
@@ -1572,10 +1572,10 @@ export default function Page() {
                     <option value="fracture_fraction">Fraction of fracture pressure</option>
                   </select>
                 </label>
-                {limitL.mode === "max_bhp" && uf("pressure", { label: "Maximum allowable BHP (absolute)", value: limitL.maxBhpMPa, onChange: (v) => setLimitL((l) => ({ ...l, maxBhpMPa: v })), min: 0 })}
+                {limitL.mode === "max_bhp" && uf("pressure", { label: "Maximum allowable BHP", value: limitL.maxBhpMPa, onChange: (v) => setLimitL((l) => ({ ...l, maxBhpMPa: v })), min: 0 })}
                 {limitL.mode === "fracture_fraction" && (
                   <>
-                    {uf("pressure", { label: "Fracture pressure (absolute)", value: limitL.fractureMPa, onChange: (v) => setLimitL((l) => ({ ...l, fractureMPa: v })), min: 0 })}
+                    {uf("pressure", { label: "Fracture pressure", value: limitL.fractureMPa, onChange: (v) => setLimitL((l) => ({ ...l, fractureMPa: v })), min: 0 })}
                     <NumField label="Allowable fraction" unit="0–1" value={limitL.fraction} onChange={(v) => setLimitL((l) => ({ ...l, fraction: v }))} step={0.05} min={0} />
                   </>
                 )}
@@ -1790,7 +1790,7 @@ export default function Page() {
                 {viewEff === "series" && (
                   <label className="field"><span>Show</span>
                     <select value={mode} onChange={(e) => setMode(e.target.value as Mode)}>
-                      <option value="bhp">Bottomhole pressure (absolute)</option>
+                      <option value="bhp">Bottomhole pressure</option>
                       <option value="total">Total buildup (ΔP)</option>
                       <option value="interference">Interference only (excl. self)</option>
                     </select>

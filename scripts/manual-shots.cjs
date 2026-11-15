@@ -79,13 +79,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
     await snap("matrix", [above ?? m, m]); }
   await click("Limit check"); await sleep(600);
   { const t = await p.$$("table.matrix"); await snap("limits", t); }
-  await click("Compare boundaries"); await sleep(2000);
+  // the comparison runs in the background worker: wait until its "Calculating…" note is gone and the chart is drawn
+  await click("Compare boundaries");
+  await p.waitForFunction(() => !document.querySelector(".calc-note") && document.querySelector(".chartview"), { timeout: 60000, polling: 200 }); await sleep(800);
   await snap("compare", [(await p.$$(".chartview"))[0], (await p.$$("table.matrix"))[0]]);
 
   // single well
   await pickSystem("Single well");
   await snap("single", [await group("wells")]);
-  await click("RUN analysis"); await sleep(2500);
+  await click("RUN analysis");
+  await p.waitForSelector(".run-toast", { timeout: 5000 }).catch(() => {});
+  await p.waitForFunction(() => !document.querySelector(".run-toast"), { timeout: 60000, polling: 200 }); await sleep(800);
   await click("Program results"); await sleep(800);
   await snap("program", [await p.$(".kpis"), await p.$(".results .plotwrap")]);
   await b.close();
