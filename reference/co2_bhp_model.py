@@ -3959,14 +3959,27 @@ def _plot_multiwell(result, folder, observation):
                              color=text_color)
     fig.colorbar(im, ax=axes[0], label="Pressure contribution (psi)", shrink=.8)
     limits_x, limits_y = [], []
-    for i, (well, state) in enumerate(zip(wells, result["end_snapshot"]["states"])):
+    end_states = result["end_snapshot"]["states"]
+    radii = [(state.get("rg_ft", 0.0) if state else 0.0) for state in end_states]
+    # Interfering plumes touch instead of overlapping: when r_i + r_m > d_im both circles are
+    # scaled by d_im/(r_i + r_m); a well with several such neighbours takes the smallest factor.
+    factors = []
+    for i, well in enumerate(wells):
+        factor = 1.0
+        for m, other in enumerate(wells):
+            if m != i and radii[i] > 0 and radii[m] > 0:
+                d = math.hypot(well.x_ft-other.x_ft, well.y_ft-other.y_ft)
+                if radii[i]+radii[m] > d:
+                    factor = min(factor, d/(radii[i]+radii[m]))
+        factors.append(factor)
+    for i, (well, state) in enumerate(zip(wells, end_states)):
         color = colors(i % 10)
-        radius = state.get("rg_ft", 0.0) if state else 0.0
+        radius = radii[i]*factors[i]
         if radius:
             axes[1].add_patch(Circle((well.x_ft, well.y_ft), radius, fill=False, color=color, linewidth=1.5))
             dry = state.get("dry_zone_thickness_ft", 0)
             if dry > 0:
-                axes[1].add_patch(Circle((well.x_ft, well.y_ft), state["rd_ft"], color=color, alpha=.25))
+                axes[1].add_patch(Circle((well.x_ft, well.y_ft), state["rd_ft"]*factors[i], color=color, alpha=.25))
         axes[1].plot(well.x_ft, well.y_ft, "o", color=color)
         axes[1].annotate(well.name, (well.x_ft, well.y_ft), xytext=(5, 5), textcoords="offset points")
         extent = max(radius, 20.0)
@@ -3977,6 +3990,9 @@ def _plot_multiwell(result, folder, observation):
     axes[1].set_xlim(min(limits_x)-50, max(limits_x)+50)
     axes[1].set_ylim(min(limits_y)-50, max(limits_y)+50)
     axes[1].grid(alpha=.2)
+    if any(factor < 1 for factor in factors):
+        axes[1].text(.5, -.16, "Interfering plumes drawn touching (circles scaled by d / (r_i + r_m)); table radii unchanged.",
+                     transform=axes[1].transAxes, ha="center", fontsize=8, color="#444")
     fig.savefig(folder/"multiwell_matrix_and_fronts.png", dpi=180)
     plt.close(fig)
 
