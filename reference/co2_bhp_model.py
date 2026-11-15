@@ -2020,19 +2020,20 @@ def save_results(results, p, constants, output_dir, make_plot=True, *, observati
                 ax.set_ylim(minimum_bhp-bottom_margin, pressure_top)
             for panel in (ax, early_ax):
                 panel.tick_params(axis="y", labelleft=True, labelsize=9)
-            # First-year checkpoints only on the expanded first-year panel: on the
-            # linear-year axis they would all pile up at time zero.
+            # Keep the true time coordinates on the full linear-year axis.
+            # Very early checkpoints therefore appear close to time zero.
             checkpoint_pressure = [row["BHP_psia"] for row in checkpoints[1:]]
-            early_ax.scatter(
-                [row["t_days"] for row in checkpoints[1:]], checkpoint_pressure,
+            ax.scatter(
+                [row["year"] for row in checkpoints[1:]], checkpoint_pressure,
                 color="#2C7DA0", s=25, zorder=5, clip_on=False,
                 label="First-year checkpoints",
             )
+            early_ax.scatter(
+                [row["t_days"] for row in checkpoints[1:]], checkpoint_pressure,
+                color="#2C7DA0", s=25, zorder=5, clip_on=False,
+            )
             # Legend in one row under the panels, so it never covers the curves.
             handles, labels = ax.get_legend_handles_labels()
-            more = early_ax.get_legend_handles_labels()
-            handles += more[0][-1:]
-            labels += more[1][-1:]
             fig.legend(handles, labels, loc="lower center", ncol=len(labels), fontsize=9, frameon=False)
             fig.tight_layout(rect=(0, 0.07, 1, 1))
             fig.savefig(output_dir/"bhp_vs_year.png", dpi=200)

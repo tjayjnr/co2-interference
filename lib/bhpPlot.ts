@@ -125,7 +125,8 @@ export function renderBhpPlot(out: RunOutput): { svg: string; width: number; hei
   }
   piLine(left1, w1, Y1(Pi));
   dot(X1(0), Y1(Pi), 2.9, NAVY, "bhp-c1");
-  // first-year checkpoints only on the expanded first-year panel (on the year axis they pile up at t = 0)
+  // first-year checkpoints at their true times (very early ones sit close to t = 0), as on the first-year panel
+  for (const r of cps.slice(1)) dot(X1(r.year), Y1(r.BHP_psia), 2.75, BLUE);
 
   // ---- right panel (first year, symlog)
   const dayTicks: [number, string][] = [[0, "0"], [1 / 86400, "1 s"], [1 / 1440, "1 min"], [1 / 24, "1 h"], [1, "1 d"], [30, "30 d"], [DAYS_PER_YEAR, "1 yr"]];
