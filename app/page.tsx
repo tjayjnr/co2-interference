@@ -577,11 +577,6 @@ export default function Page() {
     points.forEach((p, i) => {
       out.push({ name: p.name, color: "#495057", dash: i % 2 ? "2 4" : "6 4", x: times, y: times.map((t) => base + field.total(p.x, p.y, t)) });
     });
-    if (wells.length > 1) {
-      const ws = out.slice(0, wells.length);
-      out.push({ name: m === "bhp" ? "Field maximum BHP" : "Field maximum", color: "#111111", x: times, y: times.map((_, k) => Math.max(...ws.map((s) => s.y[k]))) });
-      out.push({ name: m === "bhp" ? "Field average BHP" : "Field average", color: "#868e96", dash: "8 3 2 3", x: times, y: times.map((_, k) => ws.reduce((a, s) => a + s.y[k], 0) / ws.length) });
-    }
     return out;
   };
   const seriesNow = useMemo(() => buildSeries(mode), [wells, points, times, field, mode, lim.initialMPa]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1930,7 +1925,7 @@ export default function Page() {
                       </div>
                     </>
                   )}
-                  <p className="caption">Wells are evaluated at the wellbore radius; dashed lines are monitoring points. Bottomhole pressure = initial pressure + own response from the program + skin + interference from every other well; the field lines show the highest and the average across all wells at each time. Interference-only removes each well&apos;s own contribution at its own location.</p>
+                  <p className="caption">Wells are evaluated at the wellbore radius; dashed lines are monitoring points. Bottomhole pressure = initial pressure + own response from the program + skin + interference from every other well. Interference-only removes each well&apos;s own contribution at its own location.</p>
                 </>
               )}
 

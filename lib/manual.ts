@@ -207,8 +207,8 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   fig("mapcontour", "Figure 7b. A contour plot (No fill, Jet scale, 15 levels): the lines around each well show how the pressure of that well alone propagates, coloured by pressure value.");
 
   b.push({ t: "h2", text: "6.4 Time series tab" });
-  fig("time-series", "Figure 8. Time series of pressure at every well and monitoring point, with the field maximum and average.");
-  p("The Show selector chooses what is plotted: total buildup (ΔP) at each wellbore including skin; bottomhole pressure (initial pressure plus buildup), with the maximum allowable bottomhole pressure; or interference only, which removes each well's own contribution so that only the effect of the other wells remains. Dashed lines are monitoring points. The black line is the field maximum (the highest pressure of any well at each time) and the grey dash-dot line is the field average.");
+  fig("time-series", "Figure 8. Time series of pressure at every well and monitoring point.");
+  p("The Show selector chooses what is plotted: total buildup (ΔP) at each wellbore including skin; bottomhole pressure (initial pressure plus buildup), with the maximum allowable bottomhole pressure; or interference only, which removes each well's own contribution so that only the effect of the other wells remains. Dashed lines are monitoring points.");
   p("Under the chart, the section “What drives the field maximum” stacks the contributions of each injector and of skin at the well that has the highest pressure at each time, and a table gives the breakdown at the moment of the field peak.");
 
   b.push({ t: "h2", text: "6.0 Multiwell results and Program results tabs" });
