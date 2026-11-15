@@ -108,7 +108,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Pressure assessment", "Not assessed, Maximum allowable BHP, or Fraction of fracture pressure.", "Fraction of fracture pressure"],
     ["Maximum allowable BHP", "Absolute bottom-hole pressure that must not be exceeded.", "4680 psia"],
     ["Fracture pressure, Allowable fraction", "Allowable BHP = fraction × fracture pressure (absolute).", "5200 psia, 0.9 (4680 psia)"],
-    ["Interference threshold", "Detection level for the map contour, the arrival times and the monitoring points; not a pass/fail limit.", "1 psi"],
+    ["Interference threshold", "Detection level for the map contour and the monitoring points; not a pass/fail limit.", "1 psi"],
   ]);
   p("Four properties are not inputs: the program calculates them in the background at every pressure trial, at each well's own bottom-hole pressure, and again in every cell of the shut-in solve. The result tables and CSV files report them at every time.");
   table("Table 2c. Properties calculated in the background (not inputs).", ["Property", "How it is calculated", "Used by"], [
@@ -119,7 +119,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   ]);
 
   b.push({ t: "h2", text: "4.4 Interference threshold" });
-  p("The interference threshold (in the Pressure limit group) is the smallest pressure change you regard as detectable. It defines the dashed contour on the pressure map, the arrival times on the Interference matrix tab and the monitoring-point check on the Limit check tab. It is not a pass/fail limit.");
+  p("The interference threshold (in the Pressure limit group) is the smallest pressure change you regard as detectable. It defines the dashed contour on the pressure map and the monitoring-point check on the Limit check tab. It is not a pass/fail limit.");
 
   b.push({ t: "h2", text: "4.5 Well skin" });
   p("Skin describes extra pressure loss (positive skin, formation damage) or gain (negative skin, stimulation) near a well. Type each well's skin factor in the Skin column of the wells table; a blank cell means zero skin. The skin pressure drop, 141.2·μ·q·B·s/(k·h), is added at the injector itself while it injects; it does not change the pressure felt at other wells.");
@@ -169,7 +169,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   fig("wells-geo", "Figure 5. The wells table in longitude / latitude mode.");
 
   b.push({ t: "h2", text: "4.9 Monitoring points" });
-  p("Monitoring points are locations where nothing is injected but pressure is of interest, for example a legacy well, a fault or the edge of a permit area. Each point appears on the maps, as a dashed curve in the time series, as a target in the arrival-time table and in the monitoring-point check on the Limit check tab. Use + Add point to add more.");
+  p("Monitoring points are locations where nothing is injected but pressure is of interest, for example a legacy well, a fault or the edge of a permit area. Each point appears on the maps, as a dashed curve in the time series and in the monitoring-point check on the Limit check tab. Use + Add point to add more.");
 
   b.push({ t: "h2", text: "4.10 Report details" });
   p("Project name and Author are optional and are printed on the title block of the PDF and Word reports.");
@@ -221,8 +221,8 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   p("Choose a well in the Well selector. The chart shows its bottom-hole pressure over the whole results period, with the interference from the other wells, and the same well alone (the program for one well), followed by the program’s own BHP plot for that well. Below the charts, the reference program is run for that well on its own, unchanged (its rate, radius, skin, evaporation choice and own maximum BHP, from its start year to its end year in whole years, and the post-shut-in observation entered in the Input section): the end-of-injection BHP, the post-shut-in observation table, its annual results table, and its files annual_summary.csv, all_calculations.csv (every intermediate value, including the zone diffusivity ratios D1, D2, D3), first_year_detail.csv, observation_summary.csv, inputs_used.json and bhp_vs_year.png.");
 
   b.push({ t: "h2", text: "6.5 Interference matrix tab" });
-  fig("matrix", "Figure 9. Interference matrix and arrival-time table.");
-  p("The first table has one row per injecting well and one column per receiving well. Each cell is the pressure that the row well contributes at the column well at the evaluation time; the diagonal cells are each well's own buildup including skin. The last column gives the total felt at other wells, and the last row the total at each receiver. The second table gives the first time (years) that a single source well alone raises the pressure at each target (wells and monitoring points) by the interference threshold; a dash means it does not happen during the injection period.");
+  fig("matrix", "Figure 9. Interference matrix.");
+  p("The first table has one row per injecting well and one column per receiving well. Each cell is the pressure that the row well contributes at the column well at the evaluation time; the diagonal cells are each well's own buildup including skin. The last column gives the total felt at other wells, and the last row the total at each receiver.");
 
   b.push({ t: "h2", text: "6.6 Limit check tab" });
   fig("limits", "Figure 10. Limit check for each well and the monitoring-point table.");

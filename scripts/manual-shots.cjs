@@ -73,7 +73,10 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await click("Time series"); await sleep(900);
   await snap("time-series", [(await p.$$(".chartview"))[0]]);
   await click("Interference matrix"); await sleep(1500);
-  { const t = await p.$$("table.matrix"); await snap("matrix", [t[0], t[1]]); }
+  { // the interference matrix (header "Source ↓ / Receiver →"), with the caption above it
+    const m = (await p.$$("table.matrix"))[await p.$$eval("table.matrix", (ts) => ts.findIndex((el) => el.textContent.includes("Receiver")))];
+    const above = (await m.evaluateHandle((el) => el.closest(".tablewrap")?.previousElementSibling ?? el)).asElement();
+    await snap("matrix", [above ?? m, m]); }
   await click("Limit check"); await sleep(600);
   { const t = await p.$$("table.matrix"); await snap("limits", t); }
   await click("Compare boundaries"); await sleep(2000);

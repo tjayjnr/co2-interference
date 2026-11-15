@@ -607,11 +607,6 @@ export default function Page() {
 
   const matrix = useMemo(() => field.matrix(tNow), [field, tNow]);
 
-  const arrivals = useMemo(
-    () => wells.map((src) => [...wells, ...points].map((tg) =>
-      tg === src ? null : field.arrival(src, tg.x, tg.y, threshold, horizon))),
-    [wells, points, threshold, horizon, field],
-  );
 
   // Peak buildup per well (total, at wellbore) over the horizon.
   const peaks = useMemo(() => wells.map((w) => {
@@ -952,7 +947,6 @@ export default function Page() {
       };
       const un = (cat: Cat) => units[cat];
       const names = wells.map((w) => w.name);
-      const allTargets = [...wells, ...points];
       const kp = fieldDrivers.kPeak;
       const ownIdx = fieldDrivers.controlling[kp];
       const shares = fieldDrivers.layers.map((l) => (fieldDrivers.peak > 0 ? Math.round((l.y[kp] / fieldDrivers.peak) * 100) : 0));
@@ -1045,8 +1039,6 @@ export default function Page() {
           ["Total at receiver", ...wells.map((_, j) => P(matrix.reduce((s, r) => s + r[j], 0), 3)), ""],
         ],
         arrivalThreshold: `${P(threshold, 3)} ${pU.label}`,
-        arrivalHead: ["Source \\ Target", ...allTargets.map((t) => t.name)],
-        arrivalRows: arrivals.map((row, i) => [names[i], ...row.map((v) => (v === null ? "–" : v.toFixed(2)))]),
         pointCheckHead: ["Point", `Peak buildup (${pU.label})`, "Time (yr)", "Threshold reached?", "First reached (yr)"],
         pointCheckRows: pointChecks.map((pc) => [pc.name, P(pc.peak, 3), pc.tPeak.toFixed(1), pc.first !== null ? "Yes" : "No", pc.first !== null ? pc.first.toFixed(2) : "–"]),
         zoneHead: ["Zone", "Mobility Λ (mD/cP)", "Total compressibility c_t (1/psi)", "Mobility ratio m", "Storage ratio c*", "Diffusivity ratio D"],
@@ -1167,7 +1159,6 @@ export default function Page() {
     return all.find((x) => x.well === r.well && x.year === r.peak_project_year && x.BHP_psia === r.peak_BHP_psia) ?? null;
   };
 
-  const targets = [...wells, ...points];
   const maxOff = Math.max(1e-9, ...matrix.flatMap((r, i) => r.filter((_, j) => j !== i)));
   const fx = Math.max(0, 1 + (pU.dec ?? 0));
   const satTab: [View, string][] = two ? [["sat", "CO₂ saturation"]] : [];
@@ -2000,22 +1991,6 @@ export default function Page() {
                           {wells.map((_, j) => <td key={j}>{P(matrix.reduce((s, r) => s + r[j], 0), 3)}</td>)}
                           <td />
                         </tr>
-                      </tbody>
-                    </table>
-                  </div>
-
-                  <h3>Arrival time of ≥ {P(threshold, 3)} {pU.label} (years)</h3>
-                  <p className="caption">First time a source well alone raises pressure at the target by the threshold. “–” means it does not within the injection period/horizon.</p>
-                  <div className="tablewrap">
-                    <table className="matrix">
-                      <thead><tr><th>Source ↓ / Target →</th>{targets.map((t) => <th key={t.id}>{t.name}</th>)}</tr></thead>
-                      <tbody>
-                        {arrivals.map((row, i) => (
-                          <tr key={wells[i].id}>
-                            <th>{wells[i].name}</th>
-                            {row.map((v, j) => <td key={j}>{v === null ? "–" : v.toFixed(2)}</td>)}
-                          </tr>
-                        ))}
                       </tbody>
                     </table>
                   </div>

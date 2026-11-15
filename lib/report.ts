@@ -50,8 +50,6 @@ export interface ReportData {
   matrixHead: string[];
   matrixRows: string[][];
   arrivalThreshold: string;
-  arrivalHead: string[];
-  arrivalRows: string[][];
   pointCheckHead: string[];
   pointCheckRows: string[][];
   compareHead: string[];
@@ -176,13 +174,12 @@ export function buildBlocks(d: ReportData): Block[] {
   }
   const s = two ? 3 : 2;
   b.push({ t: "h2", text: `4.${s} Pressure buildup and limit check` });
-  b.push({ t: "p", text: `The initial pressure is ${d.limits.p0}. ${d.limits.check}${d.limits.assessed ? `, that is an allowable buildup of ${d.limits.maxBuildup}` : ""}. Table ${tab + 1} gives the peak wellbore buildup of each well, split into the well's own response, skin and interference from the other wells. Pass/fail is judged against the allowable bottom-hole pressure only; the interference threshold of ${d.arrivalThreshold} is not a pass/fail limit and is used solely to define the detection contour, the arrival times and the monitoring-point check.` });
+  b.push({ t: "p", text: `The initial pressure is ${d.limits.p0}. ${d.limits.check}${d.limits.assessed ? `, that is an allowable buildup of ${d.limits.maxBuildup}` : ""}. Table ${tab + 1} gives the peak wellbore buildup of each well, split into the well's own response, skin and interference from the other wells. Pass/fail is judged against the allowable bottom-hole pressure only; the interference threshold of ${d.arrivalThreshold} is not a pass/fail limit and is used solely to define the detection contour and the monitoring-point check.` });
   b.push(T(`Peak wellbore pressure buildup per well (${d.pLabel}) and comparison with the allowable buildup.`, d.peakHead, d.peakRows));
-  b.push(...F(d.figures.bhp, `Bottomhole pressure of each well and monitoring point, with the field-maximum and field-average curves and the maximum allowable bottomhole pressure.`));
+  b.push(...F(d.figures.bhp, `Bottomhole pressure of each well and monitoring point, with the maximum allowable bottomhole pressure.`));
   b.push({ t: "h2", text: `4.${s + 1} Well-to-well interference` });
-  b.push({ t: "p", text: `Table ${tab + 1} gives the pressure that each injector (row) contributes at every well (column) at t = ${d.matrixTime}; the diagonal is each well's own buildup including skin. Table ${tab + 2} gives the time at which a single source well raises the pressure at each target by ${d.arrivalThreshold}.` });
+  b.push({ t: "p", text: `Table ${tab + 1} gives the pressure that each injector (row) contributes at every well (column) at t = ${d.matrixTime}; the diagonal is each well's own buildup including skin.` });
   b.push(T(`Interference matrix at t = ${d.matrixTime} (${d.pLabel}).`, d.matrixHead, d.matrixRows));
-  b.push(T(`Arrival time (years) of a pressure rise of ${d.arrivalThreshold} from each source well at each target.`, d.arrivalHead, d.arrivalRows, "A dash indicates the threshold is not reached within the injection period and analysis horizon."));
   if (d.pointCheckRows.length) {
     b.push({ t: "p", text: `Monitoring points are compared with the interference threshold of ${d.arrivalThreshold} (Table ${tab + 1}); this is a detection level, not a pressure limit.` });
     b.push(T(`Monitoring points compared with the interference threshold of ${d.arrivalThreshold}.`, d.pointCheckHead, d.pointCheckRows));
