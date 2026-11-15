@@ -148,6 +148,17 @@ function frame(width: number, height: number, inner: string, t: Theme): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" style="${FONT};color:${p.text}">${bg}${inner}</svg>`;
 }
 
+/** Map heading: centred over the map square (not the legend), slightly larger, with a short accent line under it. */
+function mapTitleBlock(title: string | undefined, cx: number, t: Theme): { svg: string; h: number } {
+  if (!title) return { svg: "", h: 0 };
+  const accent = t === "css" ? "var(--accent)" : "#1f63c6";
+  return {
+    svg: `<text x="${cx}" y="26" text-anchor="middle" style="${FONT};font-size:18px;font-weight:700;letter-spacing:0.2px;fill:${palette(t).text}">${esc(title)}</text>`
+      + `<rect x="${cx - 22}" y="35" width="44" height="3" rx="1.5" style="fill:${accent}"/>`,
+    h: 46,
+  };
+}
+
 function titleBlock(title: string | undefined, width: number, t: Theme): { svg: string; h: number } {
   if (!title) return { svg: "", h: 0 };
   return { svg: `<text x="${width / 2}" y="22" text-anchor="middle" style="${FONT};font-size:15px;font-weight:700;fill:${palette(t).text}">${esc(title)}</text>`, h: 34 };
@@ -363,7 +374,7 @@ export function mapChart(o: MapOpts, t: Theme, title?: string, view?: View): Ren
   const L = 66;
   const legendW = 270;
   const width = L + S + 24 + legendW;
-  const tb = titleBlock(title, width, t);
+  const tb = mapTitleBlock(title, L + S / 2, t);
   const T = 12 + tb.h;
   const height = T + S + 52;
   const { grid: g } = o;

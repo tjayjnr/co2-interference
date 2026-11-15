@@ -1845,7 +1845,7 @@ export default function Page() {
 
               {viewEff === "sat" && specSat && (
                 <>
-                  <ChartView key={`sat-${runId}`} spec={specSat} title={`CO₂ saturation map at t = ${tNow.toFixed(1)} yr`} filename="co2-saturation-map" />
+                  <ChartView key={`sat-${runId}`} spec={specSat} title="CO₂ saturation map" filename="co2-saturation-map" />
                   <h3>CO₂ zones of each well at t = {tNow.toFixed(1)} yr</h3>
                   <div className="tablewrap">
                     <table className="matrix">
@@ -1914,7 +1914,7 @@ export default function Page() {
                     <label className="check"><input type="checkbox" aria-label="Streamlines" checked={!!mapStyle.streamlines} onChange={(e) => setStyle({ streamlines: e.target.checked })} /> Streamlines</label>
                     <button className="ghost" onClick={() => setMapStyle(DEFAULT_MAP_STYLE)}>Reset style</button>
                   </div>
-                  <ChartView key={`map-${runId}`} spec={specMap} title={`Pressure buildup map at t = ${tNow.toFixed(1)} yr`} filename="pressure-map" />
+                  <ChartView key={`map-${runId}`} spec={specMap} title="Pressure buildup map" filename="pressure-map" />
                 </>
               )}
 

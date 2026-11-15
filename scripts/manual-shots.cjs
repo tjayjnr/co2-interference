@@ -14,6 +14,8 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await p.addStyleTag({ content: "aside.panel { position: static !important; max-height: none !important; overflow: visible !important; } .panel .inputs .group[hidden] { display: block !important; }" });
   const click = async (t) => { const [x] = await p.$$(`xpath/.//button[contains(., "${t}")]`); await x.click(); };
   const group = async (name) => p.$(`[data-group="${name}"]`);
+  // the first table in the results area (not the well-separation table in the input panel)
+  const resultTable = async () => (await p.evaluateHandle(() => [...document.querySelectorAll("table.matrix")].find((t) => !t.closest("aside")) ?? null)).asElement();
   const rect = async (h) => h.evaluate((e) => { const r = e.getBoundingClientRect(); return { x: r.x + scrollX, y: r.y + scrollY, w: r.width, h: r.height }; });
   const union = async (hs) => { const rs = await Promise.all(hs.map(rect)); const x0 = Math.min(...rs.map((r) => r.x)), y0 = Math.min(...rs.map((r) => r.y)), x1 = Math.max(...rs.map((r) => r.x + r.w)), y1 = Math.max(...rs.map((r) => r.y + r.h)); return { x: x0 - 6, y: y0 - 6, width: x1 - x0 + 12, height: y1 - y0 + 12 }; };
   const snap = async (name, hs) => p.screenshot({ path: `${out}/${name}.png`, clip: await union(hs), captureBeyondViewport: true });
@@ -69,7 +71,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await p.mouse.move(sv.x + sv.w * 0.62, sv.y + sv.h * 0.60, { steps: 8 }); await p.mouse.up(); await sleep(600);
   await snap("zoom", [(await p.$$(".chartview"))[0]]);
   await click("CO₂ saturation"); await sleep(900);
-  await snap("sat", [(await p.$$(".chartview"))[0], (await p.$$("table.matrix"))[0]]);
+  await snap("sat", [(await p.$$(".chartview"))[0], await resultTable()]);
   await click("Time series"); await sleep(900);
   await snap("time-series", [(await p.$$(".chartview"))[0]]);
   await click("Interference matrix"); await sleep(1500);
@@ -82,7 +84,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   // the comparison runs in the background worker: wait until its "Calculating…" note is gone and the chart is drawn
   await click("Compare boundaries");
   await p.waitForFunction(() => !document.querySelector(".calc-note") && document.querySelector(".chartview"), { timeout: 60000, polling: 200 }); await sleep(800);
-  await snap("compare", [(await p.$$(".chartview"))[0], (await p.$$("table.matrix"))[0]]);
+  await snap("compare", [(await p.$$(".chartview"))[0], await resultTable()]);
 
   // single well
   await pickSystem("Single well");
