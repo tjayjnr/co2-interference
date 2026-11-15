@@ -770,10 +770,7 @@ export default function Page() {
       geo: geo.on ? { lat0: geo.lat0, lon0: geo.lon0 } : undefined,
       style: mapStyle,
       wellGrids: mapStyle.contours && (mapStyle.contourSource ?? "wells") === "wells" ? wells.map((w) => field.grid(w, tNow, extentP, Math.max(g.nx, 150), Math.max(g.ny, 150))) : undefined,
-      contourLevels: [
-        { level: threshold, label: `Interference threshold\n${P(threshold, 3)} ${pU.label} (detection only)`, cls: "thr" },
-        ...(lim.maxBuildupMPa > 0 ? [{ level: lim.maxBuildupMPa, label: `Max allowable buildup\n${P(lim.maxBuildupMPa)} ${pU.label} (pass/fail limit)`, cls: "lim" as const }] : []),
-      ],
+      contourLevels: [],
     },
   });
   const satSpec = (g: NonNullable<typeof gridSat>): ChartSpec => ({

@@ -174,7 +174,7 @@ export function buildBlocks(d: ReportData): Block[] {
   }
   const s = two ? 3 : 2;
   b.push({ t: "h2", text: `4.${s} Pressure buildup and limit check` });
-  b.push({ t: "p", text: `The initial pressure is ${d.limits.p0}. ${d.limits.check}${d.limits.assessed ? `, that is an allowable buildup of ${d.limits.maxBuildup}` : ""}. Table ${tab + 1} gives the peak wellbore buildup of each well, split into the well's own response, skin and interference from the other wells. Pass/fail is judged against the allowable bottom-hole pressure only; the interference threshold of ${d.arrivalThreshold} is not a pass/fail limit and is used solely to define the detection contour and the monitoring-point check.` });
+  b.push({ t: "p", text: `The initial pressure is ${d.limits.p0}. ${d.limits.check}${d.limits.assessed ? `, that is an allowable buildup of ${d.limits.maxBuildup}` : ""}. Table ${tab + 1} gives the peak wellbore buildup of each well, split into the well's own response, skin and interference from the other wells. Pass/fail is judged against the allowable bottom-hole pressure only; the interference threshold of ${d.arrivalThreshold} is not a pass/fail limit and is used solely for the monitoring-point check.` });
   b.push(T(`Peak wellbore pressure buildup per well (${d.pLabel}) and comparison with the allowable buildup.`, d.peakHead, d.peakRows));
   b.push(...F(d.figures.bhp, `Bottomhole pressure of each well and monitoring point, with the maximum allowable bottomhole pressure.`));
   b.push({ t: "h2", text: `4.${s + 1} Well-to-well interference` });
@@ -184,7 +184,7 @@ export function buildBlocks(d: ReportData): Block[] {
     b.push({ t: "p", text: `Monitoring points are compared with the interference threshold of ${d.arrivalThreshold} (Table ${tab + 1}); this is a detection level, not a pressure limit.` });
     b.push(T(`Monitoring points compared with the interference threshold of ${d.arrivalThreshold}.`, d.pointCheckHead, d.pointCheckRows));
   }
-  b.push(...F(d.figures.map, `Pressure buildup map at t = ${d.matrixTime}, with the interference-threshold and allowable-buildup contours.`));
+  b.push(...F(d.figures.map, `Pressure buildup map at t = ${d.matrixTime}.`));
   b.push({ t: "h2", text: `4.${s + 2} Sensitivity to the boundary condition` });
   b.push({ t: "p", text: d.compareSentence });
   b.push(T(`Peak wellbore buildup (${d.pLabel}), skin included, for the three boundary conditions.`, d.compareHead, d.compareRows));

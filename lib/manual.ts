@@ -108,7 +108,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     ["Pressure assessment", "Not assessed, Maximum allowable BHP, or Fraction of fracture pressure.", "Fraction of fracture pressure"],
     ["Maximum allowable BHP", "Absolute bottom-hole pressure that must not be exceeded.", "4680 psia"],
     ["Fracture pressure, Allowable fraction", "Allowable BHP = fraction × fracture pressure (absolute).", "5200 psia, 0.9 (4680 psia)"],
-    ["Interference threshold", "Detection level for the map contour and the monitoring points; not a pass/fail limit.", "1 psi"],
+    ["Interference threshold", "Detection level for the monitoring points; not a pass/fail limit.", "1 psi"],
   ]);
   p("Four properties are not inputs: the program calculates them in the background at every pressure trial, at each well's own bottom-hole pressure, and again in every cell of the shut-in solve. The result tables and CSV files report them at every time.");
   table("Table 2c. Properties calculated in the background (not inputs).", ["Property", "How it is calculated", "Used by"], [
@@ -119,7 +119,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   ]);
 
   b.push({ t: "h2", text: "4.4 Interference threshold" });
-  p("The interference threshold (in the Pressure limit group) is the smallest pressure change you regard as detectable. It defines the dashed contour on the pressure map and the monitoring-point check on the Limit check tab. It is not a pass/fail limit.");
+  p("The interference threshold (in the Pressure limit group) is the smallest pressure change you regard as detectable. It defines the monitoring-point check on the Limit check tab. It is not a pass/fail limit.");
 
   b.push({ t: "h2", text: "4.5 Well skin" });
   p("Skin describes extra pressure loss (positive skin, formation damage) or gain (negative skin, stimulation) near a well. Type each well's skin factor in the Skin column of the wells table; a blank cell means zero skin. The skin pressure drop, 141.2·μ·q·B·s/(k·h), is added at the injector itself while it injects; it does not change the pressure felt at other wells.");
@@ -192,7 +192,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
 
   b.push({ t: "h2", text: "6.3 Pressure map tab" });
   p("The CO₂ saturation map is fitted to the wells: Map area Around the wells shows the wells with automatic padding large enough for the largest CO₂ plume and at least most of a well spacing around them, so every well stands apart even in a square grid; Wells and monitoring points also includes the monitoring points. The pressure map shows the wells spread over the map with about two well spacings around them, so every well is clearly seen. The aquifer is infinite-acting, so the pressure never ends at an edge; the colour scale of the pressure map therefore starts at the highest buildup on the map edge, so the edge takes the lightest colour and the pressure is seen spreading out from the wells and fading out inside the map. Only the display changes, not the calculation; the colour bar gives the true values. Type a Map padding to set your own margin for both maps, and Auto padding returns to the automatic ones. Each well is a vertical line pointing up from its position with its name on top; the line is shortened when another well sits just above it, and a name that would cover another well moves beside or below its line. When wells are so close that a full name does not fit, only the well number is shown (zoom in to see every name).");
-  fig("pressure-map", "Figure 7. Pressure buildup map with the interference-threshold and allowable-buildup contours.");
+  fig("pressure-map", "Figure 7. Pressure buildup map.");
   p("The map shows the total pressure buildup caused by all wells at the evaluation time, with a labelled colour scale. The scale runs from the buildup on the map edge (rounded up) to the highest and gives more of its colours to the higher pressures, so the pressure of each well is seen spreading out from the well and highest at the well: the darkest colours sit at the wells, and wells between other wells are darker because they also feel their interference. The colour bar shows the true values. The dashed teal contour is the interference threshold (detection only). The solid white-and-black contour is the max allowable buildup (the pass/fail limit); it appears only near wells that approach the limit. Each well is drawn as a thin vertical line with its name on top, as on the saturation map. Use Map padding to enlarge or shrink the area drawn around the wells.");
   p("Above the pressure map, the style bar controls how the map is coloured and annotated. The choices apply to the picture, to the PNG and SVG exports and to the report figure.");
   table("Table 5a. Map style options (pressure map).", ["Option", "What it does"], [
