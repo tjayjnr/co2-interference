@@ -243,8 +243,8 @@ export const PROMPTS: Record<string, string> = {
   krg_endpoint: "Gas endpoint relative permeability krg0",
   krw_endpoint: "Water endpoint relative permeability krw0",
   krg_zone1: "Zone 1 gas relative permeability krg1",
-  corey_n_gas: "Gas Corey exponent (3; or 2 with matching water exponent)",
-  corey_n_water: "Water Corey exponent (must match gas exponent)",
+  corey_n_gas: "Gas Corey exponent ng (1 < ng <= 10; 3 = cubic closed form)",
+  corey_n_water: "Water Corey exponent nw (1 <= nw <= 10)",
   skin: "Skin factor",
 };
 
@@ -276,9 +276,10 @@ export function validate(p: Inputs): void {
   for (const name of ["rock_compressibility_per_psi"] as const) {
     if (active.includes(name) && p[name] < 0) fail(`${name} cannot be negative.`);
   }
-  if (p.phase_mode === "two" && !((p.corey_n_gas === 2 && p.corey_n_water === 2) || (p.corey_n_gas === 3 && p.corey_n_water === 3))) {
-    fail("Set both Corey exponents to 3 for the cubic model, or both to 2 for the quadratic comparison. Other exponent pairs require a different front-saturation derivation.");
+  if (p.phase_mode === "two" && !(p.corey_n_gas > 1 && p.corey_n_gas <= 10)) {
+    fail("corey_n_gas must satisfy 1 < value <= 10 (a gas exponent of 1 or less has no leading shock front).");
   }
+  if (p.phase_mode === "two" && !(p.corey_n_water >= 1 && p.corey_n_water <= 10)) fail("corey_n_water must satisfy 1 <= value <= 10.");
   const tK = ((p.temperature_F + 459.67) * 5.0) / 9.0;
   if (tK <= 0) fail("Absolute reservoir temperature must be positive.");
   if (p.phase_mode === "two" || isWaterMode(p)) waterProperties(p.initial_pressure_psia, p);
@@ -663,7 +664,8 @@ export function coreyFrontQuantities(M_lambda: number, Swr: number, n_gas = 3.0,
     sf = 1.0 / Math.sqrt(1.0 + M_lambda);
     front_factor = (1.0 + Math.sqrt(1.0 + M_lambda)) / (2.0 * (1.0 - Swr));
   } else {
-    return fail("Supported Corey exponent pairs are (3, 3) and (2, 2).");
+    // Any other exponents: the same Welge tangent from the origin, solved numerically.
+    return tangentFrontQuantities(M_lambda, Swr, n_gas, n_water, 0.0);
   }
   const exponent = n_gas;
   const denominator = M_lambda * sf ** exponent + (1.0 - sf) ** exponent;
@@ -795,11 +797,19 @@ export function dissolutionProperties(pressure_psia: number, p: Inputs, rho_brin
   };
 }
 
-/** fg(s) and dfg/ds for equal Corey exponents, s = Sg/(1-Swr) (Python `corey_fractional_flow`). */
-export function coreyFractionalFlow(s: number, M_lambda: number, n: number): [number, number] {
-  const denominator = M_lambda * s ** n + (1.0 - s) ** n;
+/** fg(s) and dfg/ds for Corey exponents n (gas) and n_water (default = n), s = Sg/(1-Swr)
+ * (Python `corey_fractional_flow`): fg = M s^ng / (M s^ng + (1-s)^nw). */
+export function coreyFractionalFlow(s: number, M_lambda: number, n: number, n_water?: number): [number, number] {
+  if (n_water === undefined || n_water === n) {
+    const denominator = M_lambda * s ** n + (1.0 - s) ** n;
+    const fg = (M_lambda * s ** n) / denominator;
+    const derivative = (n * M_lambda * s ** (n - 1.0) * (1.0 - s) ** (n - 1.0)) / denominator ** 2;
+    return [fg, derivative];
+  }
+  const nw = n_water;
+  const denominator = M_lambda * s ** n + (1.0 - s) ** nw;
   const fg = (M_lambda * s ** n) / denominator;
-  const derivative = (n * M_lambda * s ** (n - 1.0) * (1.0 - s) ** (n - 1.0)) / denominator ** 2;
+  const derivative = (M_lambda * (n * s ** (n - 1.0) * (1.0 - s) ** nw + nw * s ** n * (1.0 - s) ** (nw - 1.0))) / denominator ** 2;
   return [fg, derivative];
 }
 
@@ -809,12 +819,18 @@ export function coreyFractionalFlow(s: number, M_lambda: number, n: number): [nu
 export function dissolutionFrontQuantities(M_lambda: number, Swr: number, n_gas: number, n_water: number, a: number): Row {
   if (a === 0.0) return coreyFrontQuantities(M_lambda, Swr, n_gas, n_water);
   if (!Number.isFinite(a) || a < 0) fail("Dissolution retardation a = cd/(rho_g-cd) must be finite and >= 0.");
-  if (n_gas !== n_water || (n_gas !== 2.0 && n_gas !== 3.0)) fail("Supported Corey exponent pairs are (3, 3) and (2, 2).");
-  const n = n_gas;
+  return tangentFrontQuantities(M_lambda, Swr, n_gas, n_water, a);
+}
+
+/** Numerical leading shock for any Corey exponents (Python `tangent_front_quantities`): the maximum of
+ * F(s) = (fg + a)/((1-Swr) s + a), the chord from (-a,-a) tangent to fg. a = 0 is the Welge tangent from the origin. */
+export function tangentFrontQuantities(M_lambda: number, Swr: number, n_gas: number, n_water: number, a: number): Row {
+  if (!Number.isFinite(M_lambda) || M_lambda <= 0) fail("Endpoint mobility ratio M_lambda must be finite and positive.");
+  if (!(Swr >= 0 && Swr < 1)) fail("Swr must satisfy 0 <= Swr < 1.");
   const width = 1.0 - Swr;
-  const speed = (s: number) => (coreyFractionalFlow(s, M_lambda, n)[0] + a) / (width * s + a);
+  const speed = (s: number) => (coreyFractionalFlow(s, M_lambda, n_gas, n_water)[0] + a) / (width * s + a);
   const tangency = (s: number) => {
-    const [fg, derivative] = coreyFractionalFlow(s, M_lambda, n);
+    const [fg, derivative] = coreyFractionalFlow(s, M_lambda, n_gas, n_water);
     return derivative * (width * s + a) - width * (fg + a);
   };
   // np.linspace(1e-9, 1.0, 20001) and np.argmax (first maximum).
@@ -825,13 +841,13 @@ export function dissolutionFrontQuantities(M_lambda: number, Swr: number, n_gas:
     const v = speed(grid(i));
     if (v > best) { best = v; index = i; }
   }
-  if (index === 0 || index === count - 1) fail("Could not locate the dissolution-retarded gas front.");
+  if (index === 0 || index === count - 1) fail("Could not locate the gas front for these Corey exponents.");
   const left = grid(index - 1), right = grid(index + 1);
   const sf = tangency(left) > 0 && 0 > tangency(right) ? brentq(tangency, left, right, 1e-15, 1e-14) : grid(index);
-  const [fg, derivative] = coreyFractionalFlow(sf, M_lambda, n);
+  const [fg, derivative] = coreyFractionalFlow(sf, M_lambda, n_gas, n_water);
   const front_factor = (fg + a) / (width * sf + a);
   const tangent_error = derivative / width - front_factor;
-  if (Math.abs(tangent_error) > 1e-7 * front_factor) fail("Dissolution front failed the shock-tangent condition.");
+  if (Math.abs(tangent_error) > 1e-7 * front_factor) fail("Gas front failed the shock-tangent condition.");
   return {
     corey_n_gas: n_gas, corey_n_water: n_water, sf_normalized: sf, Sg_front: width * sf,
     fg_front: fg, dfg_ds_front: derivative, front_tangent_error: tangent_error, gas_front_factor: front_factor,
