@@ -1930,8 +1930,6 @@ export default function Page() {
                   {code.error && <p className="err" role="alert">{code.error}</p>}
                   {code.out && codeFiles && codePlot && (
                     <div id="results">
-                      <h3>Calculated pressure</h3>
-                      <p>{code.out.label} · End-of-injection BHP at year {code.out.years}: <strong>{code.out.results[code.out.results.length - 1].BHP_psia.toFixed(3)} psia</strong></p>
                       {code.out.observation && (
                         <>
                           <h3>Selected post-shut-in observation years</h3>
