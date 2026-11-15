@@ -558,3 +558,14 @@ h2 { letter-spacing: .08em; }
 .panel .tabs.intabs button { padding: 15px 16px; font-size: 16px; margin-top: 10px; border-radius: 12px; gap: 12px; }
 .panel .tabs.intabs button.on { border-radius: 12px 12px 0 0; }
 .panel .tabs.intabs button::before { width: 8px; height: 8px; }
+
+/* RUN: running indicator */
+.run.is-running, .run:disabled.is-running { cursor: progress; opacity: .92; transform: none; display: inline-flex; align-items: center; gap: 9px; }
+.spin { width: 15px; height: 15px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; display: inline-block; flex: 0 0 auto; animation: run-spin .7s linear infinite; }
+@keyframes run-spin { to { transform: rotate(360deg); } }
+.run-toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 1000; display: flex; align-items: center; gap: 10px; padding: 10px 18px 12px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 70%, #000); color: #fff; font-weight: 600; font-size: 14px; box-shadow: 0 8px 24px rgba(0,0,0,.25); overflow: hidden; max-width: calc(100vw - 32px); }
+.run-toast-bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.25); overflow: hidden; }
+.run-toast-bar i { position: absolute; top: 0; bottom: 0; width: 40%; background: #fff; animation: run-bar 1.1s ease-in-out infinite; }
+@keyframes run-bar { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+body:has(.run-toast) { cursor: progress; }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration: 2s; } .run-toast-bar i { animation: none; width: 100%; opacity: .6; } }

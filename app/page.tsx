@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { flushSync } from "react-dom";
 import ChartView from "@/components/ChartView";
 import NumField from "@/components/NumField";
 import { COLORMAP_LABELS, render, type ChartSpec, type MapStyle, type Series } from "@/lib/charts";
@@ -393,7 +394,19 @@ export default function Page() {
   // ---- RUN ----
   const [applied, setApplied] = useState<Inputs | null>(null);
   const [runId, setRunId] = useState(0);
-  const runNow = () => { if (obsCheck.error) return; setApplied(inputsL); setRunId((n) => n + 1); };
+  // RUN shows a running indicator first: wait until the browser has painted it, then calculate synchronously (flushSync),
+  // then keep the indicator up for at least 450 ms so even a fast run gives visible feedback.
+  const [running, setRunning] = useState(false);
+  const runNow = () => {
+    if (obsCheck.error || running) return;
+    const snapshot = inputsL;
+    const started = performance.now();
+    setRunning(true);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      try { flushSync(() => { setApplied(snapshot); setRunId((n) => n + 1); }); }
+      finally { window.setTimeout(() => setRunning(false), Math.max(0, 450 - (performance.now() - started))); }
+    }));
+  };
   // Names are cosmetic (they update everywhere without a new RUN), so they are ignored when checking for stale results.
   const sig = (i: Inputs) => JSON.stringify({ ...i, wells: i.wells.map(({ name, ...r }) => (void name, r)), points: i.points.map(({ name, ...r }) => (void name, r)), mwells: i.mwells.map(({ name, ...r }) => (void name, r)) });
   const stale = useMemo(() => applied !== null && sig(applied) !== sig(inputsL), [applied, inputsL]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1206,12 +1219,19 @@ export default function Page() {
         </div>
       </header>
       {busy && <p className="hint">{busy}</p>}
+      {running && (
+        <div className="run-toast" role="status" aria-live="polite">
+          <span className="spin" aria-hidden="true" />
+          <span>Running the analysis…</span>
+          <span className="run-toast-bar" aria-hidden="true"><i /></span>
+        </div>
+      )}
 
       <div className="layout">
         <aside className="panel">
           <div className="runbar">
-            <button className="run" onClick={() => runNow()}>▶ RUN analysis</button>
-            <span className="hint"> {applied ? (stale ? "Inputs changed — press RUN to update." : "Results are up to date.") : "Set your inputs, then press RUN."}</span>
+            <button className={`run${running ? " is-running" : ""}`} onClick={() => runNow()} disabled={running} aria-busy={running}>{running ? <><span className="spin" aria-hidden="true" />Running…</> : "▶ RUN analysis"}</button>
+            <span className="hint" aria-live="polite"> {running ? "Running the analysis…" : applied ? (stale ? "Inputs changed — press RUN to update." : "Results are up to date.") : "Set your inputs, then press RUN."}</span>
           </div>
           {liveError && <p className="err">Input problem: {liveError}</p>}
 
@@ -1652,7 +1672,7 @@ export default function Page() {
               <span className="welcome-badge"><i aria-hidden="true" />Ready</span>
               <h2 className="welcome-title">No results yet</h2>
               <p className="welcome-text"><span className="welcome-arrow" aria-hidden="true">←</span>Check the inputs on the left, then run the analysis.</p>
-              <button type="button" className="run welcome-run" onClick={() => runNow()}>▶ RUN analysis</button>
+              <button type="button" className={`run welcome-run${running ? " is-running" : ""}`} onClick={() => runNow()} disabled={running} aria-busy={running}>{running ? <><span className="spin" aria-hidden="true" />Running…</> : "▶ RUN analysis"}</button>
               <ol className="welcome-steps">
                 <li><span>1</span>Choose the well system</li>
                 <li><span>2</span>Set the inputs</li>
@@ -1663,7 +1683,7 @@ export default function Page() {
 
           {applied && fieldError && (
             <>
-              {stale && <div className="stale">The inputs have changed since the last run — press <b>▶ RUN analysis</b> to try again. <button type="button" className="linkbtn" onClick={() => runNow()}>▶ RUN analysis</button></div>}
+              {stale && <div className="stale">The inputs have changed since the last run — press <b>▶ RUN analysis</b> to try again. <button type="button" className="linkbtn" onClick={() => runNow()} disabled={running}>{running ? "Running…" : "▶ RUN analysis"}</button></div>}
               <div className="empty">
                 <p><b>Calculation stopped.</b></p>
                 <p className="err">{fieldError}</p>
@@ -1674,7 +1694,7 @@ export default function Page() {
 
           {applied && !fieldError && (
             <>
-              {stale && <div className="stale">The inputs have changed since the last run. The results below still show the previous run — press <b>▶ RUN analysis</b> to update them. <button type="button" className="linkbtn" onClick={() => runNow()}>▶ RUN analysis</button></div>}
+              {stale && <div className="stale">The inputs have changed since the last run. The results below still show the previous run — press <b>▶ RUN analysis</b> to update them. <button type="button" className="linkbtn" onClick={() => runNow()} disabled={running}>{running ? "Running…" : "▶ RUN analysis"}</button></div>}
               {warnings.length > 0 && (
                 <ul className="warn">{warnings.map((w) => <li key={w}>{w}</li>)}</ul>
               )}

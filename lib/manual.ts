@@ -43,7 +43,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
     "Step 1. Choose the Well system at the top of the Input panel: Single well or Multiwell interference.",
     "Step 2. Check the values in the Input panel. Change anything you like; each number has its own unit selector beside it. The Input panel is a vertical list of tabs (Well system, Model, Reservoir & fluids, Wells, Pressure limit, Shut-in, Monitoring points, Report); click a tab to open its inputs directly under it, and click it again to close it. Inside each tab the inputs are arranged in small labelled groups (for example Pressure limit and Interference, or Observation after injection stops and Observation period).",
     "Step 3. Single well: enter the rate, skin and number of injection years. Multiwell: set the Number of wells and how the distances are given (constant spacing in a line or grid, adjacent distances, a pairwise distance matrix or x/y coordinates), then each well's rate, start and end year, radius, skin, evaporation choice and own maximum BHP in the table.",
-    "Step 4. Press ▶ RUN analysis (button at the top of the left panel, or the RUN button in the “No results yet” panel on the right). Nothing is calculated until you do this.",
+    "Step 4. Press ▶ RUN analysis (button at the top of the left panel, or the RUN button in the “No results yet” panel on the right). Nothing is calculated until you do this. While the calculation runs, the button shows a spinning circle and “Running…”, a “Running the analysis…” banner appears at the top of the page, and RUN cannot be pressed again until the results are ready.",
     "Step 5. Read the status cards: with the example data (two-phase model, 30 years) the peak BHP is 3582.45 psia at Well 2 and Well 3 against an allowable BHP of 4680 psia (0.9 × 5200 psia), so the status is PASS.",
     "Step 6. Click through the result tabs. Multiwell: Multiwell results (the program's own tables, figures and files), CO₂ saturation, Pressure map, Time series, Well BHP, Interference matrix, Limit check and Compare boundaries. Single well: Program results first.",
     "Step 7. Change an input and press RUN again. A yellow banner reminds you whenever the displayed results are older than the inputs.",
@@ -53,7 +53,7 @@ export function manualBlocks(img: ImgResolver, date: string): Block[] {
   h1("3. The screen at a glance");
   fig("overview", "Figure 1. The main screen after pressing RUN. The numbered areas are described in Table 1.");
   table("Table 1. Areas of the main screen.", ["No.", "Area", "What it does"], [
-    ["1", "RUN analysis", "Starts the calculation with the current inputs. Also shows whether results are up to date."],
+    ["1", "RUN analysis", "Starts the calculation with the current inputs. Shows “Running…” with a spinner while it works, then whether results are up to date."],
     ["2", "Input panel", "One Input section with all inputs, in groups: well system, pressure model and boundary, reservoir and fluids, the injection well (single well) or the number of wells and distances (multiwell), the pressure limit, shut-in observation, monitoring points and report details."],
     ["3", "Export buttons", "Results CSV, Report (PDF) and Report (Word); the User manual link."],
     ["4", "Status cards", "Peak BHP of the worst well (the bar shows how much of the allowable buildup it uses), allowable BHP, the program's pressure status (PASS, FAIL or NOT ASSESSED) and the cumulative CO₂ injected by the field."],
