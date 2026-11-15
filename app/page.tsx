@@ -1926,7 +1926,6 @@ export default function Page() {
                   {code.out && codePlot && (
                     <div className="plotwrap" role="img" aria-label="Bottom-hole pressure versus elapsed time" dangerouslySetInnerHTML={{ __html: codePlot.svg.replace(`width="${codePlot.width}" height="${codePlot.height}"`, 'width="100%"') }} />
                   )}
-                  {multi && <h3>Your program for {wells[bhpIdx].name} on its own</h3>}
                   {code.note && <p className="caption" style={{ marginTop: 0 }}>Note: {code.note}.</p>}
                   {code.error && <p className="err" role="alert">{code.error}</p>}
                   {code.out && codeFiles && codePlot && (

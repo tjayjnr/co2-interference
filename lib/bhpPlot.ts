@@ -5,9 +5,14 @@
 
 import { DAYS_PER_YEAR, isWaterMode, type Row, type RunOutput } from "./bhp.ts";
 
-const W = 1280, H = 510; // figsize (12.8, 5.3) at 100 dpi; no title or footnote, legend in a row under the panels
-const RED = "#BC332B", TEAL = "#235F73", NAVY = "#19394D", BLUE = "#2C7DA0", GREY = "#666666";
-const FONT = "DejaVu Sans, Verdana, Arial, sans-serif";
+// Styled like the website's other charts (lib/charts.ts): serif font, muted axis text, horizontal grid lines only,
+// left and bottom axis lines, legend rows under the panels. The figure is twice as wide as those charts and is shown
+// at the same width, so text and lines are drawn K times larger to appear at the same size.
+const W = 1280, H = 580;
+const K = 1.6;
+const RED = "#BC332B", TEAL = "#235F73", NAVY = "#19394D", BLUE = "#2C7DA0", GREY = "#868e96";
+const TEXT = "#1c2330", MUTED = "#5c677d", GRID = "#dde1e7", FRAME = "#5c677d";
+const FONT = "'Times New Roman', Times, serif";
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /** matplotlib MaxNLocator(nbins, steps).tick_values(lo, hi) */
@@ -71,8 +76,8 @@ export function renderBhpPlot(out: RunOutput): { svg: string; width: number; hei
   const ya_label = yL.label;
 
   // ---- layout (two panels, width ratios 1.3 : 1, shared y)
-  const top = 36, bottom = H - 90, left1 = 78;
-  const gap = 78, right2 = W - 22;
+  const top = 52, bottom = H - 150, left1 = 108;
+  const gap = 104, right2 = W - 26;
   const total = right2 - left1 - gap;
   const w1 = (total * 1.3) / 2.3, w2 = total - w1;
   const left2 = left1 + w1 + gap;
@@ -86,77 +91,78 @@ export function renderBhpPlot(out: RunOutput): { svg: string; width: number; hei
   const s: string[] = [];
   s.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="${FONT}">`);
   s.push(`<rect width="${W}" height="${H}" fill="#ffffff"/>`);
-  s.push(`<defs><clipPath id="c1"><rect x="${left1}" y="${top}" width="${w1}" height="${bottom - top}"/></clipPath><clipPath id="c2"><rect x="${left2}" y="${top}" width="${w2}" height="${bottom - top}"/></clipPath></defs>`);
+  s.push(`<defs><clipPath id="bhp-c1"><rect x="${left1}" y="${top}" width="${w1}" height="${bottom - top}"/></clipPath><clipPath id="bhp-c2"><rect x="${left2}" y="${top}" width="${w2}" height="${bottom - top}"/></clipPath></defs>`);
 
-  const panel = (x0: number, w: number, X: (v: number) => number, xt: [number, string][], ptitle: string, xlabel: string, clip: string, Y: (v: number) => number, ya: { ticks: number[]; label: (v: number) => string }) => {
-    // grid
-    for (const [v] of xt) s.push(`<line x1="${X(v)}" y1="${top}" x2="${X(v)}" y2="${bottom}" stroke="#b0b0b0" stroke-opacity="0.3" stroke-width="0.8"/>`);
-    for (const v of ya.ticks) s.push(`<line x1="${x0}" y1="${Y(v)}" x2="${x0 + w}" y2="${Y(v)}" stroke="#b0b0b0" stroke-opacity="0.3" stroke-width="0.8"/>`);
-    // frame, ticks
-    s.push(`<rect x="${x0}" y="${top}" width="${w}" height="${bottom - top}" fill="none" stroke="#000" stroke-width="0.8"/>`);
-    for (const [v, lab] of xt) {
-      s.push(`<line x1="${X(v)}" y1="${bottom}" x2="${X(v)}" y2="${bottom + 4}" stroke="#000" stroke-width="0.8"/>`);
-      s.push(`<text x="${X(v)}" y="${bottom + 18}" text-anchor="middle" font-size="12">${esc(lab)}</text>`);
-    }
-    for (const v of ya.ticks) {
-      s.push(`<line x1="${x0 - 4}" y1="${Y(v)}" x2="${x0}" y2="${Y(v)}" stroke="#000" stroke-width="0.8"/>`);
-      s.push(`<text x="${x0 - 7}" y="${Y(v) + 4}" text-anchor="end" font-size="12">${esc(ya.label(v))}</text>`);
-    }
-    s.push(`<text x="${x0 + w / 2}" y="${top - 8}" text-anchor="middle" font-size="16">${esc(ptitle)}</text>`);
-    s.push(`<text x="${x0 + w / 2}" y="${bottom + 40}" text-anchor="middle" font-size="13">${esc(xlabel)}</text>`);
-    void clip;
+  const panel = (x0: number, w: number, X: (v: number) => number, xt: [number, string][], ptitle: string, xlabel: string, Y: (v: number) => number, ya: { ticks: number[]; label: (v: number) => string }) => {
+    for (const v of ya.ticks) s.push(`<line x1="${x0}" y1="${Y(v).toFixed(1)}" x2="${x0 + w}" y2="${Y(v).toFixed(1)}" stroke="${GRID}" stroke-width="${K}"/>`);
+    s.push(`<line x1="${x0}" y1="${bottom}" x2="${x0 + w}" y2="${bottom}" stroke="${FRAME}" stroke-width="${K}"/>`);
+    s.push(`<line x1="${x0}" y1="${top}" x2="${x0}" y2="${bottom}" stroke="${FRAME}" stroke-width="${K}"/>`);
+    for (const [v, lab] of xt) s.push(`<text x="${X(v).toFixed(1)}" y="${bottom + 29}" text-anchor="middle" font-size="${11 * K}" fill="${MUTED}">${esc(lab)}</text>`);
+    for (const v of ya.ticks) s.push(`<text x="${x0 - 12}" y="${(Y(v) + 6).toFixed(1)}" text-anchor="end" font-size="${11 * K}" fill="${MUTED}">${esc(ya.label(v))}</text>`);
+    s.push(`<text x="${x0 + w / 2}" y="${top - 18}" text-anchor="middle" font-size="${15 * K}" font-weight="700" fill="${TEXT}">${esc(ptitle)}</text>`);
+    s.push(`<text x="${x0 + w / 2}" y="${bottom + 64}" text-anchor="middle" font-size="${12 * K}" fill="${MUTED}">${esc(xlabel)}</text>`);
   };
   const poly = (pts: [number, number][], color: string, clip: string) =>
-    s.push(`<polyline clip-path="url(#${clip})" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" points="${pts.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ")}"/>`);
-  const dot = (x: number, y: number, r: number, color: string, clip = "") => s.push(`<circle ${clip ? `clip-path="url(#${clip})" ` : ""}cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${r}" fill="${color}"/>`);
-  const square = (x: number, y: number, a: number, color: string, clip = "") => s.push(`<rect ${clip ? `clip-path="url(#${clip})" ` : ""}x="${(x - a / 2).toFixed(2)}" y="${(y - a / 2).toFixed(2)}" width="${a}" height="${a}" fill="${color}"/>`);
+    s.push(`<polyline clip-path="url(#${clip})" fill="none" stroke="${color}" stroke-width="${2 * K}" stroke-linejoin="round" stroke-linecap="round" points="${pts.map(([x, y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ")}"/>`);
+  const dot = (x: number, y: number, r: number, color: string, clip = "") => s.push(`<circle ${clip ? `clip-path="url(#${clip})" ` : ""}cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${r * K}" fill="${color}"/>`);
+  const square = (x: number, y: number, a: number, color: string, clip = "") => s.push(`<rect ${clip ? `clip-path="url(#${clip})" ` : ""}x="${(x - (a * K) / 2).toFixed(2)}" y="${(y - (a * K) / 2).toFixed(2)}" width="${a * K}" height="${a * K}" fill="${color}"/>`);
 
   // initial pressure Pi: dashed reference line across the panel, labelled under its right end
   const piLine = (x0: number, w: number, y: number) => {
-    s.push(`<line x1="${x0}" y1="${y}" x2="${x0 + w}" y2="${y}" stroke="${NAVY}" stroke-width="1" stroke-dasharray="6 4" stroke-opacity="0.7"/>`);
-    s.push(`<text x="${x0 + w - 6}" y="${y + 15}" text-anchor="end" font-size="12" fill="${NAVY}">Pi = ${esc(ya_label(Pi))} psia</text>`);
+    s.push(`<line x1="${x0}" y1="${y.toFixed(1)}" x2="${x0 + w}" y2="${y.toFixed(1)}" stroke="${NAVY}" stroke-width="${1.2 * K}" stroke-dasharray="${8 * K} ${5 * K}" stroke-opacity="0.75"/>`);
+    s.push(`<text x="${x0 + w - 8}" y="${(y + 22).toFixed(1)}" text-anchor="end" font-size="${11 * K}" fill="${NAVY}">Pi = ${esc(ya_label(Pi))} psia</text>`);
   };
   // ---- left panel
   panel(left1, w1, X1, xTicks.map((t) => [t, String(t)]), obs ? "Injection and post-shut-in observation" : "Full injection period",
-    obs ? "Elapsed time from injection start (years)" : "Elapsed injection time (years)", "c1", Y1, yL);
-  s.push(`<text transform="translate(${left1 - 56},${(top + bottom) / 2}) rotate(-90)" text-anchor="middle" font-size="13">BHP (psia)</text>`);
-  poly(history.map((r) => [X1(r.year), Y1(r.BHP_psia)]), RED, "c1");
-  for (const r of results) dot(X1(r.year), Y1(r.BHP_psia), 2.1, RED, "c1");
+    obs ? "Elapsed time from injection start (years)" : "Elapsed injection time (years)", Y1, yL);
+  s.push(`<text transform="translate(${left1 - 82},${(top + bottom) / 2}) rotate(-90)" text-anchor="middle" font-size="${12 * K}" fill="${MUTED}">BHP (psia)</text>`);
+  poly(history.map((r) => [X1(r.year), Y1(r.BHP_psia)]), RED, "bhp-c1");
+  for (const r of results) dot(X1(r.year), Y1(r.BHP_psia), 1.7, RED, "bhp-c1");
   if (obs) {
-    poly(obs.elapsed_years.map((t, i) => [X1(t), Y1(obs.bhp_psia[i])]), TEAL, "c1");
-    for (const r of obs.rows) square(X1(r.elapsed_year), Y1(r.BHP_psia), 5.5, TEAL, "c1");
-    s.push(`<line x1="${X1(shutInYear)}" y1="${top}" x2="${X1(shutInYear)}" y2="${bottom}" stroke="${GREY}" stroke-width="1" stroke-dasharray="4 3"/>`);
+    poly(obs.elapsed_years.map((t, i) => [X1(t), Y1(obs.bhp_psia[i])]), TEAL, "bhp-c1");
+    for (const r of obs.rows) square(X1(r.elapsed_year), Y1(r.BHP_psia), 4.5, TEAL, "bhp-c1");
+    s.push(`<line x1="${X1(shutInYear)}" y1="${top}" x2="${X1(shutInYear)}" y2="${bottom}" stroke="${GREY}" stroke-width="${1.2 * K}" stroke-dasharray="${5 * K} ${4 * K}"/>`);
   }
   piLine(left1, w1, Y1(Pi));
-  dot(X1(0), Y1(Pi), 2.9, NAVY, "c1");
+  dot(X1(0), Y1(Pi), 2.9, NAVY, "bhp-c1");
   // first-year checkpoints only on the expanded first-year panel (on the year axis they pile up at t = 0)
 
   // ---- right panel (first year, symlog)
   const dayTicks: [number, string][] = [[0, "0"], [1 / 86400, "1 s"], [1 / 1440, "1 min"], [1 / 24, "1 h"], [1, "1 d"], [30, "30 d"], [DAYS_PER_YEAR, "1 yr"]];
-  panel(left2, w2, X2, dayTicks, "First year: expanded time scale", "Elapsed injection time", "c2", Y2, yR);
+  panel(left2, w2, X2, dayTicks, "First year: expanded time scale", "Elapsed injection time", Y2, yR);
   piLine(left2, w2, Y2(Pi));
-  poly(firstYear.map((r) => [X2(r.t_days), Y2(r.BHP_psia)]), RED, "c2");
+  poly(firstYear.map((r) => [X2(r.t_days), Y2(r.BHP_psia)]), RED, "bhp-c2");
   dot(X2(0), Y2(Pi), 2.9, NAVY);
   for (const r of cps.slice(1)) dot(X2(r.t_days), Y2(r.BHP_psia), 2.75, BLUE);
 
-  // ---- legend: lines first, then markers, as matplotlib orders them
+  // ---- legend under the panels (lines first, then markers, as matplotlib orders them), wrapping into rows
   type Entry = [string, (x: number, y: number) => void];
-  const entries: Entry[] = [["Calculated BHP", (x, y) => s.push(`<line x1="${x}" y1="${y}" x2="${x + 22}" y2="${y}" stroke="${RED}" stroke-width="2"/>`)]];
+  const seg = (color: string, width: number, dash = "", opacity = 1) => (x: number, y: number) =>
+    s.push(`<line x1="${x}" y1="${y}" x2="${x + 22 * K}" y2="${y}" stroke="${color}" stroke-width="${width * K}"${dash ? ` stroke-dasharray="${dash}"` : ""}${opacity < 1 ? ` stroke-opacity="${opacity}"` : ""}/>`);
+  const entries: Entry[] = [["Calculated BHP", seg(RED, 2.5)]];
   if (obs) {
-    entries.push(["Shut-in pressure", (x, y) => s.push(`<line x1="${x}" y1="${y}" x2="${x + 22}" y2="${y}" stroke="${TEAL}" stroke-width="2"/>`)]);
-    entries.push(["Shut-in", (x, y) => s.push(`<line x1="${x}" y1="${y}" x2="${x + 22}" y2="${y}" stroke="${GREY}" stroke-width="1" stroke-dasharray="4 3"/>`)]);
-    entries.push(["Selected observation years", (x, y) => square(x + 11, y, 5.5, TEAL)]);
+    entries.push(["Shut-in pressure", seg(TEAL, 2.5)]);
+    entries.push(["Shut-in", seg(GREY, 1.2, `${5 * K} ${4 * K}`)]);
+    entries.push(["Selected observation years", (x, y) => square(x + 11 * K, y, 5.5, TEAL)]);
   }
-  entries.push(["Initial pressure Pi", (x, y) => { s.push(`<line x1="${x}" y1="${y}" x2="${x + 22}" y2="${y}" stroke="${NAVY}" stroke-width="1" stroke-dasharray="6 4" stroke-opacity="0.7"/>`); dot(x + 11, y, 2.9, NAVY); }]);
-  entries.push(["First-year checkpoints", (x, y) => dot(x + 11, y, 2.75, BLUE)]);
-  // one row under the x-axis labels, centred, so it never covers the curves
-  const widths = entries.map(([lab]) => 30 + lab.length * 6.6 + 22);
-  let lx = (W - widths.reduce((a, b) => a + b, 0)) / 2;
-  const ly = bottom + 66;
-  entries.forEach(([lab, draw], i) => {
-    draw(lx, ly);
-    s.push(`<text x="${lx + 30}" y="${ly + 4}" font-size="12">${esc(lab)}</text>`);
-    lx += widths[i];
+  entries.push(["Initial pressure Pi", (x, y) => { seg(NAVY, 1.2, `${8 * K} ${5 * K}`, 0.75)(x, y); dot(x + 11 * K, y, 2.9, NAVY); }]);
+  entries.push(["First-year checkpoints", (x, y) => dot(x + 11 * K, y, 2.75, BLUE)]);
+  const itemW = (lab: string) => 28 * K + lab.length * 5.4 * K + 20 * K;
+  const rows: Entry[][] = [[]];
+  let used = 0;
+  for (const e of entries) {
+    if (used + itemW(e[0]) > W - 60 && rows[rows.length - 1].length) { rows.push([]); used = 0; }
+    rows[rows.length - 1].push(e);
+    used += itemW(e[0]);
+  }
+  rows.forEach((row, r) => {
+    let lx = (W - row.reduce((a, e) => a + itemW(e[0]), 0)) / 2;
+    const ly = bottom + 102 + r * 30;
+    for (const [lab, draw] of row) {
+      draw(lx, ly);
+      s.push(`<text x="${lx + 28 * K}" y="${ly + 6}" font-size="${12 * K}" fill="${TEXT}">${esc(lab)}</text>`);
+      lx += itemW(lab);
+    }
   });
 
   s.push("</svg>");
