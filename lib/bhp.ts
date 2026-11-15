@@ -165,6 +165,8 @@ export interface Inputs {
   observation_period_years: number;
   observation_years: string;
   include_evaporation: boolean;
+  /** two-phase only: equilibrium CO2 dissolved in the zone 2 brine (co2_dissolution_pressure_only.py); off by default */
+  include_dissolution: boolean;
 }
 
 export const DEFAULT_INPUTS: Inputs = {
@@ -192,6 +194,7 @@ export const DEFAULT_INPUTS: Inputs = {
   observation_period_years: 0.0,
   observation_years: "",
   include_evaporation: true,
+  include_dissolution: false,
 };
 
 export const PHASE_LABELS = {
@@ -218,7 +221,7 @@ export function inputNamesForPhase(phase: PhaseMode, fluid: SingleFluid = "co2")
       "brine_standard_density_lb_ft3", "rock_compressibility_per_psi", "skin"];
   }
   return (Object.keys(DEFAULT_INPUTS) as (keyof Inputs)[]).filter(
-    (n) => !["phase_mode", "single_phase_fluid", "water_rate_stb_day", "water_Bw_rb_stb", "include_evaporation"].includes(n)
+    (n) => !["phase_mode", "single_phase_fluid", "water_rate_stb_day", "water_Bw_rb_stb", "include_evaporation", "include_dissolution"].includes(n)
       && !OBSERVATION_INPUTS.has(n) && (phase === "two" || !TWO_PHASE_ONLY.has(n)),
   );
 }
@@ -250,6 +253,7 @@ export function validate(p: Inputs): void {
   if (!(p.phase_mode in PHASE_LABELS)) fail("phase_mode must be 'single' or 'two'.");
   if (!["water", "co2"].includes(p.single_phase_fluid)) fail("single_phase_fluid must be 'water' or 'co2'.");
   if (typeof p.include_evaporation !== "boolean") fail("include_evaporation must be True or False.");
+  if (typeof p.include_dissolution !== "boolean") fail("include_dissolution must be True or False.");
   observationSchedule(p.observation_period_years, p.observation_years);
   if (isWaterMode(p)) p.water_Bw_rb_stb = SINGLE_PHASE_WATER_BW_RB_STB;
   const active = inputNamesForPhase(p.phase_mode, p.single_phase_fluid);
@@ -284,6 +288,9 @@ export function validate(p: Inputs): void {
     co2Viscosity(p.temperature_F, rho);
   }
   if (p.phase_mode === "two" && !(tK < WATER_TC_K)) fail("The supplied water-saturation equation requires 0 < absolute temperature < 647.096 K.");
+  if (p.phase_mode === "two" && p.include_dissolution) {
+    calculateSolubility(p.initial_pressure_psia, p.temperature_F, waterProperties(p.initial_pressure_psia, p).salt_mass_fraction);
+  }
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -670,6 +677,167 @@ export function coreyFrontQuantities(M_lambda: number, Swr: number, n_gas = 3.0,
   };
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// CO2 dissolution (co2_dissolution_pressure_only.py): equilibrium CO2 solubility in NaCl brine, Spycher et al. (2003)
+// with the Spycher & Pruess (2005) salting-out coefficient and Garcia's apparent molar volume for the solution density.
+// https://doi.org/10.1016/S0016-7037(03)00273-4 · https://doi.org/10.1016/j.gca.2005.01.015 · https://escholarship.org/uc/item/4q1422qm
+// Solubility units: pressure in bar, molar volume in cm^3/mol, mass in kg/mol. Valid 35-99 C, 1-600 bar, 0-6 mol NaCl/kg.
+const PSI_TO_BAR = PA_PER_PSI / 1e5;
+const R_BAR_CM3 = R_UNIVERSAL_J_MOL_K * 10.0;
+const M_CO2 = MW_CO2 / 1000.0;
+const M_NACL = MW_SALT_KG_MOL;
+const WATER_MOLES_PER_KG = 1.0 / (MW_WATER / 1000.0);
+
+/** Real roots of z^3+a*z^2+b*z+c (Python `_cubic_roots`); only used in the validated range. */
+function solubilityCubicRoots(a: number, b: number, c: number): number[] {
+  const pp = b - (a * a) / 3.0;
+  const qq = (2.0 * a ** 3) / 27.0 - (a * b) / 3.0 + c;
+  const disc = (qq / 2.0) ** 2 + (pp / 3.0) ** 3;
+  const cbrt = (v: number) => Math.sign(v) * Math.abs(v) ** (1.0 / 3.0);
+  if (disc > 0.0) {
+    const sd = Math.sqrt(disc);
+    return [cbrt(-qq / 2.0 + sd) + cbrt(-qq / 2.0 - sd) - a / 3.0];
+  }
+  if (pp >= 0.0) return [cbrt(-qq) - a / 3.0];
+  const arg = ((3.0 * qq) / (2.0 * pp)) * Math.sqrt(-3.0 / pp);
+  const theta = Math.acos(Math.max(-1.0, Math.min(1.0, arg))) / 3.0;
+  return [0, 1, 2].map((k) => 2.0 * Math.sqrt(-pp / 3.0) * Math.cos(theta - (2.0 * Math.PI * k) / 3.0) - a / 3.0);
+}
+
+/** Infinite-dilution modified-RK fugacity expression for CO2 or water (Python `_ln_phi`). */
+function lnPhi(v: number, pressure_bar: number, tk: number, a_i: number, b_i: number): number {
+  const ac = 7.54e7 - 4.13e4 * tk;
+  const bc = 27.8;
+  const log_term = Math.log1p(bc / v);
+  return Math.log(v / (v - bc)) + b_i / (v - bc)
+    - ((2.0 * a_i) / (R_BAR_CM3 * tk ** 1.5 * bc)) * log_term
+    + ((ac * b_i) / (R_BAR_CM3 * tk ** 1.5 * bc ** 2)) * (log_term - bc / (v + bc))
+    - Math.log((pressure_bar * v) / (R_BAR_CM3 * tk));
+}
+
+/** Pure-CO2 molar volume using the solubility model's modified RK EOS (Python `_rk_volume`). */
+function rkVolume(pb: number, tk: number): number {
+  const ac = 7.54e7 - 4.13e4 * tk, bc = 27.8;
+  const aa = (ac * pb) / (R_BAR_CM3 ** 2 * tk ** 2.5);
+  const bb = (bc * pb) / (R_BAR_CM3 * tk);
+  const zz = solubilityCubicRoots(-1.0, aa - bb - bb * bb, -aa * bb);
+  const volumes = zz.filter((z) => z > bb).map((z) => (z * R_BAR_CM3 * tk) / pb);
+  if (!volumes.length) fail("No physical modified-RK molar-volume root found.");
+  return volumes.reduce((best, v) => (lnPhi(v, pb, tk, ac, bc) < lnPhi(best, pb, tk, ac, bc) ? v : best));
+}
+
+/** Equilibrium molality [mol/kg water] and aqueous CO2 mass fraction (Python `calculate_solubility`).
+ * xs: NaCl mass fraction of the CO2-free brine. */
+export function calculateSolubility(p_psia: number, t_f: number, xs = 0.034): Row {
+  if (![p_psia, t_f, xs].every(Number.isFinite)) fail("All inputs must be finite numbers.");
+  const pb = p_psia * PSI_TO_BAR;
+  const tc = ((t_f - 32.0) * 5.0) / 9.0;
+  const tk = tc + 273.15;
+  if (!(pb >= 1.0 && pb <= 600.0)) fail("Dissolution pressure range is 1-600 bar absolute (14.504-8702.264 psia).");
+  if (!(tc >= 35.0 - 1e-10 && tc <= 99.0 + 1e-10)) fail("Dissolution temperature range is 35-99 C (95-210.2 F).");
+  if (!(xs >= 0.0 && xs < 1.0)) fail("NaCl mass fraction must be in [0, 1).");
+  const ms = xs / ((1.0 - xs) * M_NACL);
+  if (ms > 6.0) fail("NaCl molality exceeds the implemented limit of 6 mol/kg water.");
+  const volume = rkVolume(pb, tk);
+  // _equilibrium_at_volume: algebraic partitioning between the CO2-rich and aqueous phases.
+  const kh = 10.0 ** (-2.209 + 0.03097 * tc - 1.098e-4 * tc ** 2 + 2.048e-7 * tc ** 3);
+  const kc = 10.0 ** (1.189 + 0.01304 * tc - 5.446e-5 * tc ** 2);
+  const phi_c = Math.exp(lnPhi(volume, pb, tk, 7.54e7 - 4.13e4 * tk, 27.8));
+  const phi_h = Math.exp(lnPhi(volume, pb, tk, 7.89e7, 18.18));
+  const delta_p = pb - 1.0;
+  const A = (kh / (phi_h * pb)) * Math.exp((delta_p * 18.1) / (R_BAR_CM3 * tk));
+  const B = ((phi_c * pb) / (WATER_MOLES_PER_KG * kc)) * Math.exp((-delta_p * 32.6) / (R_BAR_CM3 * tk));
+  const y_water = (1.0 - B) / (1.0 / A - B);
+  const x_co2_water = B * (1.0 - y_water);
+  if (!(y_water >= 0.0 && y_water < 1.0 && x_co2_water >= 0.0 && x_co2_water < 1.0)) fail("Partitioning result outside physical bounds.");
+  const mc_water = (WATER_MOLES_PER_KG * x_co2_water) / (1.0 - x_co2_water);
+  // _salting_coefficient (Spycher & Pruess 2005)
+  const lam = -0.411370585 + 6.07632013e-4 * tk + 97.5347708 / tk - (0.0237622469 * pb) / tk
+    + (0.0170656236 * pb) / (630.0 - tk) + 1.41335834e-5 * tk * Math.log(pb);
+  const zeta = 3.36389723e-4 - 1.9829898e-5 * tk + (2.1222083e-3 * pb) / tk - (5.24873303e-3 * pb) / (630.0 - tk);
+  const gamma = Math.exp(2.0 * lam * ms + zeta * ms ** 2);
+  const mc = mc_water / gamma;
+  const x_mass = (mc * M_CO2) / (1.0 + ms * M_NACL + mc * M_CO2);
+  return {
+    mc_mol_per_kg_water: mc, Xco2_eq: x_mass, ms_mol_per_kg_water: ms, mc_pure_water: mc_water,
+    gamma, phi_co2: phi_c, phi_water: phi_h, K0_co2: kc, K0_water: kh, A, B,
+    x_co2_pure_water: x_co2_water, y_water_pure_system: y_water, volume_cm3_per_mol: volume,
+    pressure_bar: pb, temperature_c: tc, salt_mass_fraction: xs,
+  };
+}
+
+/** Equilibrium dissolved CO2 in zone 2 (Python `dissolution_properties`); off adds exactly zero inventory.
+ * The CO2-free brine density and salt fraction are the program's live background values at this pressure. */
+export function dissolutionProperties(pressure_psia: number, p: Inputs, rho_brine_lb_ft3: number, salt: number): Row {
+  let mc = 0.0, xeq = 0.0, cd = 0.0, rho_aq = rho_brine_lb_ft3, partial_rho = 0.0, dx_dp = 0.0;
+  if (p.include_dissolution) {
+    const eq = calculateSolubility(pressure_psia, p.temperature_F, salt);
+    mc = eq.mc_mol_per_kg_water;
+    xeq = eq.Xco2_eq;
+    const tc = ((p.temperature_F - 32.0) * 5.0) / 9.0;
+    const vphi = 37.51 - 0.09585 * tc + 0.000874 * tc ** 2 - 5.044e-7 * tc ** 3;
+    partial_rho = (M_CO2 / (vphi * 1e-6)) * KG_M3_TO_LB_FT3;
+    rho_aq = 1.0 / ((1.0 - xeq) / rho_brine_lb_ft3 + xeq / partial_rho);
+    cd = rho_aq * xeq;
+    // dXeq/dP: central difference, one-sided at the model pressure limits.
+    const step = Math.max(1e-4 * pressure_psia, 1e-3);
+    const high = Math.min(pressure_psia + step, 600.0 / PSI_TO_BAR);
+    const low = Math.max(pressure_psia - step, 1.0 / PSI_TO_BAR);
+    if (high <= low) fail("Cannot evaluate dXeq/dP at this pressure.");
+    const x_high = high !== pressure_psia ? calculateSolubility(high, p.temperature_F, salt).Xco2_eq : xeq;
+    const x_low = low !== pressure_psia ? calculateSolubility(low, p.temperature_F, salt).Xco2_eq : xeq;
+    dx_dp = (x_high - x_low) / (high - low);
+  }
+  return {
+    dissolution_enabled: p.include_dissolution ? 1 : 0, CO2_molality_mol_kg_water: mc, Xco2_eq: xeq,
+    rho_aq_lb_ft3: rho_aq, Cd_lb_ft3_aqueous: cd,
+    rho_co2_apparent_lb_ft3: partial_rho, dXeq_dP_per_psi: dx_dp,
+  };
+}
+
+/** fg(s) and dfg/ds for equal Corey exponents, s = Sg/(1-Swr) (Python `corey_fractional_flow`). */
+export function coreyFractionalFlow(s: number, M_lambda: number, n: number): [number, number] {
+  const denominator = M_lambda * s ** n + (1.0 - s) ** n;
+  const fg = (M_lambda * s ** n) / denominator;
+  const derivative = (n * M_lambda * s ** (n - 1.0) * (1.0 - s) ** (n - 1.0)) / denominator ** 2;
+  return [fg, derivative];
+}
+
+/** Leading gas shock into CO2-free brine with dissolution (Python `dissolution_front_quantities`).
+ * Shock speed F(S) = (fg + a)/(S + a), a = Cd/(rho_g - Cd); the shock is the maximum of F, where the chord
+ * from (-a,-a) is tangent to fg(Sg). a = 0 returns the original front quantities exactly. */
+export function dissolutionFrontQuantities(M_lambda: number, Swr: number, n_gas: number, n_water: number, a: number): Row {
+  if (a === 0.0) return coreyFrontQuantities(M_lambda, Swr, n_gas, n_water);
+  if (!Number.isFinite(a) || a < 0) fail("Dissolution retardation a = cd/(rho_g-cd) must be finite and >= 0.");
+  if (n_gas !== n_water || (n_gas !== 2.0 && n_gas !== 3.0)) fail("Supported Corey exponent pairs are (3, 3) and (2, 2).");
+  const n = n_gas;
+  const width = 1.0 - Swr;
+  const speed = (s: number) => (coreyFractionalFlow(s, M_lambda, n)[0] + a) / (width * s + a);
+  const tangency = (s: number) => {
+    const [fg, derivative] = coreyFractionalFlow(s, M_lambda, n);
+    return derivative * (width * s + a) - width * (fg + a);
+  };
+  // np.linspace(1e-9, 1.0, 20001) and np.argmax (first maximum).
+  const count = 20001, start = 1e-9, stop = 1.0, stepSize = (stop - start) / (count - 1);
+  const grid = (i: number) => (i === count - 1 ? stop : start + i * stepSize);
+  let index = 0, best = -Infinity;
+  for (let i = 0; i < count; i++) {
+    const v = speed(grid(i));
+    if (v > best) { best = v; index = i; }
+  }
+  if (index === 0 || index === count - 1) fail("Could not locate the dissolution-retarded gas front.");
+  const left = grid(index - 1), right = grid(index + 1);
+  const sf = tangency(left) > 0 && 0 > tangency(right) ? brentq(tangency, left, right, 1e-15, 1e-14) : grid(index);
+  const [fg, derivative] = coreyFractionalFlow(sf, M_lambda, n);
+  const front_factor = (fg + a) / (width * sf + a);
+  const tangent_error = derivative / width - front_factor;
+  if (Math.abs(tangent_error) > 1e-7 * front_factor) fail("Dissolution front failed the shock-tangent condition.");
+  return {
+    corey_n_gas: n_gas, corey_n_water: n_water, sf_normalized: sf, Sg_front: width * sf,
+    fg_front: fg, dfg_ds_front: derivative, front_tangent_error: tangent_error, gas_front_factor: front_factor,
+  };
+}
+
 /** Initial mass references; transport properties are recalculated per trial. */
 function referenceTwoPhaseQuantities(p: Inputs): Row {
   const Zsc = prState(P_SC_PSIA, T_SC_F).Z;
@@ -703,6 +871,13 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
   const salt = water.salt_mass_fraction;
   const M_lambda = (p.krg_endpoint * p.mu_water_cP) / (p.krw_endpoint * mu_g);
   const c: Row = { ...c0, ...coreyFrontQuantities(M_lambda, p.Swr, p.corey_n_gas, p.corey_n_water), M_lambda, reference_mobility_mD_cP: (p.k_mD * p.krg_zone1) / mu_g };
+  // DISSOLUTION ENTRY 1: equilibrium concentration at this trial pressure (zero when dissolution is off).
+  const dissolved = dissolutionProperties(property_pressure, p, water.rho_water_lb_ft3, salt);
+  const Cd = dissolved.Cd_lb_ft3_aqueous;
+  if (p.include_dissolution && rho_g <= Cd) fail("Dissolution inventory requires rho_g > Cd at the trial pressure.");
+  // DISSOLUTION ENTRY 2: the gas front must also saturate the brine it contacts (tangent from (-a,-a)).
+  const a_diss = p.include_dissolution ? Cd / (rho_g - Cd) : 0.0;
+  if (p.include_dissolution) Object.assign(c, dissolutionFrontQuantities(M_lambda, p.Swr, p.corey_n_gas, p.corey_n_water, a_diss));
   // 2. Cumulative injected volume, evaluated at the current property pressure.
   const t_days = year * DAYS_PER_YEAR;
   const Vsc = c.q_sc_scf_day * t_days;
@@ -714,7 +889,11 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
     yw = (water.water_activity * c.water_Psat_psia) / property_pressure;
     if (!(yw >= 0 && yw < 1)) fail("The supplied water-vapor expression gives yw outside [0,1).");
     ceq = ((MW_WATER / MW_CO2) * yw) / (1 - yw);
-    alpha_d = (rho_g * ceq) / (water.rho_water_lb_ft3 * (1 - salt) * p.Swr + rho_g * ceq * (1 - p.Swr));
+    // Water mass per brine volume; with dissolution the brine is CO2-saturated.
+    const water_content = p.include_dissolution
+      ? dissolved.rho_aq_lb_ft3 * (1 - dissolved.Xco2_eq) * (1 - salt)
+      : water.rho_water_lb_ft3 * (1 - salt);
+    alpha_d = (rho_g * ceq) / (water_content * p.Swr + rho_g * ceq * (1 - p.Swr));
   }
   // 4. Front radii measured from the well center.
   const area_factor = Math.PI * p.porosity * p.h_ft;
@@ -727,14 +906,38 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
   if (Vp2 <= 0) fail("The equations give a non-positive Zone 2 pore volume.");
   const Minj = c.rho_sc_lb_scf * Vsc;
   const Mg1 = rho_g * Vp1;
-  const Mg2 = Minj - Mg1;
-  const Vg2 = Mg2 / rho_g;
-  const Sg2 = Vg2 / Vp2;
-  const Sw2 = 1 - Sg2;
+  // DISSOLUTION ENTRY 3: free + dissolved CO2 mass balance gives Sg2.
+  let Mg2: number, Vg2: number, Sg2: number, Sw2: number, Mdiss: number;
+  if (p.include_dissolution) {
+    // Minj = rho_g*Vp1 + rho_g*Sg2*Vp2 + Cd*(1-Sg2)*Vp2 (Welge average consistent with the retarded front).
+    Sg2 = (Minj - Mg1 - Cd * Vp2) / ((rho_g - Cd) * Vp2);
+    Sw2 = 1 - Sg2;
+    Vg2 = Sg2 * Vp2;
+    Mg2 = rho_g * Vg2;
+    Mdiss = Cd * Sw2 * Vp2;
+  } else {
+    // The original operations, so results without dissolution are unchanged.
+    Mg2 = Minj - Mg1;
+    Vg2 = Mg2 / rho_g;
+    Sg2 = Vg2 / Vp2;
+    Sw2 = 1 - Sg2;
+    Mdiss = 0.0;
+  }
+  const Mfree = Mg1 + Mg2;
   if (!(Sg2 >= 0 && Sg2 <= 1 - p.Swr && Sw2 >= p.Swr && Sw2 <= 1)) fail(`Calculated saturations violate the supplied limits: Sg2=${pyFloat(Sg2)}, Sw2=${pyFloat(Sw2)}.`);
   const x2 = Sg2 / (1 - p.Swr);
   const krg2 = p.krg_endpoint * x2 ** p.corey_n_gas;
   const krw2 = p.krw_endpoint * (1 - x2) ** p.corey_n_water;
+  // DISSOLUTION ENTRIES 4 and 5: solubility storage in Zone 2 and brine flux into Zone 3.
+  let c_sol = 0.0, zone3_flux_ratio = 1.0;
+  if (p.include_dissolution) {
+    const Xeq = dissolved.Xco2_eq, rho_aq = dissolved.rho_aq_lb_ft3;
+    c_sol = ((Sw2 * rho_aq * dissolved.dXeq_dP_per_psi) / (1 - Xeq)) * (1 / rho_g - 1 / dissolved.rho_co2_apparent_lb_ft3);
+    const beta = rho_aq * (1 - Xeq); // CO2-free brine mass per CO2-saturated volume
+    const rho_b = water.rho_water_lb_ft3;
+    zone3_flux_ratio = (beta * (1 - c.fg_front) - c.gas_front_factor * (beta * (1 - c.Sg_front) - rho_b)) / rho_b;
+    if (!(zone3_flux_ratio > 0 && zone3_flux_ratio <= 1 + 1e-12)) fail(`Zone 3 brine flux ratio ${pyFloat(zone3_flux_ratio)} is outside (0, 1].`);
+  }
   // 6. Zone mobilities and total compressibilities.
   const mobilities = [
     (p.k_mD * p.krg_zone1) / mu_g,
@@ -743,7 +946,7 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
   ];
   const total_c = [
     cg + p.rock_compressibility_per_psi,
-    Sg2 * cg + Sw2 * cw + p.rock_compressibility_per_psi,
+    p.include_dissolution ? Sg2 * cg + Sw2 * cw + p.rock_compressibility_per_psi + c_sol : Sg2 * cg + Sw2 * cw + p.rock_compressibility_per_psi,
     cw + p.rock_compressibility_per_psi,
   ];
   if (total_c.some((v) => v <= 0)) fail("Every zone total compressibility must be positive.");
@@ -768,14 +971,14 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
   if (p.include_evaporation) {
     b1 = 1 / (2 * m[0]);
     b2 = Math.exp(dry_exponent) / (2 * m[1]);
-    b3 = Math.exp(dry_exponent + gas_exponent) / (2 * m[2]);
+    b3 = p.include_dissolution ? (zone3_flux_ratio * Math.exp(dry_exponent + gas_exponent)) / (2 * m[2]) : Math.exp(dry_exponent + gas_exponent) / (2 * m[2]);
     a2 = b3 * E1g3 - b2 * E1g2;
     a1 = a2 + b2 * E1d2 - b1 * E1d1;
   } else {
     // The absent dry region has no matching condition. Zone 2 begins at rw.
     b1 = a1 = dry_exponent = E1d1 = E1d2 = u1d = u2d = 0.0;
     b2 = 1 / (2 * m[1]);
-    b3 = Math.exp(gas_exponent) / (2 * m[2]);
+    b3 = p.include_dissolution ? (zone3_flux_ratio * Math.exp(gas_exponent)) / (2 * m[2]) : Math.exp(gas_exponent) / (2 * m[2]);
     a2 = b3 * E1g3 - b2 * E1g2;
   }
   // 9. Select the Zone 1 branch at the well and align the pressure reference.
@@ -787,8 +990,9 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
   const annual_gain = BHP - property_pressure;
   if (BHP <= 0 || !Number.isFinite(BHP)) fail("The calculated BHP is non-positive or non-finite.");
   // 10. Reconciliation checks; these never feed the physical calculations.
-  const mass_error = Mg1 + Mg2 - Minj;
-  const volume_error = Vp1 + Sg2 * Vp2 - Vr_ft3;
+  const mass_error = Mfree + Mdiss - Minj;
+  // Dissolved CO2 has no free-phase volume: Mdiss/rho_g is its gas-equivalent volume.
+  const volume_error = Vp1 + Sg2 * Vp2 + Mdiss / rho_g - Vr_ft3;
   const dry_error = p.include_evaporation ? a1 + b1 * E1d1 - (a2 + b2 * E1d2) : 0.0;
   const gas_error = a2 + b2 * E1g2 - (a3 + b3 * E1g3);
   if (Math.abs(mass_error) > 1e-9 * Math.max(1, Minj)) fail("CO2 mass balance failed.");
@@ -824,6 +1028,15 @@ function calculateTwoPhaseYear(year: number, property_pressure: number, p: Input
     result[`m${n}`] = m[zone];
     result[`c${n}_star`] = c_star[zone];
     result[`D${n}`] = D[zone];
+  }
+  if (p.include_dissolution) {
+    // Only with dissolution on, so the program's files without dissolution keep their columns.
+    Object.assign(result, dissolved, {
+      Mfree_lb: Mfree, Mdiss_lb: Mdiss, dissolved_fraction_of_injected: Mdiss / Minj,
+      free_gas_volume_ft3: Vp1 + Sg2 * Vp2, dissolved_gas_equivalent_volume_ft3: Mdiss / rho_g,
+      dissolution_retardation_a: a_diss, c_solubility_storage_per_psi: c_sol,
+      zone3_flux_ratio, zone3_brine_flux_rb_day: zone3_flux_ratio * q_reservoir,
+    });
   }
   if (!Object.values(result).every(Number.isFinite)) fail("A calculated intermediate is non-finite.");
   return result;
@@ -1357,6 +1570,7 @@ export interface FormValues {
   phase: string;
   years: string;
   evaporation: "yes" | "no";
+  dissolution?: "yes" | "no";
   observe: "yes" | "no";
   period: string;
   offsets: string;
@@ -1406,6 +1620,10 @@ export function browserCalculation(values: FormValues): RunOutput {
   if (phase === "two") {
     if (!["yes", "no"].includes(values.evaporation)) fail("Choose Yes or No for Include evaporation.");
     p.include_evaporation = values.evaporation === "yes";
+    if (values.dissolution !== undefined) {
+      if (!["yes", "no"].includes(values.dissolution)) fail("Choose Yes or No for Include CO2 dissolution.");
+      p.include_dissolution = values.dissolution === "yes";
+    }
   }
   for (const name of inputNamesForPhase(phase, fluid)) {
     const text = values.fields[name];
@@ -1645,6 +1863,16 @@ export function inputsUsed(out: RunOutput): string {
     phase_description: modelLabel(p),
     method,
   };
+  if (p.phase_mode === "two" && p.include_dissolution) {
+    Object.assign(method, {
+      dissolution: "equilibrium CO2 held in the zone 2 aqueous phase: Cd = rho_aq*Xco2_eq; Sg2 = (Minj-rho_g*Vp1-Cd*Vp2)/((rho_g-Cd)*Vp2); Mdiss = Cd*(1-Sg2)*Vp2",
+      dissolution_coupling: "(1) gas front dfg/dSg = (fg+a)/(Sf+a), a = Cd/(rho_g-Cd); (2) Sg2 mass balance -> krg2, krw2, Lambda2; (3) ct2 = Sg2*cg+Sw2*cw+cr+c_sol, c_sol = Sw2*rho_aq*(dXeq/dP)/(1-Xeq)*(1/rho_g-1/rho_app); (4) b3 = theta*exp(...)/(2*m3), theta = [beta*(1-fg)-F*(beta*(1-Sf)-rho_b)]/rho_b, beta = rho_aq*(1-Xeq); solubility and PVT updated at every pressure evaluation",
+      dissolution_solubility: "Spycher et al. 2003 with the Spycher-Pruess 2005 NaCl salting-out coefficient; 35-99 C, 1-600 bar absolute, 0-6 mol NaCl/kg water",
+      dissolution_aqueous_density: "Garcia apparent molar volume of dissolved CO2 mixed with the live CO2-free brine density",
+      dissolution_limitation: "local equilibrium; Zone 1 holds no brine and Zone 3 is CO2-free brine; pressure continuity at rd and rg is enforced exactly",
+      dissolution_references: "https://doi.org/10.1016/S0016-7037(03)00273-4; https://doi.org/10.1016/j.gca.2005.01.015; https://escholarship.org/uc/item/4q1422qm",
+    });
+  }
   if (observation) {
     method.observation = "Nonlinear zero-flow radial pressure diffusion with zone geometry and saturations frozen at shut-in. Cell viscosity and storage are updated at local pressure. Observation times are years after shut-in. Year zero reports formation pressure after removal of flowing skin.";
     saved.observation_report_years = observation.rows.map((r) => (isInt(r, "years_after_shut_in") ? new PyInt(r.years_after_shut_in) : r.years_after_shut_in));
@@ -1745,6 +1973,12 @@ export const SUMMARY_COLUMNS: [string, string, string][] = [
   ["Zone 2 gas saturation", "Sg2", ".6f"],
   ["Zone 2 krg", "krg2", ".6f"],
   ["Zone 2 krw", "krw2", ".6f"],
+  ["Equilibrium aqueous CO2 mass fraction", "Xco2_eq", ".6f"],
+  ["Dissolved CO2 concentration Cd (lb/ft3)", "Cd_lb_ft3_aqueous", ".6f"],
+  ["Dissolved CO2 mass (lb)", "Mdiss_lb", ".4f"],
+  ["Dissolved fraction of injected CO2", "dissolved_fraction_of_injected", ".6f"],
+  ["Solubility storage c_sol (1/psi)", "c_solubility_storage_per_psi", ".7e"],
+  ["Zone 3 brine flux ratio", "zone3_flux_ratio", ".6f"],
   ["Total increase (psi)", "total_delta_p_psi", ".6f"],
   ["Annual gain (psi)", "annual_gain_psi", ".6f"],
   ["BHP (psia)", "BHP_psia", ".6f"],

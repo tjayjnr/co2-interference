@@ -92,6 +92,27 @@ EVAPORATION SELECTION
     Command line: --evaporation on or --evaporation off.
     Saved inputs use include_evaporation: true or false.
 
+CO2 DISSOLUTION IN BRINE (OPTIONAL, TWO-PHASE MODEL ONLY)
+    Two-phase mode asks: Include CO2 dissolution? Yes or No. No is the default
+    and gives exactly the original calculation. Yes evaluates, at every trial
+    pressure P: Xeq(P) (Spycher 2003 with NaCl salting-out; 35-99 C, 1-600 bar,
+    <= 6 mol/kg), rho_aq = 1/((1-Xeq)/rho_b + Xeq/rho_app), Cd = rho_aq*Xeq.
+    Dissolution enters the pressure calculation in four places:
+      1. GAS FRONT: tangent from (-a,-a), a = Cd/(rho_g-Cd):
+             dfg/dSg(Sf) = (fg(Sf)+a)/(Sf+a) = F_diss
+             rg = sqrt(rw^2 + Vr_ft3*F_diss/(pi*phi*h)); a = 0 gives F exactly.
+      2. ZONE 2 SATURATION by total CO2 mass balance:
+             Sg2 = (Minj-rho_g*Vp1-Cd*Vp2)/((rho_g-Cd)*Vp2)
+      3. ZONE 2 STORAGE: ct2 = Sg2*cg + Sw2*cw + cr + c_sol,
+             c_sol = Sw2*rho_aq*(dXeq/dP)/(1-Xeq)*(1/rho_g-1/rho_app)
+      4. FLOW INTO ZONE 3: b3 = theta*exp(...)/(2*m3),
+             theta = [beta*(1-fg)-F_diss*(beta*(1-Sf)-rho_b)]/rho_b, beta = rho_aq*(1-Xeq)
+    With evaporation ON the brine water content is rho_aq*(1-Xeq)*(1-xs).
+    rho_b and xs are the live background brine values. The same per-source
+    equations are used in single-well and multiwell runs.
+    Command line: --dissolution on or --dissolution off.
+    Saved inputs use include_dissolution: true or false.
+
 PHASE SELECTION
     Notebook form: the two-phase grid opens with the shut-in inputs directly
     below injection years. Use the phase dropdown to select another model.
@@ -305,6 +326,14 @@ MAX_PRESSURE_ITERATIONS = 100
 SINGLE_PHASE_WATER_BW_RB_STB = 1.0
 SINGLE_PHASE_CO2_BG_RB_SCF = 0.0005690187
 
+# Solubility units: pressure in bar, molar volume in cm^3/mol, mass in kg/mol.
+PSI_TO_BAR = PA_PER_PSI / 1e5
+R_BAR_CM3 = R_UNIVERSAL_J_MOL_K * 10.0
+M_CO2 = MW_CO2 / 1000.0
+M_NACL = MW_SALT_KG_MOL
+M_H2O = MW_WATER / 1000.0
+WATER_MOLES_PER_KG = 1.0 / M_H2O
+
 
 @dataclass
 class Inputs:
@@ -335,6 +364,7 @@ class Inputs:
     observation_period_years: float = 0.0
     observation_years: str = ""
     include_evaporation: bool = True
+    include_dissolution: bool = False  # two-phase equilibrium CO2 dissolution in Zone 2
 
     def validate(self):
         if self.phase_mode not in PHASE_LABELS:
@@ -343,6 +373,8 @@ class Inputs:
             raise ValueError("single_phase_fluid must be 'water' or 'co2'.")
         if not isinstance(self.include_evaporation, bool):
             raise ValueError("include_evaporation must be True or False.")
+        if not isinstance(self.include_dissolution, bool):
+            raise ValueError("include_dissolution must be True or False.")
         observation_schedule(self.observation_period_years, self.observation_years)
         if is_water_mode(self):
             # Enforce the requested fixed factor even when loading old inputs.
@@ -393,6 +425,9 @@ class Inputs:
                 "The supplied water-saturation equation requires "
                 "0 < absolute temperature < 647.096 K."
             )
+        if self.phase_mode == "two" and self.include_dissolution:
+            calculate_solubility(self.initial_pressure_psia, self.temperature_F,
+                                 water_properties(self.initial_pressure_psia, self)["salt_mass_fraction"])
 
 
 PHASE_LABELS = {
@@ -431,7 +466,7 @@ def input_names_for_phase(phase, single_fluid="co2"):
         return water_names
     return tuple(
         item.name for item in fields(Inputs)
-        if item.name not in {"phase_mode", "single_phase_fluid", "water_rate_stb_day", "water_Bw_rb_stb", "include_evaporation"}
+        if item.name not in {"phase_mode", "single_phase_fluid", "water_rate_stb_day", "water_Bw_rb_stb", "include_evaporation", "include_dissolution"}
         and item.name not in OBSERVATION_INPUTS
         and (phase == "two" or item.name not in TWO_PHASE_ONLY)
     )
@@ -822,6 +857,218 @@ def corey_front_quantities(M_lambda, Swr, n_gas=3.0, n_water=3.0):
     }
 
 
+def _cubic_roots(a, b, c):
+    """Real roots of z^3+a*z^2+b*z+c; only used in the validated range."""
+    pp = b - a*a/3.0
+    qq = 2.0*a**3/27.0 - a*b/3.0 + c
+    disc = (qq/2.0)**2 + (pp/3.0)**3
+
+    def cbrt(v):
+        return math.copysign(abs(v)**(1.0/3.0), v)
+
+    if disc > 0.0:
+        sd = math.sqrt(disc)
+        return [cbrt(-qq/2.0 + sd) + cbrt(-qq/2.0 - sd) - a/3.0]
+    if pp >= 0.0:
+        return [cbrt(-qq) - a/3.0]
+    arg = (3.0*qq/(2.0*pp))*math.sqrt(-3.0/pp)
+    theta = math.acos(max(-1.0, min(1.0, arg)))/3.0
+    return [2.0*math.sqrt(-pp/3.0)*math.cos(theta-2.0*math.pi*k/3.0)
+            - a/3.0 for k in range(3)]
+
+
+def _ln_phi(volume_cm3_mol, pressure_bar, temperature_k, a_i, b_i):
+    """Infinite-dilution modified-RK fugacity expression for CO2 or water."""
+    v, tk = volume_cm3_mol, temperature_k
+    ac = 7.54e7 - 4.13e4*tk
+    bc = 27.8
+    log_term = math.log1p(bc/v)
+    return (math.log(v/(v-bc)) + b_i/(v-bc)
+            - 2.0*a_i/(R_BAR_CM3*tk**1.5*bc)*log_term
+            + ac*b_i/(R_BAR_CM3*tk**1.5*bc**2)
+            * (log_term-bc/(v+bc))
+            - math.log(pressure_bar*v/(R_BAR_CM3*tk)))
+
+
+def _rk_volume(pressure_bar, temperature_k):
+    """Pure-CO2 molar volume using the solubility model's modified RK EOS."""
+    tk, pb = temperature_k, pressure_bar
+    ac, bc = 7.54e7-4.13e4*tk, 27.8
+    aa = ac*pb/(R_BAR_CM3**2*tk**2.5)
+    bb = bc*pb/(R_BAR_CM3*tk)
+    zz = _cubic_roots(-1.0, aa-bb-bb*bb, -aa*bb)
+    volumes = [z*R_BAR_CM3*tk/pb for z in zz if z > bb]
+    if not volumes:
+        raise ValueError("No physical modified-RK molar-volume root found.")
+    return min(volumes, key=lambda v: _ln_phi(v, pb, tk, ac, bc))
+
+
+def _equilibrium_constants(temperature_k):
+    tc = temperature_k-273.15
+    kh = 10.0**(-2.209 + 0.03097*tc - 1.098e-4*tc**2 + 2.048e-7*tc**3)
+    kc = 10.0**(1.189 + 0.01304*tc - 5.446e-5*tc**2)
+    return kh, kc
+
+
+def _salting_coefficient(pressure_bar, temperature_k, salt_molality):
+    tk, pb, ms = temperature_k, pressure_bar, salt_molality
+    lam = (-0.411370585 + 6.07632013e-4*tk + 97.5347708/tk
+           - 0.0237622469*pb/tk + 0.0170656236*pb/(630.0-tk)
+           + 1.41335834e-5*tk*math.log(pb))
+    zeta = (3.36389723e-4 - 1.9829898e-5*tk + 2.12220830e-3*pb/tk
+            - 5.24873303e-3*pb/(630.0-tk))
+    return math.exp(2.0*lam*ms + zeta*ms**2)
+
+
+def _equilibrium_at_volume(pressure_bar, temperature_k, xs, volume_cm3_mol):
+    """Internal algebraic partitioning; separate volume permits EOS validation."""
+    pb, tk = pressure_bar, temperature_k
+    ms = xs/((1.0-xs)*M_NACL)
+    kh, kc = _equilibrium_constants(tk)
+    phi_c = math.exp(_ln_phi(volume_cm3_mol, pb, tk, 7.54e7-4.13e4*tk, 27.8))
+    phi_h = math.exp(_ln_phi(volume_cm3_mol, pb, tk, 7.89e7, 18.18))
+    delta_p = pb-1.0
+    a = kh/(phi_h*pb)*math.exp(delta_p*18.1/(R_BAR_CM3*tk))
+    b = phi_c*pb/(WATER_MOLES_PER_KG*kc)*math.exp(-delta_p*32.6/(R_BAR_CM3*tk))
+    y_water = (1.0-b)/(1.0/a-b)
+    x_co2_water = b*(1.0-y_water)
+    if not (0.0 <= y_water < 1.0 and 0.0 <= x_co2_water < 1.0):
+        raise ValueError("Partitioning result outside physical bounds.")
+    mc_water = WATER_MOLES_PER_KG*x_co2_water/(1.0-x_co2_water)
+    gamma = _salting_coefficient(pb, tk, ms)
+    mc = mc_water/gamma
+    x_mass = mc*M_CO2/(1.0 + ms*M_NACL + mc*M_CO2)
+    return dict(mc_mol_per_kg_water=mc, Xco2_eq=x_mass,
+                ms_mol_per_kg_water=ms, mc_pure_water=mc_water,
+                gamma=gamma, phi_co2=phi_c, phi_water=phi_h,
+                K0_co2=kc, K0_water=kh, A=a, B=b,
+                x_co2_pure_water=x_co2_water, y_water_pure_system=y_water,
+                volume_cm3_per_mol=volume_cm3_mol)
+
+
+def calculate_solubility(p_psia, t_f, xs=0.034):
+    """Return equilibrium molality [mol/kg water] and aqueous CO2 mass fraction.
+
+    p_psia: absolute pressure [psia]. t_f: temperature [F].
+    xs: NaCl mass fraction of CO2-FREE brine [kg salt/kg CO2-free brine].
+    Spycher et al. (2003), Spycher and Pruess (2005) salting-out:
+        https://doi.org/10.1016/S0016-7037(03)00273-4
+        https://doi.org/10.1016/j.gca.2005.01.015
+    """
+    if not all(math.isfinite(v) for v in (p_psia, t_f, xs)):
+        raise ValueError("All inputs must be finite numbers.")
+    pb = p_psia*PSI_TO_BAR
+    tc = (t_f-32.0)*5.0/9.0
+    tk = tc+273.15
+    if not 1.0 <= pb <= 600.0:
+        raise ValueError("Dissolution pressure range is 1-600 bar absolute (14.504-8702.264 psia).")
+    if not 35.0-1e-10 <= tc <= 99.0+1e-10:
+        raise ValueError("Dissolution temperature range is 35-99 C (95-210.2 F).")
+    if not 0.0 <= xs < 1.0:
+        raise ValueError("NaCl mass fraction must be in [0, 1).")
+    ms = xs/((1.0-xs)*M_NACL)
+    if ms > 6.0:
+        raise ValueError("NaCl molality exceeds the implemented limit of 6 mol/kg water.")
+    volume = _rk_volume(pb, tk)
+    result = _equilibrium_at_volume(pb, tk, xs, volume)
+    result.update(pressure_bar=pb, temperature_c=tc, salt_mass_fraction=xs)
+    return result
+
+
+def dissolution_properties(pressure_psia, p, rho_brine_lb_ft3, salt_mass_fraction):
+    """Equilibrium dissolved CO2 in Zone 2; OFF adds exactly zero inventory.
+
+    PR continues to provide the free-phase PVT. The modified-RK EOS above is
+    used only for the solubility correlation, as in Spycher et al. (2003).
+    Garcia's apparent partial molar volume supplies the solution density
+    (https://escholarship.org/uc/item/4q1422qm). The CO2-free brine density
+    and salt fraction are the live background values at this pressure.
+    """
+    mc = xeq = cd = partial_rho = dx_dp = 0.0
+    rho_aq = rho_brine_lb_ft3
+    if p.include_dissolution:
+        equilibrium = calculate_solubility(pressure_psia, p.temperature_F, salt_mass_fraction)
+        mc, xeq = equilibrium["mc_mol_per_kg_water"], equilibrium["Xco2_eq"]
+        tc = (p.temperature_F-32.0)*5.0/9.0
+        vphi = 37.51-0.09585*tc+0.000874*tc**2-5.044e-7*tc**3
+        partial_rho = M_CO2/(vphi*1e-6)*KG_M3_TO_LB_FT3
+        rho_aq = 1.0/((1.0-xeq)/rho_brine_lb_ft3+xeq/partial_rho)
+        cd = rho_aq*xeq
+        # dXeq/dP: central difference, one-sided at the model pressure limits.
+        step = max(1e-4*pressure_psia, 1e-3)
+        high = min(pressure_psia+step, 600.0/PSI_TO_BAR)
+        low = max(pressure_psia-step, 1.0/PSI_TO_BAR)
+        if high <= low:
+            raise ValueError("Cannot evaluate dXeq/dP at this pressure.")
+        x_high = (calculate_solubility(high, p.temperature_F, salt_mass_fraction)["Xco2_eq"]
+                  if high != pressure_psia else xeq)
+        x_low = (calculate_solubility(low, p.temperature_F, salt_mass_fraction)["Xco2_eq"]
+                 if low != pressure_psia else xeq)
+        dx_dp = (x_high-x_low)/(high-low)
+    return {"dissolution_enabled": int(p.include_dissolution),
+            "CO2_molality_mol_kg_water": mc, "Xco2_eq": xeq,
+            "rho_aq_lb_ft3": rho_aq, "Cd_lb_ft3_aqueous": cd,
+            "rho_co2_apparent_lb_ft3": partial_rho, "dXeq_dP_per_psi": dx_dp}
+
+
+def corey_fractional_flow(s, M_lambda, n):
+    """fg(s) and dfg/ds for equal Corey exponents, s = Sg/(1-Swr)."""
+    denominator = M_lambda*s**n+(1.0-s)**n
+    fg = M_lambda*s**n/denominator
+    derivative = n*M_lambda*s**(n-1.0)*(1.0-s)**(n-1.0)/denominator**2
+    return fg, derivative
+
+
+def dissolution_front_quantities(M_lambda, Swr, n_gas, n_water, a):
+    """Leading gas shock into CO2-free brine when CO2 dissolves in brine.
+
+    CO2 conservation across the shock (concentration rho_g*Sg+cd*(1-Sg),
+    flux rho_g*fg+cd*(1-fg)) gives the shock speed
+        F(S) = (fg + a)/(S + a),  a = cd/(rho_g - cd),  S = Sg.
+    The physical shock is the maximum of F, where the chord from (-a,-a)
+    is tangent to fg(Sg): dfg/dSg = (fg + a)/(Sf + a).
+    a = 0 returns the original front quantities exactly.
+    """
+    if a == 0.0:
+        return corey_front_quantities(M_lambda, Swr, n_gas, n_water)
+    if not math.isfinite(a) or a < 0:
+        raise ValueError("Dissolution retardation a = cd/(rho_g-cd) must be finite and >= 0.")
+    if n_gas != n_water or n_gas not in (2.0, 3.0):
+        raise ValueError("Supported Corey exponent pairs are (3, 3) and (2, 2).")
+    n = n_gas
+    width = 1.0-Swr
+
+    def speed(s):
+        return (corey_fractional_flow(s, M_lambda, n)[0]+a)/(width*s+a)
+
+    def tangency(s):
+        # Numerator of dF/ds; positive below the tangent point, negative above.
+        fg, derivative = corey_fractional_flow(s, M_lambda, n)
+        return derivative*(width*s+a)-width*(fg+a)
+
+    grid = np.linspace(1e-9, 1.0, 20001)
+    index = int(np.argmax(speed(grid)))
+    if index == 0 or index == len(grid)-1:
+        raise ValueError("Could not locate the dissolution-retarded gas front.")
+    left, right = float(grid[index-1]), float(grid[index+1])
+    if tangency(left) > 0 > tangency(right):
+        sf = brentq(tangency, left, right, xtol=1e-15, rtol=1e-14)
+    else:
+        sf = float(grid[index])
+    fg, derivative = corey_fractional_flow(sf, M_lambda, n)
+    front_factor = (fg+a)/(width*sf+a)
+    tangent_error = derivative/width-front_factor
+    if abs(tangent_error) > 1e-7*front_factor:
+        raise ValueError("Dissolution front failed the shock-tangent condition.")
+    return {
+        "corey_n_gas": float(n_gas), "corey_n_water": float(n_water),
+        "sf_normalized": sf, "Sg_front": width*sf,
+        "fg_front": fg, "dfg_ds_front": derivative,
+        "front_tangent_error": tangent_error,
+        "gas_front_factor": front_factor,
+    }
+
+
 def reference_two_phase_quantities(p):
     """Initial mass references; transport properties are recalculated per trial."""
     Zsc = pr_state(P_SC_PSIA,T_SC_F)["Z"]
@@ -857,6 +1104,17 @@ def calculate_two_phase_year(year, property_pressure, p, c):
     M_lambda = p.krg_endpoint*p.mu_water_cP/(p.krw_endpoint*mu_g)
     c = dict(c, **corey_front_quantities(M_lambda,p.Swr,p.corey_n_gas,p.corey_n_water),
              M_lambda=M_lambda,reference_mobility_mD_cP=p.k_mD*p.krg_zone1/mu_g)
+    # DISSOLUTION ENTRY 1: equilibrium concentration at this trial pressure.
+    dissolved = dissolution_properties(property_pressure, p, water["rho_water_lb_ft3"], salt)
+    Cd = dissolved["Cd_lb_ft3_aqueous"]
+    if p.include_dissolution and rho_g <= Cd:
+        raise ValueError("Dissolution inventory requires rho_g > Cd at the trial pressure.")
+    # DISSOLUTION ENTRY 2: the gas front must also saturate the brine it contacts,
+    # so the shock tangent is drawn from (-a,-a), a = Cd/(rho_g-Cd).
+    a_diss = Cd/(rho_g-Cd) if p.include_dissolution else 0.0
+    if p.include_dissolution:
+        c.update(dissolution_front_quantities(
+            M_lambda, p.Swr, p.corey_n_gas, p.corey_n_water, a_diss))
 
     # 2. Cumulative injected volume, evaluated at the current property pressure.
     t_days = year*DAYS_PER_YEAR
@@ -870,8 +1128,11 @@ def calculate_two_phase_year(year, property_pressure, p, c):
         if not 0 <= yw < 1:
             raise ValueError("The supplied water-vapor expression gives yw outside [0,1).")
         ceq = MW_WATER/MW_CO2 * yw/(1-yw)
+        # Water mass per brine volume; with dissolution the brine is CO2-saturated.
+        water_content = (dissolved["rho_aq_lb_ft3"]*(1-dissolved["Xco2_eq"])*(1-salt)
+                         if p.include_dissolution else water["rho_water_lb_ft3"]*(1-salt))
         alpha_d = rho_g*ceq / (
-            water["rho_water_lb_ft3"]*(1-salt)*p.Swr
+            water_content*p.Swr
             + rho_g*ceq*(1-p.Swr)
         )
     else:
@@ -896,15 +1157,42 @@ def calculate_two_phase_year(year, property_pressure, p, c):
         raise ValueError("The equations give a non-positive Zone 2 pore volume.")
     Minj = c["rho_sc_lb_scf"]*Vsc
     Mg1 = rho_g*Vp1
-    Mg2 = Minj-Mg1
-    Vg2 = Mg2/rho_g
-    Sg2 = Vg2/Vp2
-    Sw2 = 1-Sg2
+    # DISSOLUTION ENTRY 3: free + dissolved CO2 mass balance gives Sg2.
+    if p.include_dissolution:
+        # Minj = rho_g*Vp1 + rho_g*Sg2*Vp2 + Cd*(1-Sg2)*Vp2 (Welge average consistent with the retarded front).
+        Sg2 = (Minj-Mg1-Cd*Vp2)/((rho_g-Cd)*Vp2)
+        Sw2 = 1-Sg2
+        Vg2 = Sg2*Vp2
+        Mg2 = rho_g*Vg2
+        Mdiss = Cd*Sw2*Vp2
+    else:
+        # Keep the original operations to preserve OFF results exactly.
+        Mg2 = Minj-Mg1
+        Vg2 = Mg2/rho_g
+        Sg2 = Vg2/Vp2
+        Sw2 = 1-Sg2
+        Mdiss = 0.0
+    Mfree = Mg1+Mg2
     if not (0 <= Sg2 <= 1-p.Swr and p.Swr <= Sw2 <= 1):
         raise ValueError(f"Calculated saturations violate the supplied limits: Sg2={Sg2}, Sw2={Sw2}.")
     x2 = Sg2/(1-p.Swr)
     krg2 = p.krg_endpoint*x2**p.corey_n_gas
     krw2 = p.krw_endpoint*(1-x2)**p.corey_n_water
+
+    # DISSOLUTION ENTRIES 4 and 5: solubility storage in Zone 2 and brine flux into Zone 3.
+    if p.include_dissolution:
+        Xeq, rho_aq = dissolved["Xco2_eq"], dissolved["rho_aq_lb_ft3"]
+        c_sol = (Sw2*rho_aq*dissolved["dXeq_dP_per_psi"]/(1-Xeq)
+                 * (1/rho_g-1/dissolved["rho_co2_apparent_lb_ft3"]))
+        beta = rho_aq*(1-Xeq)  # CO2-free brine mass per CO2-saturated volume
+        rho_b = water["rho_water_lb_ft3"]
+        zone3_flux_ratio = (beta*(1-c["fg_front"])
+                            - c["gas_front_factor"]*(beta*(1-c["Sg_front"])-rho_b))/rho_b
+        if not 0 < zone3_flux_ratio <= 1+1e-12:
+            raise ValueError(f"Zone 3 brine flux ratio {zone3_flux_ratio:g} is outside (0, 1].")
+    else:
+        c_sol = 0.0
+        zone3_flux_ratio = 1.0
 
     # 6. Zone mobilities and total compressibilities.
     mobilities = [
@@ -914,7 +1202,8 @@ def calculate_two_phase_year(year, property_pressure, p, c):
     ]
     total_c = [
         cg+p.rock_compressibility_per_psi,
-        Sg2*cg+Sw2*cw+p.rock_compressibility_per_psi,
+        (Sg2*cg+Sw2*cw+p.rock_compressibility_per_psi+c_sol if p.include_dissolution
+         else Sg2*cg+Sw2*cw+p.rock_compressibility_per_psi),
         cw+p.rock_compressibility_per_psi,
     ]
     if any(value <= 0 for value in total_c):
@@ -944,14 +1233,16 @@ def calculate_two_phase_year(year, property_pressure, p, c):
     if p.include_evaporation:
         b1 = 1/(2*m[0])
         b2 = math.exp(dry_exponent)/(2*m[1])
-        b3 = math.exp(dry_exponent+gas_exponent)/(2*m[2])
+        b3 = (zone3_flux_ratio*math.exp(dry_exponent+gas_exponent)/(2*m[2]) if p.include_dissolution
+              else math.exp(dry_exponent+gas_exponent)/(2*m[2]))
         a2 = b3*E1g3-b2*E1g2
         a1 = a2+b2*E1d2-b1*E1d1
     else:
         # The absent dry region has no matching condition. Zone 2 begins at rw.
         b1 = a1 = dry_exponent = E1d1 = E1d2 = u1d = u2d = 0.0
         b2 = 1/(2*m[1])
-        b3 = math.exp(gas_exponent)/(2*m[2])
+        b3 = (zone3_flux_ratio*math.exp(gas_exponent)/(2*m[2]) if p.include_dissolution
+              else math.exp(gas_exponent)/(2*m[2]))
         a2 = b3*E1g3-b2*E1g2
 
     # 9. Select the Zone 1 branch at the well and align the pressure reference.
@@ -967,8 +1258,9 @@ def calculate_two_phase_year(year, property_pressure, p, c):
         raise ValueError("The calculated BHP is non-positive or non-finite.")
 
     # 10. Reconciliation checks; these never feed the physical calculations.
-    mass_error = Mg1+Mg2-Minj
-    volume_error = Vp1+Sg2*Vp2-Vr_ft3
+    mass_error = Mfree+Mdiss-Minj
+    # Dissolved gas has no free-phase volume: Mdiss/rho_g is an equivalent.
+    volume_error = Vp1+Sg2*Vp2+Mdiss/rho_g-Vr_ft3
     dry_error = (a1+b1*E1d1-(a2+b2*E1d2) if p.include_evaporation else 0.0)
     gas_error = a2+b2*E1g2-(a3+b3*E1g3)
     if abs(mass_error) > 1e-9*max(1, Minj):
@@ -1009,6 +1301,16 @@ def calculate_two_phase_year(year, property_pressure, p, c):
         result[f"m{n}"] = m[zone]
         result[f"c{n}_star"] = c_star[zone]
         result[f"D{n}"] = D[zone]
+    if p.include_dissolution:
+        # Only with dissolution on, so the files without dissolution keep their columns.
+        result.update(dissolved, Mfree_lb=Mfree, Mdiss_lb=Mdiss,
+                      dissolved_fraction_of_injected=Mdiss/Minj,
+                      free_gas_volume_ft3=Vp1+Sg2*Vp2,
+                      dissolved_gas_equivalent_volume_ft3=Mdiss/rho_g,
+                      dissolution_retardation_a=a_diss,
+                      c_solubility_storage_per_psi=c_sol,
+                      zone3_flux_ratio=zone3_flux_ratio,
+                      zone3_brine_flux_rb_day=zone3_flux_ratio*q_reservoir)
     if not all(math.isfinite(value) for value in result.values()):
         raise ValueError("A calculated intermediate is non-finite.")
     return result
@@ -1552,6 +1854,15 @@ def save_results(results, p, constants, output_dir, make_plot=True, *, observati
             "pressure_axis": "ticks start at initial_pressure_psia; regular 100-psi intervals; 5 percent visual margin below initial pressure",
         },
     }
+    if p.phase_mode == "two" and p.include_dissolution:
+        saved_inputs["method"].update({
+            "dissolution": "equilibrium CO2 held in the zone 2 aqueous phase: Cd = rho_aq*Xco2_eq; Sg2 = (Minj-rho_g*Vp1-Cd*Vp2)/((rho_g-Cd)*Vp2); Mdiss = Cd*(1-Sg2)*Vp2",
+            "dissolution_coupling": "(1) gas front dfg/dSg = (fg+a)/(Sf+a), a = Cd/(rho_g-Cd); (2) Sg2 mass balance -> krg2, krw2, Lambda2; (3) ct2 = Sg2*cg+Sw2*cw+cr+c_sol, c_sol = Sw2*rho_aq*(dXeq/dP)/(1-Xeq)*(1/rho_g-1/rho_app); (4) b3 = theta*exp(...)/(2*m3), theta = [beta*(1-fg)-F*(beta*(1-Sf)-rho_b)]/rho_b, beta = rho_aq*(1-Xeq); solubility and PVT updated at every pressure evaluation",
+            "dissolution_solubility": "Spycher et al. 2003 with the Spycher-Pruess 2005 NaCl salting-out coefficient; 35-99 C, 1-600 bar absolute, 0-6 mol NaCl/kg water",
+            "dissolution_aqueous_density": "Garcia apparent molar volume of dissolved CO2 mixed with the live CO2-free brine density",
+            "dissolution_limitation": "local equilibrium; Zone 1 holds no brine and Zone 3 is CO2-free brine; pressure continuity at rd and rg is enforced exactly",
+            "dissolution_references": "https://doi.org/10.1016/S0016-7037(03)00273-4; https://doi.org/10.1016/j.gca.2005.01.015; https://escholarship.org/uc/item/4q1422qm",
+        })
     if observation is not None:
         saved_inputs["method"]["observation"] = (
             "Nonlinear zero-flow radial pressure diffusion with zone geometry and saturations "
@@ -1861,6 +2172,15 @@ def ask_inputs(defaults, phase_mode=None, single_phase_fluid=None):
                 )
                 break
             print("Enter yes or no.")
+        default_choice = "yes" if values["include_dissolution"] else "no"
+        while True:
+            choice = read_prompt(f"Include CO2 dissolution? (yes/no) [{default_choice}]: ").lower()
+            if choice in ("", "y", "yes", "n", "no"):
+                values["include_dissolution"] = (
+                    values["include_dissolution"] if not choice else choice in ("y", "yes")
+                )
+                break
+            print("Enter yes or no.")
     print("Enter each input. Press Enter to keep its displayed value.")
     for name in input_names_for_phase(phase_mode, single_phase_fluid):
         while True:
@@ -2010,6 +2330,12 @@ def _notebook_summary_html(results):
         ("Zone 2 gas saturation", "Sg2", ".6f"),
         ("Zone 2 krg", "krg2", ".6f"),
         ("Zone 2 krw", "krw2", ".6f"),
+        ("Equilibrium aqueous CO2 mass fraction", "Xco2_eq", ".6f"),
+        ("Dissolved CO2 concentration Cd (lb/ft3)", "Cd_lb_ft3_aqueous", ".6f"),
+        ("Dissolved CO2 mass (lb)", "Mdiss_lb", ".4f"),
+        ("Dissolved fraction of injected CO2", "dissolved_fraction_of_injected", ".6f"),
+        ("Solubility storage c_sol (1/psi)", "c_solubility_storage_per_psi", ".7e"),
+        ("Zone 3 brine flux ratio", "zone3_flux_ratio", ".6f"),
         ("Total increase (psi)", "total_delta_p_psi", ".6f"),
         ("Annual gain (psi)", "annual_gain_psi", ".6f"),
         ("BHP (psia)", "BHP_psia", ".6f"),
@@ -2360,7 +2686,7 @@ def show_single_well_input_form(display_form=True):
     entries = {
         name: widgets.Text(value=f"{value:g}", layout=widgets.Layout(width="180px"))
         for name, value in defaults_dict.items()
-        if name not in ("phase_mode", "single_phase_fluid", "water_Bw_rb_stb", "include_evaporation")
+        if name not in ("phase_mode", "single_phase_fluid", "water_Bw_rb_stb", "include_evaporation", "include_dissolution")
         and name not in OBSERVATION_INPUTS
     }
     labels = {name: widgets.Label(PROMPTS[name]) for name in entries}
@@ -2571,6 +2897,8 @@ def single_well_main(argv=None):
     parser.add_argument("--years", type=positive_integer, help="Number of annual updates")
     parser.add_argument("--evaporation", choices=("on", "off"),
                         help="Include evaporation in the two-phase model (default: on, or saved configuration)")
+    parser.add_argument("--dissolution", choices=("on", "off"),
+                        help="Include equilibrium CO2 dissolution in the two-phase model (default: off, or saved configuration)")
     parser.add_argument("--observation-period", type=float,
                         help="Years of zero-rate observation after injection (water, CO2, or two-phase)")
     parser.add_argument("--observation-years",
@@ -2590,7 +2918,7 @@ def single_well_main(argv=None):
     try:
         if args.browser:
             if args.defaults or any(value is not None for value in (
-                args.phase, args.fluid, args.years, args.evaporation, args.observation_period, args.observation_years, args.config,
+                args.phase, args.fluid, args.years, args.evaporation, args.dissolution, args.observation_period, args.observation_years, args.config,
             )):
                 parser.error("With --browser, enter model inputs in the form. Only --output-dir and --no-plot apply.")
             serve_browser_form(args.output_dir, not args.no_plot)
@@ -2607,6 +2935,8 @@ def single_well_main(argv=None):
             defaults = Inputs(phase_mode=chosen_phase, single_phase_fluid=chosen_fluid)
             if args.evaporation is not None:
                 defaults.include_evaporation = args.evaporation == "on"
+            if args.dissolution is not None:
+                defaults.include_dissolution = args.dissolution == "on"
             if args.observation_period is None:
                 defaults.observation_years = args.observation_years or ""
                 ask_observation(defaults)
@@ -2619,6 +2949,8 @@ def single_well_main(argv=None):
             parameters.single_phase_fluid = args.fluid
         if parameters.phase_mode == "two" and args.evaporation is not None:
             parameters.include_evaporation = args.evaporation == "on"
+        if parameters.phase_mode == "two" and args.dissolution is not None:
+            parameters.include_dissolution = args.dissolution == "on"
         if args.observation_period is not None:
             parameters.observation_period_years = args.observation_period
         if args.observation_years is not None:
@@ -4242,6 +4574,7 @@ def main(argv=None):
     parser.add_argument("--fluid", choices=("water", "co2"))
     parser.add_argument("--years", type=float)
     parser.add_argument("--evaporation", choices=("on", "off"))
+    parser.add_argument("--dissolution", choices=("on", "off"))
     parser.add_argument("--observation-period", type=float)
     parser.add_argument("--observation-years")
     parser.add_argument("--config", type=Path)
@@ -4278,6 +4611,8 @@ def main(argv=None):
             p = Inputs(phase_mode=phase, single_phase_fluid=fluid)
             if args.evaporation is not None:
                 p.include_evaporation = args.evaporation == "on"
+            if args.dissolution is not None:
+                p.include_dissolution = args.dissolution == "on"
             if args.observation_period is None:
                 ask_observation(p)
             p = ask_inputs(p, phase, fluid)
@@ -4292,6 +4627,8 @@ def main(argv=None):
             years = args.years
         if args.evaporation is not None:
             p.include_evaporation = args.evaporation == "on"
+        if args.dissolution is not None:
+            p.include_dissolution = args.dissolution == "on"
         if args.observation_period is not None:
             p.observation_period_years = args.observation_period
         if args.observation_years is not None:

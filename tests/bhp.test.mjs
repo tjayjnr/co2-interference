@@ -163,3 +163,75 @@ test("background properties are calculated (not inputs) and match the Python", a
   assert.ok(w3.rho_water_lb_ft3 > w.rho_water_lb_ft3 && w3.cw_per_psi < w.cw_per_psi);
   assert.throws(() => b.salinityFromStandardDensity(62.0), /at least 62.368/);
 });
+
+test("CO2 dissolution (co2_dissolution_pressure_only.py): solubility, mass balance and the pressure coupling", async () => {
+  const b = await import("../lib/bhp.ts");
+  assert.equal(b.DEFAULT_INPUTS.include_dissolution, false, "off by default");
+  const near = (a, e, rel = 1e-12) => assert.ok(Math.abs(a - e) <= rel * Math.abs(e), `${a} vs ${e}`);
+  // values printed by calculate_solubility in reference/co2_bhp_model.py (psia, F, NaCl kg/kg -> mol/kg water, mass fraction)
+  for (const [p, t, xs, mc, X] of [
+    [1450.38, 122, 0.0, 1.136433651662037, 0.04763163411285918],
+    [5801.5, 122, 0.0, 1.4993390415255703, 0.06190063795277993],
+    [3500, 200, 0.034, 1.0694633977501797, 0.043489003233249404],
+    [2000, 150, 0.1, 0.7609394951042276, 0.029257885843149412],
+    [6000, 100, 0.2, 0.758263564380409, 0.02600246189787643],
+  ]) {
+    const r = b.calculateSolubility(p, t, xs);
+    near(r.mc_mol_per_kg_water, mc);
+    near(r.Xco2_eq, X);
+  }
+  assert.throws(() => b.calculateSolubility(3500, 230, 0.03), /35-99 C/);
+  assert.throws(() => b.calculateSolubility(10, 150, 0.03), /1-600 bar/);
+  assert.throws(() => b.runModel({ ...b.DEFAULT_INPUTS, include_dissolution: true, temperature_F: 230 }, 2), /35-99 C/);
+  // off: no dissolution columns, results unchanged; on: equilibrium inventory in zone 2
+  const off = b.runModel({ ...b.DEFAULT_INPUTS }, 10).results;
+  const on = b.runModel({ ...b.DEFAULT_INPUTS, include_dissolution: true }, 10).results;
+  assert.ok(!("Mdiss_lb" in off[0]) && !("Cd_lb_ft3_aqueous" in off[0]));
+  for (const r of on) {
+    near(r.Cd_lb_ft3_aqueous, r.rho_aq_lb_ft3 * r.Xco2_eq);
+    near(r.Sg2, (r.Minj_lb - r.rho_g_lb_ft3 * r.Vp1_ft3 - r.Cd_lb_ft3_aqueous * r.Vp2_ft3) / ((r.rho_g_lb_ft3 - r.Cd_lb_ft3_aqueous) * r.Vp2_ft3), 1e-10);
+    near(r.Mdiss_lb, r.Cd_lb_ft3_aqueous * (1 - r.Sg2) * r.Vp2_ft3);
+    near(r.Mfree_lb + r.Mdiss_lb, r.Minj_lb, 1e-12);
+    near(r.krg2, b.DEFAULT_INPUTS.krg_endpoint * (r.Sg2 / (1 - b.DEFAULT_INPUTS.Swr)) ** 3, 1e-12);
+    assert.equal(r.dissolution_enabled, 1);
+  }
+  const P = b.DEFAULT_INPUTS;
+  for (const r of on) {
+    // 1. gas front: tangent from (-a,-a), a = Cd/(rho_g-Cd); rg uses the retarded factor
+    near(r.dissolution_retardation_a, r.Cd_lb_ft3_aqueous / (r.rho_g_lb_ft3 - r.Cd_lb_ft3_aqueous));
+    const w = 1 - P.Swr, aa = r.dissolution_retardation_a;
+    near(r.dfg_ds_front / w, (r.fg_front + aa) / (r.Sg_front + aa), 1e-7);
+    near(r.gas_front_factor, (r.fg_front + aa) / (r.Sg_front + aa), 1e-12);
+    near(r.rg_ft, Math.sqrt(P.rw_ft ** 2 + (r.Vr_ft3 / (Math.PI * P.porosity * P.h_ft)) * r.gas_front_factor), 1e-12);
+    // 3. zone 2 storage
+    near(r.c_solubility_storage_per_psi, ((r.Sw2 * r.rho_aq_lb_ft3 * r.dXeq_dP_per_psi) / (1 - r.Xco2_eq)) * (1 / r.rho_g_lb_ft3 - 1 / r.rho_co2_apparent_lb_ft3), 1e-12);
+    near(r.ct2_per_psi, r.Sg2 * r.cg_per_psi + r.Sw2 * r.cw_per_psi + P.rock_compressibility_per_psi + r.c_solubility_storage_per_psi, 1e-12);
+    assert.ok(r.dXeq_dP_per_psi > 0 && r.c_solubility_storage_per_psi > 0);
+    // 4. brine flux into zone 3
+    const beta = r.rho_aq_lb_ft3 * (1 - r.Xco2_eq), rb = r.rho_water_lb_ft3;
+    near(r.zone3_flux_ratio, (beta * (1 - r.fg_front) - r.gas_front_factor * (beta * (1 - r.Sg_front) - rb)) / rb, 1e-12);
+    near(r.b3, (r.zone3_flux_ratio * Math.exp(r.dry_exponent + r.gas_exponent)) / (2 * r.m3), 1e-12);
+    assert.ok(r.zone3_flux_ratio > 0 && r.zone3_flux_ratio < 1);
+  }
+  const y = 9;
+  assert.ok(on[y].gas_front_factor < off[y].gas_front_factor && on[y].rg_ft < off[y].rg_ft, "dissolution retards the gas front");
+  assert.ok(on[y].ct2_per_psi > off[y].ct2_per_psi, "solubility storage adds to ct2");
+  assert.ok(on[y].BHP_psia < off[y].BHP_psia, "less brine pushed into zone 3 and more storage -> lower BHP");
+  near(on[y].BHP_psia - off[y].BHP_psia, -2.485, 0.02);
+  near(on[y].dissolved_fraction_of_injected, 0.1579, 2e-3);
+  // dXeq/dP matches a finite difference of the solubility model
+  const sol = (pp) => b.calculateSolubility(pp, P.temperature_F, on[y].salt_mass_fraction).Xco2_eq;
+  near(on[y].dXeq_dP_per_psi, (sol(on[y].P_used_psia + 1) - sol(on[y].P_used_psia - 1)) / 2, 1e-4);
+  // without evaporation the zone 3 coefficient uses the no-dry-zone branch
+  const ne = b.runModel({ ...P, include_dissolution: true, include_evaporation: false }, 3).results[2];
+  near(ne.b3, (ne.zone3_flux_ratio * Math.exp(ne.gas_exponent)) / (2 * ne.m3), 1e-12);
+  // the saved inputs record the choice and the method
+  const out = b.withPressureLimit({ label: "", years: 3, p: { ...b.DEFAULT_INPUTS, include_dissolution: true }, results: on.slice(0, 3), constants: {}, observation: null, firstYear: [] }, null);
+  const json = b.inputsUsed(out);
+  assert.match(json, /"include_dissolution": true/);
+  assert.match(json, /"dissolution_coupling": /);
+  // shut-in observation runs with the dissolution saturations
+  const p = { ...b.DEFAULT_INPUTS, include_dissolution: true, observation_period_years: 2, observation_years: "0,1,2" };
+  const obs = b.calculateObservation(b.runModel(p, 3).results[2], p, false);
+  assert.ok(obs.rows.every((r) => Number.isFinite(r.BHP_psia)));
+});

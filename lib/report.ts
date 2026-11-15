@@ -30,6 +30,8 @@ export interface ReportData {
   model: "two" | "co2" | "water";
   modelLabel: string;
   evaporation: boolean;
+  /** two-phase: equilibrium CO2 dissolution in the zone 2 brine */
+  dissolution?: boolean;
   paramHead: string[];
   paramRows: string[][];
   wellHead: string[];
@@ -118,6 +120,14 @@ export function buildBlocks(d: ReportData): Block[] {
       : "Evaporation was not included in this analysis (y_w = c_eq = α_d = 0), so the dry front stays at the wellbore (r_d = r_w) and there is no dry zone. With evaporation the dry front would be" });
     b.push(E("r_d = √( r_w² + α_d V_r / (π φ h) ),   α_d = ρ_g c_eq / ( ρ_b (1 − X_s) S_wr + ρ_g c_eq (1 − S_wr) )"));
     b.push({ t: "p", text: "The zone 2 gas saturation S_g2 follows from the CO₂ mass balance (injected mass less the CO₂ in the dry zone, divided by the zone 2 pore volume), and gives the zone 2 relative permeabilities k_rg2 = k_rg0 x^n_g and k_rw2 = k_rw0 (1 − x)^n_w with x = S_g2 / (1 − S_wr); the zone 2 mobility is Λ_2 = k (k_rg2 / μ_g + k_rw2 / μ_w). The CO₂ properties (compressibility factor Z, compressibility c_g, density ρ_g = p M / (Z R T) and B_g) come from the Peng–Robinson equation of state for pure CO₂ and, with μ_g, the brine density ρ_b and c_w, are evaluated at the bottom-hole pressure itself: at each time the equation P = P_i + Δp(t, P) is solved by fixed-point iteration (Brent's method once the residual changes sign) until the residual is below 10⁻⁴ psi." });
+    if (d.dissolution) {
+      b.push({ t: "p", text: "CO₂ dissolution was included. The zone 2 brine holds CO₂ at its equilibrium solubility X_CO2,eq (Spycher et al., 2003, with the NaCl salting-out coefficient of Spycher and Pruess, 2005; 35–99 °C, 1–600 bar, 0–6 mol NaCl/kg water), and the aqueous-phase density ρ_aq follows from the apparent molar volume of dissolved CO₂ (Garcia) and the live CO₂-free brine density. With C_d = ρ_aq X_CO2,eq, dissolution enters the pressure calculation in four places. (1) Gas front: the leading shock must also saturate the brine it contacts, so the tangent to f_g is drawn from (−a, −a), which slows the front:" });
+      b.push(E("a = C_d / (ρ_g − C_d),   df_g/dS_g (S_f) = (f_g(S_f) + a) / (S_f + a) = F_diss,   r_g = √( r_w² + V_r F_diss / (π φ h) )"));
+      b.push({ t: "p", text: "(2) Zone 2 saturation, from the total (free plus dissolved) CO₂ mass balance; (3) zone 2 storage, because more CO₂ dissolves as the pressure rises; (4) flow into zone 3, because dissolved CO₂ takes less volume than free CO₂, so less brine is pushed ahead of the gas front (θ < 1 scales the zone 3 flux-matching coefficient b_3):" });
+      b.push(E("S_g2 = (M_inj − ρ_g V_p1 − C_d V_p2) / ((ρ_g − C_d) V_p2),   c_t2 = S_g2 c_g + S_w2 c_w + c_r + S_w2 ρ_aq (dX_eq/dp) / (1 − X_eq) · (1/ρ_g − 1/ρ_app)"));
+      b.push(E("θ = [ β (1 − f_g) − F_diss (β (1 − S_f) − ρ_b) ] / ρ_b,   β = ρ_aq (1 − X_eq),   b_3 = θ e^(…) / (2 m_3)"));
+      b.push({ t: "p", text: "With evaporation the brine water content becomes ρ_aq (1 − X_eq)(1 − X_s). Pressure continuity at r_d and r_g is still exact, and the solubility, its pressure derivative and the PVT are recalculated at every pressure trial. Zone 1 holds no brine and zone 3 is CO₂-free brine; local equilibrium is assumed." });
+    }
   } else if (d.model === "co2") {
     b.push({ t: "p", text: "In the single-phase CO₂ model the reservoir is initially filled with CO₂ (relative permeability 1). B_g is fixed at 0.0005690187 rb/scf, and the CO₂ density and compressibility c_g are fixed at their Peng–Robinson values at the initial pressure and reservoir temperature; c_t = c_g + c_r and μ = μ_g, with μ_g recalculated at the bottom-hole pressure from the live Peng–Robinson density. The dimensionless pressure is the line-source solution" });
     b.push(E("p_D = ½ E₁( 1 / 4t_D ),   t_D = k t / (μ φ c_t r_w²)"));
