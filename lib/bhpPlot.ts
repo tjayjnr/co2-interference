@@ -51,19 +51,24 @@ export function renderBhpPlot(out: RunOutput): { svg: string; width: number; hei
   }
 
   // ---- pressure axes, one per panel, fitted to what each panel is about (zoomed in):
-  // left = the yearly values (and the shut-in curve), right = the first-year rise from the initial pressure
-  const leftVals = [...results.map((r) => r.BHP_psia), ...(obs ? obs.bhp_psia : [])];
-  const rightVals = firstYear.map((r) => r.BHP_psia);
+  // left = the yearly values (and the shut-in curve), right = the first-year rise from the initial pressure.
+  // Both always include the initial pressure Pi, which gets its own labelled tick.
+  const leftVals = [Pi, ...results.map((r) => r.BHP_psia), ...(obs ? obs.bhp_psia : [])];
+  const rightVals = [Pi, ...firstYear.map((r) => r.BHP_psia)];
   const axis = (vals: number[]) => {
     const lo = Math.min(...vals), hi = Math.max(...vals);
     const span = hi - lo || Math.max(Math.abs(hi) * 1e-6, 1e-6);
-    const lower = lo - 0.08 * span, upper = hi + 0.08 * span;
-    const ticks = maxNLocator(lower, upper, 6).filter((v) => v >= lower && v <= upper);
-    const step = ticks.length > 1 ? ticks[1] - ticks[0] : span;
+    const lower = lo - 0.12 * span, upper = hi + 0.08 * span; // room under the Pi line for its label
+    const nice = maxNLocator(lower, upper, 6).filter((v) => v >= lower && v <= upper);
+    const step = nice.length > 1 ? nice[1] - nice[0] : span;
     const dec = Math.max(0, Math.min(6, -Math.floor(Math.log10(step) + 1e-9)));
-    return { lo: lower, hi: upper, ticks, label: (v: number) => v.toFixed(dec) };
+    // the Pi tick replaces any regular tick too close to it to keep the labels readable
+    const ticks = [...nice.filter((v) => Math.abs(v - Pi) > 0.45 * step), Pi].sort((a, b) => a - b);
+    const piDec = Math.max(dec, Number.isInteger(Pi) ? 0 : Math.min(2, (String(Pi).split(".")[1] ?? "").length));
+    return { lo: lower, hi: upper, ticks, label: (v: number) => (v === Pi ? v.toFixed(piDec) : v.toFixed(dec)) };
   };
   const yL = axis(leftVals), yR = axis(rightVals);
+  const ya_label = yL.label;
 
   // ---- layout (two panels, width ratios 1.3 : 1, shared y)
   const top = 36, bottom = H - 90, left1 = 78;
@@ -106,6 +111,11 @@ export function renderBhpPlot(out: RunOutput): { svg: string; width: number; hei
   const dot = (x: number, y: number, r: number, color: string, clip = "") => s.push(`<circle ${clip ? `clip-path="url(#${clip})" ` : ""}cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${r}" fill="${color}"/>`);
   const square = (x: number, y: number, a: number, color: string, clip = "") => s.push(`<rect ${clip ? `clip-path="url(#${clip})" ` : ""}x="${(x - a / 2).toFixed(2)}" y="${(y - a / 2).toFixed(2)}" width="${a}" height="${a}" fill="${color}"/>`);
 
+  // initial pressure Pi: dashed reference line across the panel, labelled under its right end
+  const piLine = (x0: number, w: number, y: number) => {
+    s.push(`<line x1="${x0}" y1="${y}" x2="${x0 + w}" y2="${y}" stroke="${NAVY}" stroke-width="1" stroke-dasharray="6 4" stroke-opacity="0.7"/>`);
+    s.push(`<text x="${x0 + w - 6}" y="${y + 15}" text-anchor="end" font-size="12" fill="${NAVY}">Pi = ${esc(ya_label(Pi))} psia</text>`);
+  };
   // ---- left panel
   panel(left1, w1, X1, xTicks.map((t) => [t, String(t)]), obs ? "Injection and post-shut-in observation" : "Full injection period",
     obs ? "Elapsed time from injection start (years)" : "Elapsed injection time (years)", "c1", Y1, yL);
@@ -117,12 +127,14 @@ export function renderBhpPlot(out: RunOutput): { svg: string; width: number; hei
     for (const r of obs.rows) square(X1(r.elapsed_year), Y1(r.BHP_psia), 5.5, TEAL, "c1");
     s.push(`<line x1="${X1(shutInYear)}" y1="${top}" x2="${X1(shutInYear)}" y2="${bottom}" stroke="${GREY}" stroke-width="1" stroke-dasharray="4 3"/>`);
   }
+  piLine(left1, w1, Y1(Pi));
   dot(X1(0), Y1(Pi), 2.9, NAVY, "c1");
-  for (const r of cps.slice(1)) dot(X1(r.year), Y1(r.BHP_psia), 2.75, BLUE, "c1");
+  // first-year checkpoints only on the expanded first-year panel (on the year axis they pile up at t = 0)
 
   // ---- right panel (first year, symlog)
   const dayTicks: [number, string][] = [[0, "0"], [1 / 86400, "1 s"], [1 / 1440, "1 min"], [1 / 24, "1 h"], [1, "1 d"], [30, "30 d"], [DAYS_PER_YEAR, "1 yr"]];
   panel(left2, w2, X2, dayTicks, "First year: expanded time scale", "Elapsed injection time", "c2", Y2, yR);
+  piLine(left2, w2, Y2(Pi));
   poly(firstYear.map((r) => [X2(r.t_days), Y2(r.BHP_psia)]), RED, "c2");
   dot(X2(0), Y2(Pi), 2.9, NAVY);
   for (const r of cps.slice(1)) dot(X2(r.t_days), Y2(r.BHP_psia), 2.75, BLUE);
@@ -135,7 +147,7 @@ export function renderBhpPlot(out: RunOutput): { svg: string; width: number; hei
     entries.push(["Shut-in", (x, y) => s.push(`<line x1="${x}" y1="${y}" x2="${x + 22}" y2="${y}" stroke="${GREY}" stroke-width="1" stroke-dasharray="4 3"/>`)]);
     entries.push(["Selected observation years", (x, y) => square(x + 11, y, 5.5, TEAL)]);
   }
-  entries.push(["Initial pressure", (x, y) => dot(x + 11, y, 2.9, NAVY)]);
+  entries.push(["Initial pressure Pi", (x, y) => { s.push(`<line x1="${x}" y1="${y}" x2="${x + 22}" y2="${y}" stroke="${NAVY}" stroke-width="1" stroke-dasharray="6 4" stroke-opacity="0.7"/>`); dot(x + 11, y, 2.9, NAVY); }]);
   entries.push(["First-year checkpoints", (x, y) => dot(x + 11, y, 2.75, BLUE)]);
   // one row under the x-axis labels, centred, so it never covers the curves
   const widths = entries.map(([lab]) => 30 + lab.length * 6.6 + 22);

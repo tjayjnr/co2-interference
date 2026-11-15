@@ -1974,7 +1974,12 @@ def save_results(results, p, constants, output_dir, make_plot=True, *, observati
             early_ax.tick_params(axis="x", labelsize=9)
             for panel in (ax, early_ax):
                 panel.scatter([0], [p.initial_pressure_psia], color="#19394D",
-                              s=28, zorder=4, clip_on=False, label="Initial pressure")
+                              s=28, zorder=4, clip_on=False, label="Initial pressure Pi")
+                # Pi is always shown: dashed reference line, labelled at the right end
+                panel.axhline(p.initial_pressure_psia, color="#19394D", linestyle="--", linewidth=1, alpha=.7)
+                panel.annotate(f"Pi = {p.initial_pressure_psia:g} psia", xy=(1, p.initial_pressure_psia),
+                               xycoords=("axes fraction", "data"), xytext=(-6, -4), textcoords="offset points",
+                               ha="right", va="top", fontsize=9, color="#19394D")
                 panel.grid(True, alpha=0.3)
             checkpoint_days = [0.0, 1/86400, 1/1440, 1/24, 1.0, 30.0, DAYS_PER_YEAR]
             checkpoints = [
@@ -2011,24 +2016,23 @@ def save_results(results, p, constants, output_dir, make_plot=True, *, observati
                 pressure_top = p.initial_pressure_psia+tick_intervals*pressure_step
                 pressure_ticks = p.initial_pressure_psia + pressure_step*np.arange(tick_intervals+1)
                 ax.set_yticks(pressure_ticks, labels=[f"{value:g}" for value in pressure_ticks])
-                bottom_margin = 0.05*(pressure_top-p.initial_pressure_psia)
+                bottom_margin = 0.10*(pressure_top-p.initial_pressure_psia)  # room for the Pi label under its line
                 ax.set_ylim(minimum_bhp-bottom_margin, pressure_top)
             for panel in (ax, early_ax):
                 panel.tick_params(axis="y", labelleft=True, labelsize=9)
-            # Keep the true time coordinates on the full linear-year axis.
-            # Very early checkpoints therefore appear close to time zero.
+            # First-year checkpoints only on the expanded first-year panel: on the
+            # linear-year axis they would all pile up at time zero.
             checkpoint_pressure = [row["BHP_psia"] for row in checkpoints[1:]]
-            ax.scatter(
-                [row["year"] for row in checkpoints[1:]], checkpoint_pressure,
-                color="#2C7DA0", s=25, zorder=5, clip_on=False,
-                label="First-year checkpoints",
-            )
             early_ax.scatter(
                 [row["t_days"] for row in checkpoints[1:]], checkpoint_pressure,
                 color="#2C7DA0", s=25, zorder=5, clip_on=False,
+                label="First-year checkpoints",
             )
             # Legend in one row under the panels, so it never covers the curves.
             handles, labels = ax.get_legend_handles_labels()
+            more = early_ax.get_legend_handles_labels()
+            handles += more[0][-1:]
+            labels += more[1][-1:]
             fig.legend(handles, labels, loc="lower center", ncol=len(labels), fontsize=9, frameon=False)
             fig.tight_layout(rect=(0, 0.07, 1, 1))
             fig.savefig(output_dir/"bhp_vs_year.png", dpi=200)
