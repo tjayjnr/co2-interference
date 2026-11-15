@@ -3,9 +3,9 @@
 // (linear from 0 to 1 second, logarithmic after), same colours, markers and labels. Each panel has its own pressure axis
 // fitted to its curve (zoomed in), instead of the Python's shared axis with 100-psi steps from the initial pressure.
 
-import { DAYS_PER_YEAR, isWaterMode, modelLabel, pyFormat, type Row, type RunOutput } from "./bhp.ts";
+import { DAYS_PER_YEAR, isWaterMode, type Row, type RunOutput } from "./bhp.ts";
 
-const W = 1280, H = 530; // figsize (12.8, 5.3) at 100 dpi
+const W = 1280, H = 510; // figsize (12.8, 5.3) at 100 dpi; no title or footnote, legend in a row under the panels
 const RED = "#BC332B", TEAL = "#235F73", NAVY = "#19394D", BLUE = "#2C7DA0", GREY = "#666666";
 const FONT = "DejaVu Sans, Verdana, Arial, sans-serif";
 const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -66,7 +66,7 @@ export function renderBhpPlot(out: RunOutput): { svg: string; width: number; hei
   const yL = axis(leftVals), yR = axis(rightVals);
 
   // ---- layout (two panels, width ratios 1.3 : 1, shared y)
-  const top = 62, bottom = H - 92, left1 = 78;
+  const top = 36, bottom = H - 90, left1 = 78;
   const gap = 78, right2 = W - 22;
   const total = right2 - left1 - gap;
   const w1 = (total * 1.3) / 2.3, w2 = total - w1;
@@ -82,8 +82,6 @@ export function renderBhpPlot(out: RunOutput): { svg: string; width: number; hei
   s.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" font-family="${FONT}">`);
   s.push(`<rect width="${W}" height="${H}" fill="#ffffff"/>`);
   s.push(`<defs><clipPath id="c1"><rect x="${left1}" y="${top}" width="${w1}" height="${bottom - top}"/></clipPath><clipPath id="c2"><rect x="${left2}" y="${top}" width="${w2}" height="${bottom - top}"/></clipPath></defs>`);
-  const title = p.phase_mode === "single" ? `Calculated bottom-hole pressure: ${modelLabel(p)}` : `Calculated bottom-hole pressure: two-phase CO2-brine, Corey n = ${pyFormat(p.corey_n_gas, "g")}`;
-  s.push(`<text x="${W / 2}" y="30" text-anchor="middle" font-size="20">${esc(title)}</text>`);
 
   const panel = (x0: number, w: number, X: (v: number) => number, xt: [number, string][], ptitle: string, xlabel: string, clip: string, Y: (v: number) => number, ya: { ticks: number[]; label: (v: number) => string }) => {
     // grid
@@ -129,7 +127,7 @@ export function renderBhpPlot(out: RunOutput): { svg: string; width: number; hei
   dot(X2(0), Y2(Pi), 2.9, NAVY);
   for (const r of cps.slice(1)) dot(X2(r.t_days), Y2(r.BHP_psia), 2.75, BLUE);
 
-  // ---- legend (left panel): lines first, then markers, as matplotlib orders them
+  // ---- legend: lines first, then markers, as matplotlib orders them
   type Entry = [string, (x: number, y: number) => void];
   const entries: Entry[] = [["Calculated BHP", (x, y) => s.push(`<line x1="${x}" y1="${y}" x2="${x + 22}" y2="${y}" stroke="${RED}" stroke-width="2"/>`)]];
   if (obs) {
@@ -139,20 +137,16 @@ export function renderBhpPlot(out: RunOutput): { svg: string; width: number; hei
   }
   entries.push(["Initial pressure", (x, y) => dot(x + 11, y, 2.9, NAVY)]);
   entries.push(["First-year checkpoints", (x, y) => dot(x + 11, y, 2.75, BLUE)]);
-  const lh = 17, lw = 205, lhTot = entries.length * lh + 10;
-  const lx = left1 + w1 - lw - 8;
-  const ly = obs ? top + 8 : bottom - lhTot - 8; // "best" placement is the clear upper area with observation; lower right otherwise
-  s.push(`<rect x="${lx}" y="${ly}" width="${lw}" height="${lhTot}" rx="3" fill="#ffffff" fill-opacity="0.8" stroke="#cccccc"/>`);
+  // one row under the x-axis labels, centred, so it never covers the curves
+  const widths = entries.map(([lab]) => 30 + lab.length * 6.6 + 22);
+  let lx = (W - widths.reduce((a, b) => a + b, 0)) / 2;
+  const ly = bottom + 66;
   entries.forEach(([lab, draw], i) => {
-    const yy = ly + 13 + i * lh;
-    draw(lx + 8, yy);
-    s.push(`<text x="${lx + 38}" y="${yy + 4}" font-size="12">${esc(lab)}</text>`);
+    draw(lx, ly);
+    s.push(`<text x="${lx + 30}" y="${ly + 4}" font-size="12">${esc(lab)}</text>`);
+    lx += widths[i];
   });
 
-  const note = water
-    ? "Each panel has its own pressure scale, fitted to its curve. Blue points mark first-year checkpoints; right-hand time axis is logarithmic after 1 second."
-    : "Each panel has its own pressure scale, fitted to its curve. Blue points mark first-year checkpoints; right-hand time axis is logarithmic after 1 second.";
-  s.push(`<text x="${W / 2}" y="${H - 10}" text-anchor="middle" font-size="12" fill="#444444">${esc(note)}</text>`);
   s.push("</svg>");
   return { svg: s.join(""), width: W, height: H };
 }

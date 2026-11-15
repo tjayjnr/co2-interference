@@ -2027,21 +2027,10 @@ def save_results(results, p, constants, output_dir, make_plot=True, *, observati
                 [row["t_days"] for row in checkpoints[1:]], checkpoint_pressure,
                 color="#2C7DA0", s=25, zorder=5, clip_on=False,
             )
-            ax.legend(loc="best" if observation is not None else "lower right", fontsize=9)
-            fig.suptitle(
-                ("Calculated bottom-hole pressure: "+model_label(p)
-                 if p.phase_mode == "single" else
-                 f"Calculated bottom-hole pressure: two-phase CO2-brine, Corey n = {p.corey_n_gas:g}"),
-                fontsize=15,
-            )
-            fig.text(
-                0.5, 0.015,
-                ("Blue points mark first-year checkpoints. The right-hand time axis is logarithmic after 1 second."
-                 if water_mode else
-                 "BHP ticks start at initial pressure with 100-psi intervals. Blue points mark first-year checkpoints; right-hand time axis is logarithmic after 1 second."),
-                ha="center", fontsize=9, color="#444444",
-            )
-            fig.tight_layout(rect=(0, 0.055, 1, 0.95))
+            # Legend in one row under the panels, so it never covers the curves.
+            handles, labels = ax.get_legend_handles_labels()
+            fig.legend(handles, labels, loc="lower center", ncol=len(labels), fontsize=9, frameon=False)
+            fig.tight_layout(rect=(0, 0.07, 1, 1))
             fig.savefig(output_dir/"bhp_vs_year.png", dpi=200)
             plt.close(fig)
     return output_dir
